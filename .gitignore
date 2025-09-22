@@ -5,4 +5,12 @@ renders
 edited
 clusters
 segments
-**/__pycache__
+**/__pycache__# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+**.pyc
+
+*.egg-info
+
+.vscode/
