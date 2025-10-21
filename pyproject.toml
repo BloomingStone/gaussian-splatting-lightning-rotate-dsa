@@ -9,7 +9,6 @@ include = ["internal*", "utils*"]
 name = "gaussian-splatting-lightning"
 dynamic = ["version"]
 requires-python = ">=3.10"
-dependencies = ["opencv-python-headless>=4.11.0.86,<5", "pytorch-lightning>=2.5.5,<3", "lightning[pytorch-extra]>=2.5.5,<3"]
 
 [project.scripts]
 gs-fit = "internal.entrypoints.gspl:cli_fit"
@@ -26,6 +25,7 @@ gs-viewer = "internal.entrypoints.viewer:cli"
 
 [tool.pixi.workspace]
 channels = [
+    "nvidia/label/cuda-12.4.0",
     "nvidia",
     "conda-forge",
     "pytorch",
@@ -33,7 +33,6 @@ channels = [
 platforms = ["linux-64"]
 
 [tool.pixi.dependencies]
-cuda-toolkit = { version = "12.4.*", channel = "nvidia" }
 pytorch = { version = "2.5.1.*", channel = "pytorch" }
 pytorch-cuda = { version = "12.4.*", channel = "pytorch" }
 torchvision = { version = "0.20.1.*", channel = "pytorch" }
@@ -44,14 +43,29 @@ mediapy = ">=1.2.4,<2"
 splines = ">=0.3.3,<0.4"
 plyfile = ">=1.1,<2"
 tensorboard = ">=2.20.0,<3"
+einops = ">=0.8.1,<0.9"
+notebook = "*"
 
+[tool.pixi.pypi-options]
+no-build-isolation = ["diff_gaussian_rasterization" ,"simple-knn", "tinycudann"]
 
 [tool.pixi.pypi-dependencies]
 gaussian-splatting-lightning = { path = ".", editable = true }
-diff_gaussian_rasterization = { git = "https://github.com/graphdeco-inria/diff-gaussian-rasterization.git", rev = "d63efdcd1c644f333fb52cdd494ac0c57ec2a9ca"}
 simple-knn = { git = "https://github.com/yzslab/simple-knn.git", rev =  "86710c2d4b46680c02301765dd79e465819c8f19"}
+tinycudann = { git = "https://github.com/NVlabs/tiny-cuda-nn.git", subdirectory = "bindings/torch", rev = "68d4f0f1f81fa9085fff66077d9966c8323095bc"}
+opencv-python-headless = ">=4.11.0.86,<5"
+pytorch-lightning = ">=2.5.5,<3"
+lightning = { version = ">=2.5.5,<3", extras = ["pytorch-extra"]}
+
+[tool.pixi.feature.vanilla-gs-rasterization.pypi-dependencies]
+diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gaussian-rasterization.git", branch = "main"}
+
+[tool.pixi.feature.x-gs-rasterization.pypi-dependencies]
+diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gaussian-rasterization.git", branch = "X-Gaussian"}
+
+[tool.pixi.environments]
+default = ["vanilla-gs-rasterization", "default"]
+x-gs = ["x-gs-rasterization", "default"]
 
 [tool.pixi.tasks]
 
-[tool.pixi.pypi-options]
-no-build-isolation = ["diff_gaussian_rasterization", "simple-knn"]
