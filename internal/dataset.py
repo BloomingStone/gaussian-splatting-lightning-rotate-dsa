@@ -105,7 +105,6 @@ class Dataset(torch.utils.data.Dataset):
         if self.image_uint8:
             image = torch.from_numpy(numpy_image)
             assert image.dtype == torch.uint8
-            assert image.shape[2] == 3
         else:
             image = torch.from_numpy(numpy_image.astype(np.float64) / 255.0)
             # remove alpha channel
@@ -114,6 +113,11 @@ class Dataset(torch.utils.data.Dataset):
                 background_color = torch.tensor([0., 0., 0.])
                 image = image[:, :, :3] * image[:, :, 3:4] + background_color * (1 - image[:, :, 3:4])
             image = image.to(torch.float)
+        if len(image.shape) == 2:
+            image = image[..., None].repeat(1, 1, 3)
+        if image.shape[2] == 1:
+            image = image.repeat(1, 1, 3)
+        assert image.shape[2] == 3
 
         mask = None
         if self.image_set.mask_paths[index] is not None:

@@ -97,3 +97,8 @@
 !opacity_correction.yaml
 !normal_reg.yaml
 !learn_exposure.yaml
+
+!rotate_xray_3dgr
+!rotate_xray_3dgr/rotate_xray_3dgr_deformable_xray_render.yaml
+!rotate_xray_3dgr/rotate_xray_3dgr_static.yaml
+!rotate_xray_3dgr/rotate_xray_3dgr.yaml

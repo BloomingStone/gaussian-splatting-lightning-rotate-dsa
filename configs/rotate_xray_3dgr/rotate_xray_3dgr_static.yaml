@@ -1,0 +1,18 @@
+max_steps: 40000
+save_val: true
+cache_all_images: true
+trainer:
+  check_val_every_n_epoch: 10
+data:
+  val_max_num_images_to_cache: -1
+  test_max_num_images_to_cache: -1
+  image_uint8: true
+  parser: 
+    class_path: internal.dataparsers.rotated_xray_dataparser.RotatedXRay
+    init_args:
+      mode: reconstruction
+      init_point_cloud_mode: label
+model:
+  gaussian:
+    optimization:
+      spatial_lr_scale: 5
