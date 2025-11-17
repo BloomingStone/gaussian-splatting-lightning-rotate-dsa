@@ -124,6 +124,8 @@ class Dataset(torch.utils.data.Dataset):
             pil_image = Image.open(self.image_set.mask_paths[index])
             mask = torch.from_numpy(np.array(pil_image))
             # mask must be single channel
+            if len(mask.shape) == 3:
+                mask = mask[:, :, 0]
             assert len(mask.shape) == 2, "the mask image must be single channel"
             # the shape of the mask must match to the image
             if not mask.shape[:2] == image.shape[:2]:

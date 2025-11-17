@@ -4,6 +4,8 @@ import einops
 
 
 class PhaseEncoding(nn.Module):
+    freq_bands: torch.Tensor
+    
     def __init__(
         self, 
         input_channels: int = 1, 
@@ -23,8 +25,10 @@ class PhaseEncoding(nn.Module):
         self.output_channels = input_channels * (2 * n_frequencies + 1)
 
         max_frequencies = n_frequencies
-        self.freq_bands = torch.linspace(1, max_frequencies, steps=n_frequencies)
-        self.freq_bands = self.freq_bands * 2 * torch.pi / T
+        freq_bands = 2 ** torch.linspace(0, max_frequencies, steps=n_frequencies)
+        freq_bands = freq_bands * 2 * torch.pi / T
+        
+        self.register_buffer("freq_bands", freq_bands)
         
     
     def forward(self, t: torch.Tensor):
@@ -38,9 +42,13 @@ class PhaseEncoding(nn.Module):
         Outputs:
             out: (B, self.out_channels)
         """
+        t = torch.fmod(t, self.T)
         angles = torch.einsum('BC, F -> BCF', t, self.freq_bands)
         sin_res = torch.sin(angles)
         cos_res = torch.cos(angles)
         sincos_res = torch.stack([sin_res, cos_res], dim=-1) # (B, C, n_frequencies, 2)
         sincos_res = einops.rearrange(sincos_res, 'B C F D -> B (C F D)')
         return torch.cat([t, sincos_res], dim=-1)
+    
+    def get_output_n_channels(self) -> int:
+        return self.output_channels

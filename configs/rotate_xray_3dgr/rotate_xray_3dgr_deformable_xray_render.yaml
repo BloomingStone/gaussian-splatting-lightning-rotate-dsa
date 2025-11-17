@@ -3,6 +3,7 @@ save_val: true
 cache_all_images: true
 trainer:
   check_val_every_n_epoch: 10
+
 data:
   val_max_num_images_to_cache: -1
   test_max_num_images_to_cache: -1
@@ -11,21 +12,26 @@ data:
     class_path: internal.dataparsers.rotated_xray_dataparser.RotatedXRay
     init_args:
       mode: reconstruction
-      init_point_cloud_mode: uniform
+      init_point_cloud_mode: central-line
 model:
   # max_save_val_output: 50
   renderer:
-    class_path: internal.renderers.deformabel_xray_renderer.DeformableXrayRenderer
+    class_path: internal.renderers.deformabel_xray_renderer.CoronaryDeformableXrayRenderer
     init_args:
       deform_network:
         tcnn: false
-        rotate_xyz: true
       time_encoding:
         n_frequencies: 6
         n_layers: 2
         n_neurons: 256
       optimization:
         enable_ast: false
+  metric:
+    class_path: internal.metrics.rotate_xray_metrics.RotateXrayMetrics
   gaussian:
-    optimization:
-      spatial_lr_scale: 5
+    class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
+  density:
+    class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
+  renderer_output_types: 
+    - gray_image_coronary
+    - gray_image_whole

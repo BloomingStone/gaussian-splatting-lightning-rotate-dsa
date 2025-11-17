@@ -3,6 +3,7 @@ from typing import List, Dict, Tuple, Union, Optional
 import torch
 import numpy as np
 from torch import nn
+import lightning
 
 from .gaussian import (
     Gaussian,

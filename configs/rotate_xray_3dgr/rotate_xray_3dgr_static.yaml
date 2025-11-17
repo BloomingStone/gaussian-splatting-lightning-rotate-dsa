@@ -12,7 +12,3 @@ data:
     init_args:
       mode: reconstruction
       init_point_cloud_mode: label
-model:
-  gaussian:
-    optimization:
-      spatial_lr_scale: 5

@@ -3,6 +3,8 @@ import einops
 
 
 class VectorPositionalEncoding(torch.nn.Module):
+    freq_bands: torch.Tensor
+    
     def __init__(self, input_channels: int, n_frequencies: int, log_sampling: bool = True):
         """
         Defines a function that embeds x to (x, sin(2^k x), cos(2^k x), ...)
@@ -16,10 +18,11 @@ class VectorPositionalEncoding(torch.nn.Module):
 
         max_frequencies = n_frequencies - 1
         if log_sampling:
-            self.freq_bands = 2. ** torch.linspace(0., max_frequencies, steps=n_frequencies)
-
+            freq_bands = 2. ** torch.linspace(0., max_frequencies, steps=n_frequencies)
         else:
-            self.freq_bands = torch.linspace(2. ** 0., 2. ** max_frequencies, steps=n_frequencies)
+            freq_bands = torch.linspace(2. ** 0., 2. ** max_frequencies, steps=n_frequencies)
+        
+        self.register_buffer("freq_bands", freq_bands)
 
     def forward(self, x):
         """

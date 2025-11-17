@@ -729,12 +729,19 @@ class GaussianSplatting(LightningModule):
         self.trainer.save_checkpoint(checkpoint_path)
         with torch.no_grad():
             xyz = self.gaussian_model.get_xyz
-            rgb = eval_sh(0, self.gaussian_model.get_features[:, :1, :].transpose(1, 2), None)
+            features = self.gaussian_model.get_features
+            if features.dim() == 3:
+                rgb = eval_sh(0, self.gaussian_model.get_features[:, :1, :].transpose(1, 2), None)
+                rgb = ((rgb + 0.5).clamp(min=0., max=1.) * 255).to(torch.int)
+            elif features.dim() == 2:
+                assert features.shape[1] == 1
+                rgb = self.gaussian_model.get_features.repeat(1, 3)
+                rgb = (rgb.clamp(min=0., max=1.) * 255).to(torch.int)
             store_ply(os.path.join(
                 self.hparams["output_path"],
                 "checkpoints",
                 "epoch={}-step={}{}-xyz_rgb.ply".format(self.trainer.current_epoch, self.trainer.global_step, checkpoint_name_suffix),
-            ), xyz.cpu().numpy(), ((rgb + 0.5).clamp(min=0., max=1.) * 255).to(torch.int).cpu().numpy())
+            ), xyz.cpu().numpy(), rgb.cpu().numpy())
         print("Checkpoint saved to {}".format(checkpoint_path))
 
     def set_datamodule_device(self, device):

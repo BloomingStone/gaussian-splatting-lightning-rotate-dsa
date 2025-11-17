@@ -41,7 +41,7 @@ def rp_to_se3(R: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
     return transform
 
 
-def exp_so3(w: torch.Tensor, theta: float) -> torch.Tensor:
+def exp_so3(w: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
     """Exponential map from Lie algebra so3 to Lie group SO3.
 
     Modern Robotics Eqn 3.51, a.k.a. Rodrigues' formula.
@@ -61,7 +61,7 @@ def exp_so3(w: torch.Tensor, theta: float) -> torch.Tensor:
     return R
 
 
-def exp_se3(S: torch.Tensor, theta: float) -> torch.Tensor:
+def exp_se3(S: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
     """Exponential map from Lie algebra so3 to Lie group SO3.
 
     Modern Robotics Eqn 3.88.

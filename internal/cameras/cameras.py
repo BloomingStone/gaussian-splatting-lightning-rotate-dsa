@@ -109,7 +109,9 @@ class Cameras:
     time: Optional[Tensor] = None  # [n_cameras]
 
     idx: Tensor = None  # [N_cameras]
-
+    zfar: float = 100
+    znear: float = 0.01
+    
     def _calculate_fov(self):
         # calculate fov
         self.fov_x = 2 * torch.atan((self.width / 2) / self.fx)
@@ -132,28 +134,25 @@ class Cameras:
             1. support colmap refined principal points
             2. the near and far here are ignored in diff-gaussian-rasterization
         """
-        zfar = 100.0
-        znear = 0.01
-
         tanHalfFovY = torch.tan((self.fov_y / 2))
         tanHalfFovX = torch.tan((self.fov_x / 2))
 
-        top = tanHalfFovY * znear
+        top = tanHalfFovY * self.znear
         bottom = -top
-        right = tanHalfFovX * znear
+        right = tanHalfFovX * self.znear
         left = -right
 
         P = torch.zeros(self.fov_y.shape[0], 4, 4)
 
         z_sign = 1.0
 
-        P[:, 0, 0] = 2.0 * znear / (right - left)  # = 1 / tanHalfFovX = 2 * fx / width
-        P[:, 1, 1] = 2.0 * znear / (top - bottom)  # = 2 * fy / height
+        P[:, 0, 0] = 2.0 * self.znear / (right - left)  # = 1 / tanHalfFovX = 2 * fx / width
+        P[:, 1, 1] = 2.0 * self.znear / (top - bottom)  # = 2 * fy / height
         P[:, 0, 2] = (right + left) / (right - left)  # = 0, right + left = 0
         P[:, 1, 2] = (top + bottom) / (top - bottom)  # = 0, top + bottom = 0
         P[:, 3, 2] = z_sign
-        P[:, 2, 2] = z_sign * zfar / (zfar - znear)
-        P[:, 2, 3] = -(zfar * znear) / (zfar - znear)
+        P[:, 2, 2] = z_sign * self.zfar / (self.zfar - self.znear)
+        P[:, 2, 3] = -(self.zfar * self.znear) / (self.zfar - self.znear)
 
         self.projection = torch.transpose(P, 1, 2)
 

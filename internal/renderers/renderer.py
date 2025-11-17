@@ -47,9 +47,9 @@ class Renderer(torch.nn.Module):
             pc: GaussianModel,
             bg_color: torch.Tensor,
             scaling_modifier=1.0,
-            render_types: list = None,
+            render_types: list|None = None,
             **kwargs,
-    ):
+    ) -> Any:
         pass
 
     def training_forward(

@@ -1,7 +1,8 @@
-from typing import Union, Any, List, Dict, Tuple, Optional
+from typing import Union, Mapping, List, Dict, Tuple, Optional, Any, Callable
 from abc import ABC, abstractmethod
 import torch
 from torch import nn
+import lightning
 
 from internal.configs.instantiate_config import InstantiatableConfig
 from internal.utils.gaussian_containers import FreezableParameterDict
@@ -36,7 +37,7 @@ class GaussianModel(nn.Module, ABC):
         """Set single raw property"""
         self.gaussians[name] = value
 
-    def set_properties(self, properties: Dict[str, torch.Tensor]):
+    def set_properties(self, properties: Mapping[str, Any]):
         """
         Set all raw properties.
         This setter will not update optimizers.
@@ -117,7 +118,8 @@ class Gaussian(InstantiatableConfig):
 
 
 class HasMeanGetter:
-    _mean_name = "means"
+    gaussians: nn.ParameterDict
+    _mean_name: str = "means"
 
     def get_means(self) -> torch.Tensor:
         return self.gaussians[self._mean_name]
@@ -132,15 +134,10 @@ class HasMeanGetter:
 
 
 class HasScaleGetter(ABC):
-    _scale_name = "scales"
-
-    @abstractmethod
-    def scale_activation(self, scales: torch.Tensor) -> torch.Tensor:
-        pass
-
-    @abstractmethod
-    def scale_inverse_activation(self, scales: torch.Tensor) -> torch.Tensor:
-        pass
+    gaussians: nn.ParameterDict
+    _scale_name: str = "scales"
+    scale_activation: Callable[[torch.Tensor], torch.Tensor]
+    scale_inverse_activation: Callable[[torch.Tensor], torch.Tensor]
 
     def get_scales(self) -> torch.Tensor:
         """Return activated scales"""
@@ -158,15 +155,10 @@ class HasScaleGetter(ABC):
 
 
 class HasRotationGetter(ABC):
-    _rotation_name = "rotations"
-
-    @abstractmethod
-    def rotation_activation(self, rotations: torch.Tensor) -> torch.Tensor:
-        pass
-
-    @abstractmethod
-    def rotation_inverse_activation(self, rotations: torch.Tensor) -> torch.Tensor:
-        pass
+    gaussians: nn.ParameterDict
+    _rotation_name: str = "rotations"
+    rotation_activation: Callable[[torch.Tensor], torch.Tensor]
+    rotation_inverse_activation: Callable[[torch.Tensor], torch.Tensor]
 
     def get_rotations(self) -> torch.Tensor:
         """Return activated rotations"""
@@ -190,15 +182,10 @@ class HasCovarianceGetter(ABC):
 
 
 class HasOpacityGetter(ABC):
-    _opacity_name = "opacities"
-
-    @abstractmethod
-    def opacity_activation(self, opacities: torch.Tensor) -> torch.Tensor:
-        pass
-
-    @abstractmethod
-    def opacity_inverse_activation(self, opacities: torch.Tensor) -> torch.Tensor:
-        pass
+    gaussians: nn.ParameterDict
+    _opacity_name: str = "opacities"
+    opacity_activation: Callable[[torch.Tensor], torch.Tensor]
+    opacity_inverse_activation: Callable[[torch.Tensor], torch.Tensor]
 
     def get_opacities(self) -> torch.Tensor:
         """Return activated opacities"""
@@ -216,8 +203,9 @@ class HasOpacityGetter(ABC):
 
 
 class HasSHs(ABC):
-    _shs_dc_name = "shs_dc"
-    _shs_rest_name = "shs_rest"
+    gaussians: nn.ParameterDict
+    _shs_dc_name: str = "shs_dc"
+    _shs_rest_name: str = "shs_rest"
 
     # shs_dc
 
@@ -296,29 +284,29 @@ class HasNewGetters(
 class HasVanillaGetters(ABC):
     @property
     @abstractmethod
-    def get_scaling(self):
+    def get_scaling(self) -> torch.Tensor:
         pass
 
     @property
     @abstractmethod
-    def get_rotation(self):
+    def get_rotation(self) -> torch.Tensor:
         pass
 
     @property
     @abstractmethod
-    def get_xyz(self):
+    def get_xyz(self) -> torch.Tensor:
         pass
 
     @property
     @abstractmethod
-    def get_features(self):
+    def get_features(self) -> torch.Tensor:
         pass
 
     @property
     @abstractmethod
-    def get_opacity(self):
+    def get_opacity(self) -> torch.Tensor:
         pass
 
     @abstractmethod
-    def get_covariance(self, scaling_modifier: float = 1.):
+    def get_covariance(self, scaling_modifier: float = 1.) -> torch.Tensor:
         pass

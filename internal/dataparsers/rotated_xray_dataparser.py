@@ -87,7 +87,7 @@ class RotatedXRay(DataParserConfig):
     mode: Literal["reconstruction", "render-new-views"] = "reconstruction"
     init_point_cloud_mode: Literal["uniform", "random", "FBP", "DL", "label", "central-line"] = "uniform"
     init_point_cloud_num: int = 100_000
-    label_type: Literal["LCA", "RCA"] = "LCA"
+    coronary_type: Literal["LCA", "RCA"] = "LCA"
     
     # use_angles: bool = True    # if use angles to init cameras, will use angles to init cameras, otherwise will use R_w2c and T_w2c to init cameras
     
@@ -105,10 +105,6 @@ def _get_frames_param(json_data: dict, key: str, indices: list[int] | None = Non
 
 
 def _get_cameras(json_data: dict, indices: list[int] | None = None) -> Cameras:
-    """
-    ! ATTENTION !
-    The geometry stored in x-ray json file using mm, but Gaussian Splatting uses meter. Here we must do some conversion.
-    """
     if indices is None:
         n_camras = len(json_data["frames"])
     else:
@@ -164,13 +160,14 @@ def _get_cameras(json_data: dict, indices: list[int] | None = None) -> Cameras:
         normalized_appearance_id=torch.zeros(n_camras),
         distortion_params=None,
         camera_type=torch.zeros(n_camras),
-        time=_get_frames_param(json_data, "time_s", indices),
+        time=_get_frames_param(json_data, "phase", indices),    # phase in [0, 1)
+        zfar=1e5
     )
 
 
 def _get_bounds(json_data: dict) -> np.ndarray:
-    shape = np.array(json_data["origin_image_size"])
-    affine = np.array(json_data["origin_image_affine"])
+    shape = np.array(json_data["volume_size"])
+    affine = np.array(json_data["volume_affine"])
     return affine[:3, :3] @ shape
 
 
@@ -198,25 +195,27 @@ class RotatedXRayDataParser(DataParser):
         return train_indices, valid_indices
 
     def get_outputs(self) -> DataParserOutputs:
-        """
-        ! ATTENTION !
-        The geometry stored in x-ray json file using mm, but Gaussian Splatting uses meter. Here we must do some conversion.
-        """
-        images_dir = Path(self.path) / self.params.base_name
-        json_path = Path(self.path) / f"{self.params.base_name}.json"
+        data_root = Path(self.path)
+        images_dir = data_root / self.params.base_name
+        label_dir = data_root / "label"
+        json_path = data_root / f"{self.params.base_name}.json"
+        depth_npy = np.load(data_root / "depth_map.npy")
         
         with open(json_path, "r") as f:
             data = json.load(f)
         
         image_paths = [f.absolute() for f in sorted(images_dir.glob("*.png"))]
+        label_paths = [f.absolute() for f in sorted(label_dir.glob("*.png"))]
         image_names = [f.name for f in image_paths]
         
         if self.params.mode == "reconstruction":
             train_set = ImageSet(
                 image_names=image_names,
                 image_paths=image_paths,
+                mask_paths=label_paths,
                 cameras=_get_cameras(data),
-                extra_data=_get_frames_param(data, "phase").tolist()    # cardiac phase
+                extra_data=depth_npy,
+                extra_data_processor=torch.from_numpy
             )
             valid_set = train_set
             test_set = train_set
@@ -225,14 +224,18 @@ class RotatedXRayDataParser(DataParser):
             train_set = ImageSet(
                 image_names=[image_names[i] for i in train_indices],
                 image_paths=[image_paths[i] for i in train_indices],
+                mask_paths=[label_paths[i] for i in train_indices],
                 cameras=_get_cameras(data, train_indices),
-                extra_data=_get_frames_param(data, "phase", train_indices).tolist()  # cardiac phase
+                extra_data=depth_npy[train_indices],
+                extra_data_processor=torch.from_numpy
             )
             valid_set = ImageSet(
                 image_names=[image_names[i] for i in valid_indices],
                 image_paths=[image_paths[i] for i in valid_indices],
+                mask_paths=[label_paths[i] for i in valid_indices],
                 cameras=_get_cameras(data, valid_indices),
-                extra_data=_get_frames_param(data, "phase", valid_indices).tolist()  # cardiac phase
+                extra_data=depth_npy[valid_indices],
+                extra_data_processor=torch.from_numpy
             )
             test_set = valid_set
         else:
@@ -251,9 +254,9 @@ class RotatedXRayDataParser(DataParser):
             case "DL":
                 raise NotImplementedError   # TODO
             case "label":
-                xyz = init_point_cloud_from_label(Path(self.path) / "label.nii.gz", coronary_type=self.params.label_type)
+                xyz = init_point_cloud_from_label(data_root / "label_3d.nii.gz", coronary_type=self.params.coronary_type)
             case "central-line":
-                raise NotImplementedError
+                xyz = np.load(data_root / "central_line.npy")
             case _:
                 raise ValueError(f"Unknown init_point_cloud_mod: {self.params.init_point_cloud_mode}")
         
@@ -266,7 +269,13 @@ class RotatedXRayDataParser(DataParser):
         )
 
 
-def init_point_cloud_from_label(nii_file, max_points=None, label_value=None, coronary_type="LCA", dtype=np.float64):
+def init_point_cloud_from_label(
+    nii_file: Path, 
+    max_points: int | None = None, 
+    label_value: int| None = None, 
+    coronary_type: Literal["LCA", "RCA"] = "LCA", 
+    dtype: type = np.float64
+):
     """
     从 label.nii.gz 提取点云并把重心移到世界坐标中心。
 
@@ -324,14 +333,7 @@ def init_point_cloud_from_label(nii_file, max_points=None, label_value=None, cor
     ones = np.ones((idxs.shape[0], 1), dtype=np.float64)
     idxs_h = np.concatenate([idxs.astype(np.float64), ones], axis=1)  # (N,4)
 
-    # world_coords = affine @ idxs_h.T  -> (4,N)
-    idxs_h = (affine_new @ idxs_h.T).T  # (N,4)
-    
-    # # RAS in nii to LSA
-    # rotation = euler_angles_to_matrix(torch.tensor([[torch.pi / 2, - torch.pi / 2, 0.]]), "XZY")[0].numpy()
-    # M = np.eye(4)
-    # M[:3, :3] = rotation
-    # idxs_h = (M @ idxs_h.T).T
+    idxs_h = idxs_h @ affine_new.T
     
     world_xyz = idxs_h[:, :3].astype(dtype)  # (N,3)
 

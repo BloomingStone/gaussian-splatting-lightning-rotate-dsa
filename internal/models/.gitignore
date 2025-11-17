@@ -18,3 +18,5 @@
 !mip_splatting.py
 !appearance_gs2d.py
 !sparse_adam_gaussian.py
+!xray_coronary_gaussian.py
+!coronary_deform_model.py

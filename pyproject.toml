@@ -47,17 +47,20 @@ einops = ">=0.8.1,<0.9"
 notebook = "*"
 nibabel = ">=5.3.2,<6"
 pyvista = ">=0.46.3,<0.47"
+monai = ">=1.5.1,<2"
 
 [tool.pixi.pypi-options]
-no-build-isolation = ["diff_gaussian_rasterization" ,"simple-knn", "tinycudann"]
+no-build-isolation = ["diff_gaussian_rasterization" ,"simple-knn", "tinycudann", "gsplat", "fused_ssim"]
 
 [tool.pixi.pypi-dependencies]
 gaussian-splatting-lightning = { path = ".", editable = true }
 simple-knn = { git = "https://github.com/yzslab/simple-knn.git", rev =  "86710c2d4b46680c02301765dd79e465819c8f19"}
 tinycudann = { git = "https://github.com/NVlabs/tiny-cuda-nn.git", subdirectory = "bindings/torch", rev = "68d4f0f1f81fa9085fff66077d9966c8323095bc"}
+fused_ssim = { git = "https://github.com/rahul-goel/fused-ssim.git", branch = "main" }
 opencv-python-headless = ">=4.11.0.86,<5"
 pytorch-lightning = ">=2.5.5,<3"
 lightning = { version = ">=2.5.5,<3", extras = ["pytorch-extra"]}
+jaxtyping = "*"
 
 [tool.pixi.feature.vanilla-gs-rasterization.pypi-dependencies]
 diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gaussian-rasterization.git", branch = "main"}
@@ -65,9 +68,16 @@ diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gau
 [tool.pixi.feature.x-gs-rasterization.pypi-dependencies]
 diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gaussian-rasterization.git", branch = "X-Gaussian"}
 
+[tool.pixi.feature.gsplat-v0.pypi-dependencies]
+gsplat = { git = "https://github.com/yzslab/gsplat.git"}
+
+[tool.pixi.feature.gsplat-v1.pypi-dependencies]
+gsplat = { git = "https://github.com/nerfstudio-project/gsplat.git", tag = "v1.5.3"}
+
 [tool.pixi.environments]
-default = ["vanilla-gs-rasterization", "default"]
-x-gs = ["x-gs-rasterization", "default"]
+default = ["vanilla-gs-rasterization", "default", "gsplat-v1"]  # 实际上 gs-rasterization 和 gsplat 应该是互斥的，但目前先这样
+x-gs = ["x-gs-rasterization", "default", "gsplat-v1"]
+gsplat-v0 = ["vanilla-gs-rasterization", "default", "gsplat-v0"]
 
 [tool.pixi.tasks]
 
