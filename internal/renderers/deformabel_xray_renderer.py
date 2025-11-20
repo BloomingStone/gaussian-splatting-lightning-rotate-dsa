@@ -14,7 +14,7 @@ from ..cameras import Camera
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel, XrayGassianState
 from .vanilla_renderer import VanillaRenderer
 from ..cameras import Camera
-from ..models.coronary_deform_model import DeformModel
+from ..models.deform_model import DeformModel
 from ..utils.network_factory import NetworkFactory
 from ..utils.general_utils import get_linear_noise_func
 from ..utils.rigid_utils import from_homogenous, to_homogenous
