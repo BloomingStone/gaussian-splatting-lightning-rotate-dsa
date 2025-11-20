@@ -14,10 +14,10 @@ from ..cameras.cameras import Camera
 
 @dataclass
 class RotateXrayMetrics(Metric):
-    w_gray_loss: float = 1.0
-    w_ssim_loss: float = 1.0
-    w_depth_loss: float = 1.0
-    w_dice_loss: float = 1.0
+    w_gray_loss_whole: float = 1.0
+    w_ssim_loss_whole: float = 1.0
+    w_gray_loss_coronary: float = 1.0
+    w_dice_loss: float = 0.01
 
     rgb_diff_loss: Literal["l1", "l2"] = "l1"
 
@@ -33,7 +33,8 @@ class RotateXrayMetrics(Metric):
 
 
 class RotateXrayMetricsImpl(MetricImpl):
-    def __init__(self, config: InstantiatableConfig, *args, **kwargs) -> None:
+    config:  RotateXrayMetrics
+    def __init__(self, config: RotateXrayMetrics, *args, **kwargs) -> None:
         super().__init__(config, *args, **kwargs)
 
         self.no_state_dict_models = {}
@@ -71,55 +72,37 @@ class RotateXrayMetricsImpl(MetricImpl):
         outputs: RenderRes
     ):
         image_info: Tuple[str, torch.Tensor, torch.Tensor]
-        depth_map: torch.Tensor
-        _, image_info, depth_map = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
+        _, image_info, _ = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
         _, gt_image, masked_pixels = image_info
         gt_image = gt_image[0:1]
-        gt_image = gt_image.max() - gt_image    # reverse gray scale as DSA image is reversed
-        masked_pixels = masked_pixels[0:1].to(torch.uint8)
+        masked_pixels = masked_pixels[0:1]
         
         gray_loss_whole = self.rgb_diff_loss_fn(outputs.gray_image_whole, gt_image)
-        gray_loss_coronary = self.rgb_diff_loss_fn(outputs.gray_image_coronary, gt_image * masked_pixels)
+        gray_loss_coronary = self.rgb_diff_loss_fn(outputs.gray_image_whole[masked_pixels], gt_image[masked_pixels])
         
         ssim_metric_whole = self.ssim(outputs.gray_image_whole, gt_image)
-        ssim_metric_coronary = self.ssim(
-            outputs.gray_image_coronary, 
-            (gt_image * masked_pixels)
-        )
         ssim_loss_whole = 1.0 - ssim_metric_whole
-        ssim_loss_coronary = 1.0 - ssim_metric_coronary
         
-        depth_loss = self.rgb_diff_loss_fn(
-            outputs.depth / outputs.depth.max(),
-            depth_map / depth_map.max()
-        )
-        
-        soft_coronary_mask = torch.sigmoid((outputs.alpha - 0.1) * 30)
+        soft_coronary_mask = torch.sigmoid((outputs.alpha - 0.01) * 10)
         dice_loss = self.dice_loss_fn(soft_coronary_mask[None], masked_pixels[None])
         
         loss = (
-            self.config.w_gray_loss * (gray_loss_coronary + gray_loss_whole) +
-            self.config.w_ssim_loss * (ssim_loss_coronary + ssim_loss_whole) +
-            self.config.w_depth_loss * depth_loss +
-            self.config.w_dice_loss * dice_loss
+            self.config.w_gray_loss_whole    * gray_loss_whole +
+            self.config.w_ssim_loss_whole    * ssim_loss_whole +
+            self.config.w_gray_loss_coronary * gray_loss_coronary + 
+            self.config.w_dice_loss          * dice_loss
         )
         
         return {
             "loss": loss,
             "gray_loss_coronary": gray_loss_coronary,
             "gray_loss_whole": gray_loss_whole,
-            "ssim_loss_coronary": ssim_loss_coronary,
             "ssim_loss_whole": ssim_loss_whole,
-            "depth_loss": depth_loss,
-            "dice_loss": dice_loss,
         }, {
             "loss": True,
             "gray_loss_coronary": True,
             "gray_loss_whole": True,
-            "ssim_loss_coronary": True,
             "ssim_loss_whole": True,
-            "depth_loss": True,
-            "dice_loss": True,
         }
     
     def get_train_metrics(self, pl_module, gaussian_model, step: int, batch, outputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:
@@ -137,24 +120,21 @@ class RotateXrayMetricsImpl(MetricImpl):
         _, image_info, _ = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
         _, gt_image, masked_pixels = image_info
         gt_image = gt_image[0:1]
-        gt_image = gt_image.max() - gt_image    # reverse gray scale
-        masked_pixels = masked_pixels[0:1].to(torch.uint8)
 
         metrics["psnr_whole"] = self.psnr(outputs.gray_image_whole, gt_image)
-        metrics["psnr_coronary"] = self.psnr(outputs.gray_image_coronary, gt_image * masked_pixels)
         prog_bar["psnr_whole"] = True
-        prog_bar["psnr_coronary"] = True
         
         gray2rgb_whole = outputs.gray_image_whole.clamp(0., 1.)[None].repeat(1, 3, 1, 1)    # [1, 3, H, W]
-        gray2rgb_coronary = outputs.gray_image_coronary.clamp(0., 1.)[None].repeat(1, 3, 1, 1)
         gray2rgb_gt_whole = gt_image.clamp(0., 1.)[None].repeat(1, 3, 1, 1)
-        gray2rgb_gt_coronary = (gt_image * masked_pixels).clamp(0., 1.)[None].repeat(1, 3, 1, 1)
-        
         metrics["lpips_whole"] = self.no_state_dict_models["lpips"](gray2rgb_whole, gray2rgb_gt_whole)
-        metrics["lpips_coronary"] = self.no_state_dict_models["lpips"](gray2rgb_coronary, gray2rgb_gt_coronary)
-        
         prog_bar["lpips_whole"] = True
-        prog_bar["lpips_coronary"] = True
+        
+        if outputs.alpha is not None:
+            masked_pixels = masked_pixels[0:1].to(torch.uint8)
+            soft_coronary_mask = torch.sigmoid((outputs.alpha - 0.01) * 5)
+            dice_loss = self.dice_loss_fn(soft_coronary_mask[None], masked_pixels[None])
+            metrics["dice_loss"] = dice_loss
+            prog_bar["dice_loss"] = True
 
         return metrics, prog_bar
     

@@ -35,8 +35,6 @@ class DeformNetworkConfig:
     is_6dof: bool = False
     rotate_xyz: bool = False
     chunk: int = -1  # avoid CUDA oom,
-    
-    reverse_gray_scale: bool = False    # DSA image usually has reverse gray scale
 
 
 @dataclass
@@ -74,8 +72,8 @@ class RenderRes:
     
     def reverse_gray_scale(self, ) -> "RenderRes":
         return RenderRes(
-            gray_image_coronary=self.gray_image_coronary.max() - self.gray_image_coronary,
-            gray_image_whole=self.gray_image_whole.max() - self.gray_image_whole,
+            gray_image_coronary=1.0 - self.gray_image_coronary,
+            gray_image_whole=1.0 - self.gray_image_whole,
             depth=self.depth,
             alpha=self.alpha,
             viewspace_points=self.viewspace_points,
@@ -117,13 +115,14 @@ class CoronaryDeformableXrayRenderer(Renderer):
             xyz_encoding: XYZEncodingConfig,
             time_encoding: TimeEncodingConfig,
             optimization: DeformableRendererOptimizationConfig,
+            reverse_gray_scale: bool = False    # DSA image usually has reverse gray scale
     ) -> None:
         super().__init__()
-
         self.deform_network_config = deform_network
         self.xyz_encoding_config = xyz_encoding
         self.time_encoding_config = time_encoding
         self.optimization_config = optimization
+        self.reverse_gray_scale = reverse_gray_scale
     
     def forward(
             self,
@@ -141,9 +140,9 @@ class CoronaryDeformableXrayRenderer(Renderer):
             d_rotation,
             d_scaling,
             viewpoint_camera=viewpoint_camera,
-            pc=pc,
+            pc=pc
         )
-        if self.deform_network_config.reverse_gray_scale is True:
+        if self.reverse_gray_scale is True:
             res = res.reverse_gray_scale()
         return res
 
@@ -173,10 +172,10 @@ class CoronaryDeformableXrayRenderer(Renderer):
             d_rotation,
             d_scaling,
             viewpoint_camera=viewpoint_camera,
-            pc=pc,
+            pc=pc
         )
         
-        if self.deform_network_config.reverse_gray_scale is True:
+        if self.reverse_gray_scale is True:
             res = res.reverse_gray_scale()
         return res
     
@@ -186,7 +185,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
             d_rotation,
             d_scaling,
             viewpoint_camera: Camera,
-            pc: XrayCoronaryGaussianModel,
+            pc: XrayCoronaryGaussianModel
     ) -> RenderRes:
         pc.state = XrayGassianState.CORONARY
         if self.deform_network_config.rotate_xyz is True:
@@ -220,7 +219,54 @@ class CoronaryDeformableXrayRenderer(Renderer):
         Ks = viewpoint_camera.get_K()[None, :3, :3]     # C=1, 3, 3
         width = int(viewpoint_camera.width.item())
         height = int(viewpoint_camera.height.item())
+        
+        def combine(x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
+            return torch.cat((x1, x2))
+        
+        pc.state = XrayGassianState.BACKGROUND
+        render_colors_whole, render_alphas_whole, meta_whole = rasterization(
+            means       =   combine(means3D, pc.get_xyz),
+            quats       =   combine(rotations, pc.get_rotation),
+            scales      =   combine(scales, pc.get_scaling),
+            opacities   =   combine(opacity, pc.get_opacity).squeeze(),
+            colors      =   combine(features, pc.get_features),
+            render_mode =   "RGB",
+            viewmats=viewmats, # C=1, 4, 4
+            Ks=Ks,  # C=1, 3, 3
+            width=width,
+            height=height,
+            rasterize_mode="antialiased",    # Mip-Splatting: Alias-free 3D Gaussian Splatting
+            absgrad = True,      # AbsGS: Recovering Fine Details for 3D Gaussian Splatting,
+            packed=False    # packed=True meets bug with backgrounds. ref: https://github.com/nerfstudio-project/gsplat/issues/826
+        )
+        meta_whole["means2d"].requires_grad_(True)
+        meta_whole["means2d"].retain_grad()
+        pc.state = XrayGassianState.WHOLE
+        
+        gray_image_whole=render_colors_whole[..., 0]     # 1, H, W
 
+        radii = meta_whole["radii"][0].max(dim=-1).values
+        visibility_filter = radii > 0
+        
+        n_cor = pc.gaussians.n_coronary_gs
+        assert n_cor is not None
+        
+        viewspace_points = {
+            XrayGassianState.CORONARY: meta_whole["means2d"],   # make slice ([:n_cor]) here will cause grad loss 
+            XrayGassianState.BACKGROUND: meta_whole["means2d"]
+        }
+        radii = {
+            XrayGassianState.CORONARY: meta_whole["radii"][0, :n_cor].max(dim=-1).values, 
+            XrayGassianState.BACKGROUND: meta_whole["radii"][0, n_cor:].max(dim=-1).values
+        }
+        
+        visibility_filter = {
+            XrayGassianState.CORONARY: radii[XrayGassianState.CORONARY] > 0, 
+            XrayGassianState.BACKGROUND: radii[XrayGassianState.BACKGROUND] > 0
+        }
+        
+        
+        pc.state = XrayGassianState.CORONARY
         # ref: https://docs.gsplat.studio/main/apis/rasterization.html#gsplat.rasterization
         render_colors_coronary, render_alphas_coronary, meta_coronary =rasterization(
             means=      means3D,            # N, 3
@@ -234,60 +280,19 @@ class CoronaryDeformableXrayRenderer(Renderer):
             width=width,
             height=height,
             rasterize_mode="antialiased",    # Mip-Splatting: Alias-free 3D Gaussian Splatting
-            # absgrad = True,      # AbsGS: Recovering Fine Details for 3D Gaussian Splatting,
+            absgrad = True,      # AbsGS: Recovering Fine Details for 3D Gaussian Splatting,
             packed=False    # packed=True meets bug with backgrounds. ref: https://github.com/nerfstudio-project/gsplat/issues/826
         )
-        meta_coronary["means2d"].requires_grad_(True)
-        meta_coronary["means2d"].retain_grad()
-        
-        pc.state = XrayGassianState.BACKGROUND
-        render_colors_background, render_alphas_background, meta_background = rasterization(
-            means       =   pc.get_xyz,
-            quats       =   pc.get_rotation,
-            scales      =   pc.get_scaling,
-            opacities   =   pc.get_opacity.squeeze(),
-            colors      =   pc.get_features,
-            render_mode =   "RGB",
-            viewmats=viewmats, # C=1, 4, 4
-            Ks=Ks,  # C=1, 3, 3
-            width=width,
-            height=height,
-            rasterize_mode="antialiased",    # Mip-Splatting: Alias-free 3D Gaussian Splatting
-            # absgrad = True,      # AbsGS: Recovering Fine Details for 3D Gaussian Splatting,
-            packed=False    # packed=True meets bug with backgrounds. ref: https://github.com/nerfstudio-project/gsplat/issues/826
-        )
-        meta_background["means2d"].requires_grad_(True)
-        meta_background["means2d"].retain_grad()
+        gray_image_coronary=render_colors_coronary[..., 0]     # 1, H, W
+        depth_coronary=render_colors_coronary[..., 1]
+        alpha_coronary=render_alphas_coronary[..., 0]
         pc.state = XrayGassianState.WHOLE
         
-        gray_image_coronary=render_colors_coronary[..., 0]     # 1, H, W
-        depth=render_colors_coronary[..., 1]
-        alpha_coronary=render_alphas_coronary[..., 0]
-        
-        gray_image_background=render_colors_background[..., 0]
-        alpha_background=render_alphas_background[..., 0]
-        
-        gray_image_whole = gray_image_coronary * alpha_coronary + gray_image_background * alpha_background
-
-        viewspace_points = {
-            XrayGassianState.CORONARY: meta_coronary["means2d"], 
-            XrayGassianState.BACKGROUND: meta_background["means2d"]
-        }
-        
-        radii = {
-            XrayGassianState.CORONARY: meta_coronary["radii"][0].max(dim=-1).values, 
-            XrayGassianState.BACKGROUND: meta_background["radii"][0].max(dim=-1).values
-        }
-        
-        visibility_filter = {
-            XrayGassianState.CORONARY: radii[XrayGassianState.CORONARY] > 0, 
-            XrayGassianState.BACKGROUND: radii[XrayGassianState.BACKGROUND] > 0
-        }
-        
+        assert pc.state == XrayGassianState.WHOLE
         return RenderRes(
             gray_image_coronary=gray_image_coronary,
             gray_image_whole=gray_image_whole,
-            depth=depth,
+            depth=depth_coronary,
             alpha=alpha_coronary,
             viewspace_points=viewspace_points,
             visibility_filter=visibility_filter,

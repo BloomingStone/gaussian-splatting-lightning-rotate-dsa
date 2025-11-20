@@ -1,13 +1,14 @@
-max_steps: 40000
+max_steps: 200000
 save_val: true
 cache_all_images: true
 trainer:
-  check_val_every_n_epoch: 10
+  check_val_every_n_epoch: 100
 
 data:
   val_max_num_images_to_cache: -1
   test_max_num_images_to_cache: -1
   image_uint8: true
+  image_on_cpu: false
   parser: 
     class_path: internal.dataparsers.rotated_xray_dataparser.RotatedXRay
     init_args:
@@ -19,19 +20,22 @@ model:
     class_path: internal.renderers.deformabel_xray_renderer.CoronaryDeformableXrayRenderer
     init_args:
       deform_network:
-        tcnn: false
+        tcnn: true
       time_encoding:
         n_frequencies: 6
         n_layers: 2
         n_neurons: 256
       optimization:
-        enable_ast: false
+        enable_ast: true
+      reverse_gray_scale: true    # DSA image usually has reverse gray scale
   metric:
     class_path: internal.metrics.rotate_xray_metrics.RotateXrayMetrics
   gaussian:
     class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
   density:
     class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
+    init_args:
+      absgrad: true
   renderer_output_types: 
     - gray_image_coronary
     - gray_image_whole
