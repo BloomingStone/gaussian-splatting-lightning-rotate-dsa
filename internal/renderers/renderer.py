@@ -32,6 +32,8 @@ class RendererOutputInfo:
     The second parameter is the dict returned by `forward()`. 
     The Third one is a `RendererOutputInfo` instance.
     """
+    
+    other_kwargs: dict | None = None
 
     def __post_init__(self):
         if self.type == RendererOutputTypes.OTHER and self.visualizer is None:

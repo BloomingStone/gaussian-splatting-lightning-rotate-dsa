@@ -50,7 +50,7 @@ class TimeNetwork(nn.Module):
 class DeformModel(nn.Module):
     def __init__(
             self,
-            network_factory,
+            network_factory: NetworkFactory,
             D=8,
             W=256,
             multires=10,

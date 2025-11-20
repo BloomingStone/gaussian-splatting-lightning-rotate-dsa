@@ -90,8 +90,8 @@ class XrayGaussianParameterDict(nn.ParameterDict):
         
         self.coronary_gs = nn.ParameterDict()
         self.background_gs = nn.ParameterDict()
-        self.n_coronary_gs: int|None = n_coronary_gs
-        self.n_background_gs: int|None = n_background_gs
+        self._n_coronary_gs: int|None = n_coronary_gs
+        self._n_background_gs: int|None = n_background_gs
     
     @property
     def state(self) -> XrayGassianState:
@@ -101,10 +101,28 @@ class XrayGaussianParameterDict(nn.ParameterDict):
     def state(self, state: XrayGassianState|str):
         self._state = XrayGassianState(state.lower())
     
+    @property
+    def n_coronary_gs(self) -> int|None:
+        if len(self.coronary_gs) == 0:
+            self._n_background_gs = None
+        else:
+            key_0 = next(iter(self.coronary_gs))
+            self._n_coronary_gs = self.coronary_gs[key_0].shape[0]
+        return self._n_coronary_gs
+    
+    @property
+    def n_background_gs(self) -> int|None:
+        if len(self.background_gs) == 0:
+            self._n_background_gs = None
+        else:
+            key_0 = next(iter(self.background_gs))
+            self._n_background_gs = self.background_gs[key_0].shape[0]
+        return self._n_background_gs
+    
     def init_n_gaussians(self, n_coronary_gs: int, n_background_gs: int):
-        assert self.n_coronary_gs is None and self.n_background_gs is None, "n_coronary_gs and n_background_gs are already set"
-        self.n_coronary_gs = n_coronary_gs
-        self.n_background_gs = n_background_gs
+        assert self._n_coronary_gs is None and self._n_background_gs is None, "n_coronary_gs and n_background_gs are already set"
+        self._n_coronary_gs = n_coronary_gs
+        self._n_background_gs = n_background_gs
     
     def _get_key_and_state(self, key: str) -> tuple[str, XrayGassianState]:
         key, state = _split_key(key)
@@ -146,22 +164,24 @@ class XrayGaussianParameterDict(nn.ParameterDict):
                 assert isinstance(value[0], inputT) and isinstance(value[1], inputT)
                 self.coronary_gs[key] = self._to_param(value[0])
                 self.background_gs[key] = self._to_param(value[1])
-                if self.n_coronary_gs is None:
-                    self.n_coronary_gs = value[0].shape[0]
-                if self.n_background_gs is None:
-                    self.n_background_gs = value[1].shape[0]
+                if self._n_coronary_gs is None:
+                    self._n_coronary_gs = value[0].shape[0]
+                if self._n_background_gs is None:
+                    self._n_background_gs = value[1].shape[0]
             else:
-                assert self.n_coronary_gs is not None and self.n_background_gs is not None, "Unknown n_coronary_gs and n_background_gs, use tuple input to init or call `init_n_gaussians` first"
-                assert len(value) == self.n_coronary_gs + self.n_background_gs, "value length doesn't match n_coronary_gs and n_background_gs"
-                self.coronary_gs[key] = self._to_param(value[:self.n_coronary_gs])
-                self.background_gs[key] = self._to_param(value[self.n_coronary_gs:])
+                assert self._n_coronary_gs is not None and self._n_background_gs is not None, "Unknown n_coronary_gs and n_background_gs, use tuple input to init or call `init_n_gaussians` first"
+                assert len(value) == self._n_coronary_gs + self._n_background_gs, "value length doesn't match n_coronary_gs and n_background_gs"
+                self.coronary_gs[key] = self._to_param(value[:self._n_coronary_gs])
+                self.background_gs[key] = self._to_param(value[self._n_coronary_gs:])
         else:
             assert key in self.coronary_gs and key in self.background_gs, "can not set single new gaussian, set whole gaussian parameter dict first or use keys like 'coronary_whole"
             assert isinstance(value, inputT)
             if state == XrayGassianState.CORONARY:
                 self.coronary_gs[key] = self._to_param(value)
+                self._n_coronary_gs = value.shape[0]
             else:
                 self.background_gs[key] = self._to_param(value)
+                self._n_background_gs = value.shape[0]
         
     @override
     def __delitem__(self, key: str) -> None:
@@ -169,6 +189,10 @@ class XrayGaussianParameterDict(nn.ParameterDict):
         if state == XrayGassianState.WHOLE:
             del self.coronary_gs[key]
             del self.background_gs[key]
+            if len(self.coronary_gs) == 0:
+                self._n_coronary_gs = None
+            if len(self.background_gs) == 0:
+                self._n_background_gs = None
         else:
             raise Exception("can not delete single gaussian")
     
@@ -188,8 +212,8 @@ class XrayGaussianParameterDict(nn.ParameterDict):
     @override
     def copy(self) -> "XrayGaussianParameterDict":
         res = XrayGaussianParameterDict()   # in WHOLE state
-        res.n_coronary_gs = self.n_coronary_gs
-        res.n_background_gs = self.n_background_gs
+        res._n_coronary_gs = self._n_coronary_gs
+        res._n_background_gs = self._n_background_gs
         
         old_state = self.state
         self.state = XrayGassianState.WHOLE
@@ -210,12 +234,18 @@ class XrayGaussianParameterDict(nn.ParameterDict):
         self.state = XrayGassianState.WHOLE
         self.coronary_gs.clear()
         self.background_gs.clear()
+        self._n_coronary_gs = None
+        self._n_background_gs = None
     
     @override
     def popitem(self) -> tuple[str, nn.Parameter]:
         assert self.state == XrayGassianState.WHOLE, "can not popitem from single gaussian, popitem from whole gaussian parameter dict first or use keys like 'coronary_whole"
         k1, v1 = self.coronary_gs.popitem()
         k2, v2 = self.background_gs.popitem()
+        if len(self.coronary_gs) == 0:
+            self._n_coronary_gs = None
+        if len(self.background_gs) == 0:
+            self._n_background_gs = None
         assert k1 == k2
         return k1, self._to_param(torch.concat([v1, v2]))
     
@@ -257,7 +287,7 @@ class XrayGaussianParameterDict(nn.ParameterDict):
     ) -> None:
         if self.state == XrayGassianState.WHOLE:
             if isinstance(parameters, XrayGaussianParameterDict):
-                assert self.n_coronary_gs == parameters.n_coronary_gs and self.n_background_gs == parameters.n_background_gs, "n_coronary_gs and n_background_gs are not the same"
+                assert self._n_coronary_gs == parameters._n_coronary_gs and self._n_background_gs == parameters._n_background_gs, "n_coronary_gs and n_background_gs are not the same"
                 self.coronary_gs.update(parameters.coronary_gs)
                 self.background_gs.update(parameters.background_gs)
             else:
@@ -340,6 +370,8 @@ class XrayCoronaryGaussianModel(
     HasOpacityGetter,
     HasVanillaGetters,
 ):
+    
+    gaussians: XrayGaussianParameterDict
     def __init__(self, config: XrayCoronaryGaussian) -> None:
         super().__init__()
         self.config = config

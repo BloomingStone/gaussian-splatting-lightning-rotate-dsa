@@ -43,8 +43,8 @@ class TestXrayGaussianParameterDict(unittest.TestCase):
         # 测试默认初始化
         param_dict = XrayGaussianParameterDict()
         self.assertEqual(param_dict.state, XrayGassianState.WHOLE)
-        self.assertIsNone(param_dict.n_coronary_gs)
-        self.assertIsNone(param_dict.n_background_gs)
+        self.assertIsNone(param_dict._n_coronary_gs)
+        self.assertIsNone(param_dict._n_background_gs)
         self.assertEqual(len(param_dict.coronary_gs), 0)
         self.assertEqual(len(param_dict.background_gs), 0)
         
@@ -55,8 +55,8 @@ class TestXrayGaussianParameterDict(unittest.TestCase):
             n_background_gs=self.n_background
         )
         self.assertEqual(param_dict.state, XrayGassianState.CORONARY)
-        self.assertEqual(param_dict.n_coronary_gs, self.n_coronary)
-        self.assertEqual(param_dict.n_background_gs, self.n_background)
+        self.assertEqual(param_dict._n_coronary_gs, self.n_coronary)
+        self.assertEqual(param_dict._n_background_gs, self.n_background)
     
     def test_state_property(self):
         """测试状态属性"""
@@ -80,8 +80,8 @@ class TestXrayGaussianParameterDict(unittest.TestCase):
         
         # 正常情况
         param_dict.init_n_gaussians(self.n_coronary, self.n_background)
-        self.assertEqual(param_dict.n_coronary_gs, self.n_coronary)
-        self.assertEqual(param_dict.n_background_gs, self.n_background)
+        self.assertEqual(param_dict._n_coronary_gs, self.n_coronary)
+        self.assertEqual(param_dict._n_background_gs, self.n_background)
         
         # 重复设置应该抛出异常
         with self.assertRaises(AssertionError):
@@ -95,13 +95,13 @@ class TestXrayGaussianParameterDict(unittest.TestCase):
         param_dict["means"] = (self.coronary_means, self.background_means)
         
         # 验证设置是否成功
-        self.assertEqual(param_dict.n_coronary_gs, self.n_coronary)
-        self.assertEqual(param_dict.n_background_gs, self.n_background)
+        self.assertEqual(param_dict._n_coronary_gs, self.n_coronary)
+        self.assertEqual(param_dict._n_background_gs, self.n_background)
         
         # 验证值是否正确
         means = param_dict["means"]
-        coronary_means = means[:param_dict.n_coronary_gs]
-        background_means = means[param_dict.n_coronary_gs:]
+        coronary_means = means[:param_dict._n_coronary_gs]
+        background_means = means[param_dict._n_coronary_gs:]
         self.assertTrue(torch.equal(coronary_means, self.coronary_means))
         self.assertTrue(torch.equal(background_means, self.background_means))
     
@@ -117,8 +117,8 @@ class TestXrayGaussianParameterDict(unittest.TestCase):
         
         # 验证值是否正确分割
         means = param_dict["means"]
-        coronary_means = means[:param_dict.n_coronary_gs]
-        background_means = means[param_dict.n_coronary_gs:]
+        coronary_means = means[:param_dict._n_coronary_gs]
+        background_means = means[param_dict._n_coronary_gs:]
         self.assertTrue(torch.equal(coronary_means, self.coronary_means))
         self.assertTrue(torch.equal(background_means, self.background_means))
         
@@ -151,8 +151,8 @@ class TestXrayGaussianParameterDict(unittest.TestCase):
         
         # 验证只有冠状动脉参数被更新
         means = param_dict["means_whole"]
-        coronary_means = means[:param_dict.n_coronary_gs]
-        background_means = means[param_dict.n_coronary_gs:]
+        coronary_means = means[:param_dict._n_coronary_gs]
+        background_means = means[param_dict._n_coronary_gs:]
         self.assertTrue(torch.equal(coronary_means, new_coronary_means))
         self.assertTrue(torch.equal(background_means, self.background_means))
         
@@ -169,8 +169,8 @@ class TestXrayGaussianParameterDict(unittest.TestCase):
         
         # 在WHOLE状态下获取参数
         means = param_dict["means"]
-        coronary_means = means[:param_dict.n_coronary_gs]
-        background_means = means[param_dict.n_coronary_gs:]
+        coronary_means = means[:param_dict._n_coronary_gs]
+        background_means = means[param_dict._n_coronary_gs:]
         self.assertTrue(torch.equal(coronary_means, self.coronary_means))
         self.assertTrue(torch.equal(background_means, self.background_means))
         
@@ -280,8 +280,8 @@ class TestXrayGaussianParameterDict(unittest.TestCase):
         
         # 验证复制结果
         self.assertEqual(copied_dict.state, param_dict.state)
-        self.assertEqual(copied_dict.n_coronary_gs, param_dict.n_coronary_gs)
-        self.assertEqual(copied_dict.n_background_gs, param_dict.n_background_gs)
+        self.assertEqual(copied_dict._n_coronary_gs, param_dict._n_coronary_gs)
+        self.assertEqual(copied_dict._n_background_gs, param_dict._n_background_gs)
         
         # 验证参数值
         copied_dict.state = XrayGassianState.CORONARY
@@ -405,8 +405,8 @@ class TestXrayGaussianParameterDict(unittest.TestCase):
         # 验证更新结果
         self.assertIn("scales", param_dict)
         scales = param_dict["scales"]
-        coronary_scales = scales[:param_dict.n_coronary_gs]
-        background_scales = scales[param_dict.n_coronary_gs:]
+        coronary_scales = scales[:param_dict._n_coronary_gs]
+        background_scales = scales[param_dict._n_coronary_gs:]
         self.assertTrue(torch.equal(coronary_scales, new_scales[0]))
         self.assertTrue(torch.equal(background_scales, new_scales[1]))
         
@@ -480,7 +480,7 @@ class TestSplitKey(unittest.TestCase):
 class TestDeformableXrayRender(unittest.TestCase):
     def setUp(self):
         parser = RotatedXRay(
-            init_point_cloud_mode="central-line"
+            init_point_cloud_mode="label"
         ).instantiate(
             path="/media/data3/sj/Code/Gen4D/test/output/intergration_full/volume_dvf_reader_multipli_contrast_LCA",
             output_path="/media/data3/sj/Code/gaussian-splatting-lightning/outputs/temp",
@@ -511,12 +511,14 @@ class TestDeformableXrayRender(unittest.TestCase):
             optimization=DeformableRendererOptimizationConfig(),
         )
         self.render.setup("fit", self.lightning_module)
+        self.render.to('cuda')
         self.render.training_setup(self.lightning_module)
     
     def test_training_forward(self):
         camera, image_info, depth_map = self.batch
+        print(camera.camera_center)
         image_name, gt_image, masked_pixels = image_info
-        res = self.render.training_forward(
+        res = self.render.forward(
             step=0,
             module=self.lightning_module,
             viewpoint_camera=camera.to_device(self.device),

@@ -54,7 +54,7 @@ class NetworkFactory:
         if self.tcnn is True:
             import tinycudann as tcnn
             otype = "FullyFusedMLP"
-            if n_neurons > 128:
+            if n_neurons not in (16, 32, 64, 128):
                 otype = "CutlassMLP"
             return tcnn.Network(
                 n_input_dims=n_input_dims,

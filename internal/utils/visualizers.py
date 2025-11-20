@@ -10,7 +10,7 @@ class Visualizers:
         return i
 
     @staticmethod
-    def normalization_preprocessor(image: torch.Tensor, visualizer, max_clamp: float = -1, gamma: float = 1.):
+    def normalization_preprocessor(image: torch.Tensor, visualizer, max_clamp: float = -1, gamma: float = 1., **kwargs):
         if max_clamp > 0:
             image = torch.clamp_max(image, max=max_clamp)
 
@@ -25,7 +25,7 @@ class Visualizers:
         if gamma != 1.:
             image = torch.pow(image, gamma)
 
-        return visualizer(image)
+        return visualizer(image, **kwargs)
 
     @staticmethod
     def float_colormap(image, colormap: Literal["default", "turbo", "viridis", "magma", "inferno", "cividis", "gray"] = "default"):
@@ -106,6 +106,8 @@ class Visualizers:
     @staticmethod
     def create_as_visualizer(func, *args, **kwargs) -> RendererOutputVisualizer:
         def visualizer(image, outputs, info):
+            if info.other_kwargs is not None:
+                kwargs.update(info.other_kwargs)
             return func(image, *args, **kwargs)
 
         return visualizer

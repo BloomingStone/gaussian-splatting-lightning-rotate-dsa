@@ -737,6 +737,8 @@ class GaussianSplatting(LightningModule):
                 assert features.shape[1] == 1
                 rgb = self.gaussian_model.get_features.repeat(1, 3)
                 rgb = (rgb.clamp(min=0., max=1.) * 255).to(torch.int)
+            else:
+                raise ValueError(f"Not supported feature with dim={features.dim()}")
             store_ply(os.path.join(
                 self.hparams["output_path"],
                 "checkpoints",

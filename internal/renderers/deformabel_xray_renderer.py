@@ -331,9 +331,10 @@ class CoronaryDeformableXrayRenderer(Renderer):
         return optimizer, scheduler
 
     def get_available_outputs(self) -> dict:
+        cmap = {"colormap": "gray"}
         return {
-            "gray_image_coronary": RendererOutputInfo("gray_image_coronary", RendererOutputTypes.GRAY),
-            "gray_image_whole": RendererOutputInfo("gray_image_whole", RendererOutputTypes.GRAY),
-            "depth": RendererOutputInfo("depth", RendererOutputTypes.GRAY),
-            "alpha": RendererOutputInfo("alpha", RendererOutputTypes.GRAY),
+            "gray_image_coronary": RendererOutputInfo("gray_image_coronary", RendererOutputTypes.GRAY, other_kwargs=cmap),
+            "gray_image_whole": RendererOutputInfo("gray_image_whole", RendererOutputTypes.GRAY, other_kwargs=cmap),
+            "depth": RendererOutputInfo("depth", RendererOutputTypes.GRAY, other_kwargs=cmap),
+            "alpha": RendererOutputInfo("alpha", RendererOutputTypes.GRAY, other_kwargs=cmap),
         }
