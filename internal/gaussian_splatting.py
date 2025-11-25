@@ -32,6 +32,8 @@ from jsonargparse import lazy_instance
 from internal.utils.sh_utils import eval_sh
 from internal.utils.graphics_utils import store_ply
 from internal.utils.image_utils import save_tensor_image
+from internal.savers import Saver
+from internal.savers.vanilla_saver import VanillaSaver
 
 
 class GaussianSplatting(LightningModule):
@@ -56,6 +58,7 @@ class GaussianSplatting(LightningModule):
             initialize_from: str = None,
             renderer_output_types: Optional[List[str]] = None,
             drop_optimizer_states: bool = False,
+            saver: Saver = lazy_instance(VanillaSaver)
     ) -> None:
         super().__init__()
         self.automatic_optimization = False
@@ -104,6 +107,8 @@ class GaussianSplatting(LightningModule):
         self.image_saving_threads = []
 
         self.val_metrics: List[Tuple[str, Dict]] = []
+        
+        self.saver = saver.instantiate()
 
         # hooks
         self.on_train_start_hooks: List[Callable[[GaussianModel, Self], None]] = []
@@ -359,7 +364,7 @@ class GaussianSplatting(LightningModule):
         # save checkpoint
         # checkpoint will always be saved after final step, so do not save for final step here
         if global_step in self.hparams["save_iterations"] and self.is_final_step(global_step) is False and self.trainer.global_step != self.restored_global_step:
-            self.save_gaussians()
+            self.saver.save(self)
 
         # call renderer hook
         self.renderer.before_training_step(global_step, self)
@@ -693,58 +698,6 @@ class GaussianSplatting(LightningModule):
 
     def density_updated_by_renderer(self):
         self.density_controller.after_density_changed(self.gaussian_model, self.gaussian_optimizers, self)
-
-    def save_gaussians(self):
-        is_mp_strategy = isinstance(self.trainer.strategy, internal.mp_strategy.MPStrategy)
-        if self.trainer.global_rank != 0 and is_mp_strategy is False:
-            return
-
-        if self.hparams["save_ply"] is True:
-            from internal.utils.gaussian_utils import GaussianPlyUtils
-            # save ply file
-            filename = "point_cloud.ply"
-            # if self.trainer.global_rank != 0:
-            #     filename = "point_cloud_{}.ply".format(self.trainer.global_rank)
-            with torch.no_grad():
-                output_dir = os.path.join(self.hparams["output_path"], "point_cloud",
-                                          "iteration_{}".format(self.trainer.global_step))
-                os.makedirs(output_dir, exist_ok=True)
-                output_path = os.path.join(output_dir, filename)
-                GaussianPlyUtils.load_from_model(self.gaussian_model).to_ply_format().save_to_ply(output_path + ".tmp")
-                os.rename(output_path + ".tmp", output_path)
-
-            print("Gaussians saved to {}".format(output_path))
-
-        # save checkpoint
-        checkpoint_name_suffix = ""
-        if is_mp_strategy is True:
-            checkpoint_name_suffix = f"-rank={self.global_rank}"
-
-        checkpoint_path = os.path.join(
-            self.hparams["output_path"],
-            "checkpoints",
-            "epoch={}-step={}{}.ckpt".format(self.trainer.current_epoch, self.trainer.global_step, checkpoint_name_suffix),
-        )
-        os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-        self.trainer.save_checkpoint(checkpoint_path)
-        with torch.no_grad():
-            xyz = self.gaussian_model.get_xyz
-            features = self.gaussian_model.get_features
-            if features.dim() == 3:
-                rgb = eval_sh(0, self.gaussian_model.get_features[:, :1, :].transpose(1, 2), None)
-                rgb = ((rgb + 0.5).clamp(min=0., max=1.) * 255).to(torch.int)
-            elif features.dim() == 2:
-                assert features.shape[1] == 1
-                rgb = self.gaussian_model.get_features.repeat(1, 3)
-                rgb = (rgb.clamp(min=0., max=1.) * 255).to(torch.int)
-            else:
-                raise ValueError(f"Not supported feature with dim={features.dim()}")
-            store_ply(os.path.join(
-                self.hparams["output_path"],
-                "checkpoints",
-                "epoch={}-step={}{}-xyz_rgb.ply".format(self.trainer.current_epoch, self.trainer.global_step, checkpoint_name_suffix),
-            ), xyz.cpu().numpy(), rgb.cpu().numpy())
-        print("Checkpoint saved to {}".format(checkpoint_path))
 
     def set_datamodule_device(self, device):
         # whether trainer exists

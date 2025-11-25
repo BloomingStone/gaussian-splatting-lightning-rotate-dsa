@@ -39,3 +39,8 @@ model:
   renderer_output_types: 
     - gray_image_coronary
     - gray_image_whole
+  saver:
+    class_path: internal.savers.x_ray_saver.XRaySaver
+    init_args:
+      save_states: ["coronary", "whole"]
+  

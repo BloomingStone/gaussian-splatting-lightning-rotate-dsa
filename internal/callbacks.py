@@ -1,6 +1,7 @@
 import os
 import sys
 import math
+import lightning.pytorch as pl
 from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.callbacks.progress.tqdm_progress import TQDMProgressBar, Tqdm
 
@@ -21,7 +22,7 @@ class SaveCheckpoint(Callback):
 class SaveGaussian(Callback):
     def on_train_end(self, trainer, pl_module) -> None:
         # TODO: should save before densification
-        pl_module.save_gaussians()
+        pl_module.saver.save(pl_module)
 
 
 class KeepRunningIfWebViewerEnabled(Callback):

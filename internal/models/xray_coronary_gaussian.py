@@ -362,13 +362,13 @@ class HasGrayGetter(ABC):
 
 
 class XrayCoronaryGaussianModel(
+    HasVanillaGetters,
     GaussianModel,
     HasMeanGetter,
     HasGrayGetter,
     HasScaleGetter,
     HasRotationGetter,
     HasOpacityGetter,
-    HasVanillaGetters,
 ):
     
     gaussians: XrayGaussianParameterDict
