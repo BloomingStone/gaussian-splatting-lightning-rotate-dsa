@@ -98,11 +98,13 @@ class RotateXrayMetricsImpl(MetricImpl):
             "gray_loss_coronary": gray_loss_coronary,
             "gray_loss_whole": gray_loss_whole,
             "ssim_loss_whole": ssim_loss_whole,
+            "dice_loss": dice_loss
         }, {
             "loss": True,
             "gray_loss_coronary": True,
             "gray_loss_whole": True,
             "ssim_loss_whole": True,
+            "dice_loss": dice_loss
         }
     
     def get_train_metrics(self, pl_module, gaussian_model, step: int, batch, outputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:
