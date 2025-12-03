@@ -41,20 +41,19 @@ class XRaySaverModule(SaverModule):
         
         assert isinstance(pl_module.gaussian_model, XrayCoronaryGaussianModel)
         model = pl_module.gaussian_model
-        def model_(key: str) -> torch.Tensor:
-            return model.gaussians[key]
-        
         for state in self.config.save_states:
             ply_path = ckpt_dir / f"epoch={epoch}-step={step}{ckpt_suffix}-{state}.ply"
             model.state = XrayGassianState(state)
             
-            gray = model_("gray")
-            sh0 = gray[..., None].repeat(1, 1, 3)
+            # TODO
+            opacity = model.opacities.detach()
+            gray = torch.sigmoid(opacity).squeeze()
+            sh0 = gray[..., None, None].repeat(1, 1, 3)
             export_splats(
-                means=model_("means"),
-                scales=model_("scales"),
-                quats=model_("rotations"),
-                opacities=model_("opacities").squeeze(),
+                means=model.get_xyz.detach(),
+                scales=model.get_scaling.detach(),
+                quats=model.get_rotation.detach(),
+                opacities=model.get_opacity.squeeze().detach(),
                 sh0=sh0,
                 shN=torch.zeros(gray.shape[0], 0, 3).to(sh0),
                 save_to=str(ply_path)

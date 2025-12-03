@@ -25,6 +25,7 @@ from internal.utils.general_utils import (
     inverse_sigmoid,
     strip_symmetric,
     build_scaling_rotation,
+    inverse_softplus
 )
 from internal.schedulers import ExponentialDecayScheduler
 from internal.optimizers import OptimizerConfig, Adam
@@ -59,8 +60,6 @@ class OptimizationConfig:
     means_lr_scheduler: ExponentialDecayScheduler = field(default_factory=XrayExponentialDecayScheduler)
     
     spatial_lr_scale: float = -1  # auto calculate from camera poses if <= 0
-    
-    gray_lr: float = 0.0025
 
     opacities_lr: float = 0.05
 
@@ -315,7 +314,6 @@ class XrayGaussianParameterDict(nn.ParameterDict):
 class GaussianIniter:
     n_gs       :int
     means      :Float32[Tensor, "n_gs 3"]           = field(init=False)
-    gray       :Float32[Tensor, "n_gs 1"]           = field(init=False)
     scales     :Float32[Tensor, "n_gs 3"]           = field(init=False)
     opacities  :Float32[Tensor, "n_gs 1"]           = field(init=False)
     rotations  :Float32[Tensor, "n_gs 4"]           = field(init=False)
@@ -323,9 +321,8 @@ class GaussianIniter:
     def __post_init__(self):
         self.scales = torch.zeros(self.n_gs, 3, dtype=torch.float32)
         self.means = torch.zeros(self.n_gs, 3, dtype=torch.float32)
-        self.gray = torch.ones(self.n_gs, 1, dtype=torch.float32)*0.5
         
-        self.opacities = inverse_sigmoid(0.01 * torch.ones((self.n_gs, 1), dtype=torch.float32))
+        self.opacities = torch.ones((self.n_gs, 1), dtype=torch.float32)
         
         self.rotations = torch.zeros((self.n_gs, 4), dtype=torch.float32)
         self.rotations[:, 0] = 1
@@ -340,32 +337,10 @@ class XrayCoronaryGaussian(Gaussian):
 def _identity_act(x: Tensor) -> Tensor:
     return x
 
-class HasGrayGetter(ABC):
-    gaussians: nn.ParameterDict
-    _gray_name: str = "gray"
-    gray_activation: Callable[[torch.Tensor], torch.Tensor]
-    gray_inverse_activation: Callable[[torch.Tensor], torch.Tensor]
-
-    def get_gray(self) -> torch.Tensor:
-        """Return activated gray"""
-        return self.gray_activation(self.gray)
-
-    @property
-    def gray(self) -> torch.Tensor:
-        """Return raw gray"""
-        return self.gaussians[self._gray_name]
-
-    @gray.setter
-    def gray(self, v):
-        """Set raw gray"""
-        self.gaussians[self._gray_name] = v
-
-
 class XrayCoronaryGaussianModel(
     HasVanillaGetters,
     GaussianModel,
     HasMeanGetter,
-    HasGrayGetter,
     HasScaleGetter,
     HasRotationGetter,
     HasOpacityGetter,
@@ -377,7 +352,7 @@ class XrayCoronaryGaussianModel(
         self.config = config
 
         self._keys = [
-            "means", "gray", "opacities", "scales", "rotations"
+            "means", "opacities", "scales", "rotations"
         ]
 
         self.is_pre_activated = False
@@ -388,10 +363,8 @@ class XrayCoronaryGaussianModel(
         
         self.scale_activation = torch.exp
         self.scale_inverse_activation = torch.log
-        self.gray_activation = torch.sigmoid
-        self.gray_inverse_activation = inverse_sigmoid
-        self.opacity_activation = torch.sigmoid
-        self.opacity_inverse_activation = inverse_sigmoid
+        self.opacity_activation = torch.nn.Softplus(beta=10)
+        self.opacity_inverse_activation = inverse_softplus
         self.rotation_activation = F.normalize
         self.rotation_inverse_activation = _identity_act
 
@@ -449,10 +422,9 @@ class XrayCoronaryGaussianModel(
         self.state = XrayGassianState.WHOLE
         self.set_properties({
             "means":     (  xyz_coronary       ,   xyz_background      ),
-            "gray":      (  inits.gray         ,   inits.gray          ),
-            "opacities": (  inits.opacities    ,   inits.opacities     ),
-            "scales":    (  scales_coronary    ,   scales_background   ),
-            "rotations": (  inits.rotations    ,   inits.rotations     ),
+            "opacities": (  inits.opacities    ,   inits.opacities.clone()     ),
+            "scales":    (  scales_coronary    ,   scales_background.clone()   ),
+            "rotations": (  inits.rotations    ,   inits.rotations.clone()       ),
         })
     
     @override
@@ -463,7 +435,6 @@ class XrayCoronaryGaussianModel(
         self.state = XrayGassianState.WHOLE
         self.set_properties({
             "means":     (  inits.means        ,   inits.means.clone()      ),
-            "gray":      (  inits.gray         ,   inits.gray.clone()       ),
             "opacities": (  inits.opacities    ,   inits.opacities.clone()  ),
             "scales":    (  inits.scales       ,   inits.scales.clone()     ),
             "rotations": (  inits.rotations    ,   inits.rotations.clone()  ),
@@ -628,7 +599,7 @@ class XrayCoronaryGaussianModel(
     @property
     @override
     def get_features(self):
-        return self.get_gray()
+        return self.get_opacities()
 
     @property
     @override
@@ -645,7 +616,6 @@ class XrayCoronaryGaussianModel(
         self.scales = self.get_scales()
         self.rotations = self.get_rotations()
         self.opacities = self.get_opacities()
-        self.gray = self.get_gray()
 
         self.scale_activation = _identity_act
         self.scale_inverse_activation = _identity_act
@@ -653,8 +623,6 @@ class XrayCoronaryGaussianModel(
         self.rotation_inverse_activation = _identity_act
         self.opacity_activation = _identity_act
         self.opacity_inverse_activation = _identity_act
-        self.gray_activation = _identity_act
-        self.gray_inverse_activation = _identity_act
     
     def get_non_pre_activated_properties(self):
         if self.is_pre_activated is True:
@@ -664,13 +632,10 @@ class XrayCoronaryGaussianModel(
             for suffix in ["_coronary", "_background"]:
                 scales = "scales" + suffix
                 opacities = "opacities" + suffix
-                gray = "gray" + suffix
                 non_pre_activated_properties[scales] = torch.log(activated_properties[scales])
                 keys.remove(scales)
                 non_pre_activated_properties[opacities] = inverse_sigmoid(activated_properties[opacities])
                 keys.remove(opacities)
-                non_pre_activated_properties[gray] = torch.log(activated_properties[gray])
-                keys.remove(gray)
 
             for key in keys:
                 non_pre_activated_properties[key] = activated_properties[key]

@@ -1,8 +1,8 @@
-max_steps: 200000
+max_steps: 20000
 save_val: true
 cache_all_images: true
 trainer:
-  check_val_every_n_epoch: 100
+  check_val_every_n_epoch: 20
 
 data:
   val_max_num_images_to_cache: -1
@@ -27,7 +27,7 @@ model:
         n_neurons: 256
       optimization:
         enable_ast: true
-      reverse_gray_scale: true    # DSA image usually has reverse gray scale
+      exp_neg_img: true    # DSA image usually has reverse gray scale
   metric:
     class_path: internal.metrics.rotate_xray_metrics.RotateXrayMetrics
   gaussian:
@@ -35,7 +35,8 @@ model:
   density:
     class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
     init_args:
-      absgrad: true
+      coronary_controller:
+        densify_from_iter: 2000
   renderer_output_types: 
     - gray_image_coronary
     - gray_image_whole

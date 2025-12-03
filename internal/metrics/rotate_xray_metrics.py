@@ -83,7 +83,7 @@ class RotateXrayMetricsImpl(MetricImpl):
         ssim_metric_whole = self.ssim(outputs.gray_image_whole, gt_image)
         ssim_loss_whole = 1.0 - ssim_metric_whole
         
-        soft_coronary_mask = torch.sigmoid((outputs.alpha - 0.01) * 10)
+        soft_coronary_mask = torch.sigmoid(((1-outputs.gray_image_coronary)/0.001 - 0.0001) * 10)   # sync with render reverse
         dice_loss = self.dice_loss_fn(soft_coronary_mask[None], masked_pixels[None])
         
         loss = (
@@ -130,13 +130,6 @@ class RotateXrayMetricsImpl(MetricImpl):
         gray2rgb_gt_whole = gt_image.clamp(0., 1.)[None].repeat(1, 3, 1, 1)
         metrics["lpips_whole"] = self.no_state_dict_models["lpips"](gray2rgb_whole, gray2rgb_gt_whole)
         prog_bar["lpips_whole"] = True
-        
-        if outputs.alpha is not None:
-            masked_pixels = masked_pixels[0:1].to(torch.uint8)
-            soft_coronary_mask = torch.sigmoid((outputs.alpha - 0.01) * 5)
-            dice_loss = self.dice_loss_fn(soft_coronary_mask[None], masked_pixels[None])
-            metrics["dice_loss"] = dice_loss
-            prog_bar["dice_loss"] = True
 
         return metrics, prog_bar
     

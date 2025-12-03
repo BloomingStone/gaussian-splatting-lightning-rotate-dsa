@@ -1,18 +1,20 @@
 from typing import Any, Optional, Tuple
 from dataclasses import dataclass
 from functools import partial
+import math
 
 import torch
 from torch import Tensor
 from lightning import LightningModule
-from gsplat import rasterization
-from gsplat.strategy import DefaultStrategy
+from xray_gaussian_rasterization_voxelization import (
+    GaussianRasterizationSettings,
+    GaussianRasterizer,
+)
 from jaxtyping import Float32
 
 from .renderer import Renderer, RendererOutputInfo, RendererOutputTypes
 from ..cameras import Camera
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel, XrayGassianState
-from .vanilla_renderer import VanillaRenderer
 from ..cameras import Camera
 from ..models.deform_model import DeformModel
 from ..utils.network_factory import NetworkFactory
@@ -34,7 +36,7 @@ class DeformNetworkConfig:
     n_neurons: int = 256
     is_6dof: bool = False
     rotate_xyz: bool = False
-    chunk: int = -1  # avoid CUDA oom,
+    chunk: int = -1  # avoid CUDA oom
 
 
 @dataclass
@@ -64,18 +66,16 @@ class DeformableRendererOptimizationConfig:
 class RenderRes:
     gray_image_coronary: Float32[Tensor, "1 h w"]
     gray_image_whole: Float32[Tensor, "1 h w"]
-    depth: Float32[Tensor, "1 h w"]
-    alpha: Float32[Tensor, "1 h w"]
+    gray_image_backgound: Float32[Tensor, "1 h w"]
     viewspace_points: dict[XrayGassianState, Float32[Tensor, "n 2"]]
     visibility_filter: dict[XrayGassianState, Float32[Tensor, "n"]]
     radii: dict[XrayGassianState, Float32[Tensor, "n"]]
     
-    def reverse_gray_scale(self, ) -> "RenderRes":
+    def exp_neg_img(self) -> "RenderRes":
         return RenderRes(
-            gray_image_coronary=1.0 - self.gray_image_coronary,
-            gray_image_whole=1.0 - self.gray_image_whole,
-            depth=self.depth,
-            alpha=self.alpha,
+            gray_image_coronary= 1 - 0.001 * self.gray_image_coronary,
+            gray_image_whole= 1 - 0.001 * self.gray_image_whole,
+            gray_image_backgound= 1 - 0.001 * self.gray_image_backgound,
             viewspace_points=self.viewspace_points,
             visibility_filter=self.visibility_filter,
             radii=self.radii,
@@ -115,14 +115,14 @@ class CoronaryDeformableXrayRenderer(Renderer):
             xyz_encoding: XYZEncodingConfig,
             time_encoding: TimeEncodingConfig,
             optimization: DeformableRendererOptimizationConfig,
-            reverse_gray_scale: bool = False    # DSA image usually has reverse gray scale
+            exp_neg_img: bool = False    # DSA image usually has reverse gray scale
     ) -> None:
         super().__init__()
         self.deform_network_config = deform_network
         self.xyz_encoding_config = xyz_encoding
         self.time_encoding_config = time_encoding
         self.optimization_config = optimization
-        self.reverse_gray_scale = reverse_gray_scale
+        self.exp_neg_img = exp_neg_img
     
     def forward(
             self,
@@ -142,9 +142,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
             viewpoint_camera=viewpoint_camera,
             pc=pc
         )
-        if self.reverse_gray_scale is True:
-            res = res.reverse_gray_scale()
-        return res
+        return res.exp_neg_img() if self.exp_neg_img else res
 
     def training_forward(
             self,
@@ -155,7 +153,6 @@ class CoronaryDeformableXrayRenderer(Renderer):
             **kwargs,
     ) -> RenderRes:
         pc.state = XrayGassianState.CORONARY
-        d_xyz, d_rotation, d_scaling = 0.0, 0.0, 0.0
         if step <= self.optimization_config.warm_up:
             pass    # TODO
         N = pc.get_xyz.shape[0]
@@ -174,10 +171,67 @@ class CoronaryDeformableXrayRenderer(Renderer):
             viewpoint_camera=viewpoint_camera,
             pc=pc
         )
+        return res.exp_neg_img() if self.exp_neg_img else res
+    
+    def static_forward(
+            self,
+            step: int,
+            module: LightningModule,
+            viewpoint_camera: Camera,
+            pc: XrayCoronaryGaussianModel,
+            **kwargs,
+    ):
+        rasterizer = GaussianRasterizer(raster_settings=GaussianRasterizationSettings(
+            image_height=int(viewpoint_camera.height),
+            image_width=int(viewpoint_camera.width),
+            tanfovx=math.tan(viewpoint_camera.fov_x * 0.5),
+            tanfovy=math.tan(viewpoint_camera.fov_y * 0.5),
+            scale_modifier=1.0,
+            viewmatrix=viewpoint_camera.world_to_camera,
+            projmatrix=viewpoint_camera.full_projection,
+            campos=viewpoint_camera.camera_center,
+            prefiltered=False,
+            mode=1, #cone beam
+            debug=False,
+        ))
         
-        if self.reverse_gray_scale is True:
-            res = res.reverse_gray_scale()
-        return res
+        def render_by_state(state: XrayGassianState) -> Tuple[Float32[Tensor, "1 h w"], Float32[Tensor, "n"], Float32[Tensor, "n 3"]]:
+            pc.state = state
+            means_2d = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device=pc.get_xyz.device) + 0
+            rendered_image, radii = rasterizer(
+                means3D     =   pc.get_xyz,
+                means2D     =   means_2d,
+                opacities   =   pc.get_opacity,
+                scales      =   pc.get_scaling,
+                rotations   =   pc.get_rotation,
+            )
+            pc.state = XrayGassianState.WHOLE
+            return rendered_image, radii, means_2d
+        
+        rendered_image_coronary, radii_coronary, means_2d_coronary = render_by_state(XrayGassianState.CORONARY)
+        rendered_image_background, radii_background, means_2d_background = render_by_state(XrayGassianState.BACKGROUND)
+        
+        
+        assert pc.state == XrayGassianState.WHOLE
+        res = RenderRes(
+            gray_image_coronary     =   rendered_image_coronary,
+            gray_image_whole        =   rendered_image_coronary + rendered_image_background,
+            gray_image_backgound    =   rendered_image_background,
+            viewspace_points        =   {
+                                            XrayGassianState.CORONARY: means_2d_coronary,
+                                            XrayGassianState.BACKGROUND: means_2d_background
+                                        },
+            visibility_filter       =   {
+                                            XrayGassianState.CORONARY: radii_coronary > 0, 
+                                            XrayGassianState.BACKGROUND: radii_background > 0
+                                        },
+            radii                   =   {
+                                            XrayGassianState.CORONARY: radii_coronary, 
+                                            XrayGassianState.BACKGROUND: radii_background
+                                        }
+        )
+        return res.exp_neg_img() if self.exp_neg_img else res
+        
     
     def _render(
             self,
@@ -188,6 +242,8 @@ class CoronaryDeformableXrayRenderer(Renderer):
             pc: XrayCoronaryGaussianModel
     ) -> RenderRes:
         pc.state = XrayGassianState.CORONARY
+        scales = pc.get_scaling + d_scaling
+        
         if self.deform_network_config.rotate_xyz is True:
             if torch.is_tensor(d_xyz) is True:
                 normalized_qvec = torch.nn.functional.normalize(d_rotation)
@@ -210,90 +266,67 @@ class CoronaryDeformableXrayRenderer(Renderer):
             else:
                 means3D = pc.get_xyz + d_xyz
             rotations = pc.get_rotation + d_rotation
-
-        opacity = pc.get_opacity
-        scales = pc.get_scaling + d_scaling
-        features = pc.get_features
         
-        viewmats = viewpoint_camera.world_to_camera.transpose(-1, -2)[None]     # C=1, 4, 4
-        Ks = viewpoint_camera.get_K()[None, :3, :3]     # C=1, 3, 3
-        width = int(viewpoint_camera.width.item())
-        height = int(viewpoint_camera.height.item())
+        raster_settings = GaussianRasterizationSettings(
+            image_height=int(viewpoint_camera.height),
+            image_width=int(viewpoint_camera.width),
+            tanfovx=math.tan(viewpoint_camera.fov_x * 0.5),
+            tanfovy=math.tan(viewpoint_camera.fov_y * 0.5),
+            scale_modifier=1.0,
+            viewmatrix=viewpoint_camera.world_to_camera,
+            projmatrix=viewpoint_camera.full_projection,
+            campos=viewpoint_camera.camera_center,
+            prefiltered=False,
+            mode=1, #cone beam
+            debug=False,
+        )
         
-        def combine(x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
-            return torch.cat((x1, x2))
+        
+        rasterizer = GaussianRasterizer(raster_settings=raster_settings)
+        
+        means_2d_coronary = torch.zeros_like(means3D, dtype=means3D.dtype, requires_grad=True, device=means3D.device) + 0
+        rendered_image_coronary, radii_coronary = rasterizer(
+            means3D=means3D,
+            means2D=means_2d_coronary,
+            opacities=pc.get_opacity,
+            scales=scales,
+            rotations=rotations,
+        )
         
         pc.state = XrayGassianState.BACKGROUND
-        render_colors_whole, render_alphas_whole, meta_whole = rasterization(
-            means       =   combine(means3D, pc.get_xyz),
-            quats       =   combine(rotations, pc.get_rotation),
-            scales      =   combine(scales, pc.get_scaling),
-            opacities   =   combine(opacity, pc.get_opacity).squeeze(),
-            colors      =   combine(features, pc.get_features),
-            render_mode =   "RGB",
-            viewmats=viewmats, # C=1, 4, 4
-            Ks=Ks,  # C=1, 3, 3
-            width=width,
-            height=height,
-            rasterize_mode="antialiased",    # Mip-Splatting: Alias-free 3D Gaussian Splatting
-            absgrad = True,      # AbsGS: Recovering Fine Details for 3D Gaussian Splatting,
-            packed=False    # packed=True meets bug with backgrounds. ref: https://github.com/nerfstudio-project/gsplat/issues/826
+        means_2d_background = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device=pc.get_xyz.device) + 0
+        rendered_image_background, radii_background = rasterizer(
+            means3D=pc.get_xyz,
+            means2D=means_2d_background,
+            opacities=pc.get_opacity,
+            scales=pc.get_scaling,
+            rotations=pc.get_rotation,
         )
-        meta_whole["means2d"].requires_grad_(True)
-        meta_whole["means2d"].retain_grad()
+
         pc.state = XrayGassianState.WHOLE
         
-        gray_image_whole=render_colors_whole[..., 0]     # 1, H, W
-
-        radii = meta_whole["radii"][0].max(dim=-1).values
-        visibility_filter = radii > 0
-        
-        n_cor = pc.gaussians.n_coronary_gs
-        assert n_cor is not None
-        
         viewspace_points = {
-            XrayGassianState.CORONARY: meta_whole["means2d"],   # make slice ([:n_cor]) here will cause grad loss 
-            XrayGassianState.BACKGROUND: meta_whole["means2d"]
+            XrayGassianState.CORONARY: means_2d_coronary,   # make slice ([:n_cor]) here will cause grad loss 
+            XrayGassianState.BACKGROUND: means_2d_background
         }
         radii = {
-            XrayGassianState.CORONARY: meta_whole["radii"][0, :n_cor].max(dim=-1).values, 
-            XrayGassianState.BACKGROUND: meta_whole["radii"][0, n_cor:].max(dim=-1).values
+            XrayGassianState.CORONARY: radii_coronary, 
+            XrayGassianState.BACKGROUND: radii_background
         }
         
         visibility_filter = {
-            XrayGassianState.CORONARY: radii[XrayGassianState.CORONARY] > 0, 
-            XrayGassianState.BACKGROUND: radii[XrayGassianState.BACKGROUND] > 0
+            XrayGassianState.CORONARY: radii_coronary > 0, 
+            XrayGassianState.BACKGROUND: radii_background > 0
         }
         
+        rendered_image_whole = rendered_image_coronary + rendered_image_background
         
-        pc.state = XrayGassianState.CORONARY
-        # ref: https://docs.gsplat.studio/main/apis/rasterization.html#gsplat.rasterization
-        render_colors_coronary, render_alphas_coronary, meta_coronary =rasterization(
-            means=      means3D,            # N, 3
-            quats=      rotations,          # N, 4
-            scales=     scales,             # N, 3
-            opacities=  opacity.squeeze(),  # N,
-            colors=     features,           # N, D=1
-            render_mode="RGB+ED",
-            viewmats=viewmats, # C=1, 4, 4
-            Ks=Ks,  # C=1, 3, 3
-            width=width,
-            height=height,
-            rasterize_mode="antialiased",    # Mip-Splatting: Alias-free 3D Gaussian Splatting
-            absgrad = True,      # AbsGS: Recovering Fine Details for 3D Gaussian Splatting,
-            packed=False    # packed=True meets bug with backgrounds. ref: https://github.com/nerfstudio-project/gsplat/issues/826
-        )
-        gray_image_coronary=render_colors_coronary[..., 0]     # 1, H, W
-        depth_coronary=render_colors_coronary[..., 1]
-        alpha_coronary=render_alphas_coronary[..., 0]
-        pc.state = XrayGassianState.WHOLE
         
         assert pc.state == XrayGassianState.WHOLE
         return RenderRes(
-            gray_image_coronary=gray_image_coronary,
-            gray_image_whole=gray_image_whole,
-            depth=depth_coronary,
-            alpha=alpha_coronary,
+            gray_image_coronary=rendered_image_coronary,
+            gray_image_whole=rendered_image_whole,
+            gray_image_backgound=rendered_image_background,
             viewspace_points=viewspace_points,
             visibility_filter=visibility_filter,
             radii=radii
@@ -340,6 +373,4 @@ class CoronaryDeformableXrayRenderer(Renderer):
         return {
             "gray_image_coronary": RendererOutputInfo("gray_image_coronary", RendererOutputTypes.GRAY, other_kwargs=cmap),
             "gray_image_whole": RendererOutputInfo("gray_image_whole", RendererOutputTypes.GRAY, other_kwargs=cmap),
-            "depth": RendererOutputInfo("depth", RendererOutputTypes.GRAY, other_kwargs=cmap),
-            "alpha": RendererOutputInfo("alpha", RendererOutputTypes.GRAY, other_kwargs=cmap),
         }

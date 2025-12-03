@@ -19,6 +19,9 @@ import random
 def inverse_sigmoid(x):
     return torch.log(x / (1 - x))
 
+def inverse_softplus(x, beta=1):
+    return torch.log(torch.exp(beta * x) - 1) / beta
+
 
 def PILtoTorch(pil_image, resolution):
     resized_image_PIL = pil_image.resize(resolution)

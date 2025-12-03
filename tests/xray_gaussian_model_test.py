@@ -480,7 +480,7 @@ class TestSplitKey(unittest.TestCase):
 class TestDeformableXrayRender(unittest.TestCase):
     def setUp(self):
         parser = RotatedXRay(
-            init_point_cloud_mode="label"
+            init_point_cloud_mode="central-line"
         ).instantiate(
             path="/media/data3/sj/Code/Gen4D/test/output/intergration_full/volume_dvf_reader_multipli_contrast_LCA",
             output_path="/media/data3/sj/Code/gaussian-splatting-lightning/outputs/temp",
@@ -505,19 +505,21 @@ class TestDeformableXrayRender(unittest.TestCase):
         self.gs_model = self.gs_model.to(self.device)
         
         self.render = CoronaryDeformableXrayRenderer(
-            deform_network=DeformNetworkConfig(rotate_xyz=True),
+            deform_network=DeformNetworkConfig(rotate_xyz=False),
             xyz_encoding=XYZEncodingConfig(),
             time_encoding=TimeEncodingConfig(),
             optimization=DeformableRendererOptimizationConfig(),
+            exp_neg_img=True,
         )
         self.render.setup("fit", self.lightning_module)
         self.render.to('cuda')
         self.render.training_setup(self.lightning_module)
     
-    def test_training_forward(self):
+    def test_forward(self):
         camera, image_info, depth_map = self.batch
         print(camera.camera_center)
         image_name, gt_image, masked_pixels = image_info
+        self.render.eval()
         res = self.render.forward(
             step=0,
             module=self.lightning_module,
@@ -531,8 +533,6 @@ class TestDeformableXrayRender(unittest.TestCase):
         C, H, W = gt_image.shape
         assert res.gray_image_coronary.shape == (1, H, W)
         assert res.gray_image_whole.shape == (1, H, W)
-        assert res.depth.shape == (1, H, W)
-        assert res.alpha.shape == (1, H, W)
         
         from pathlib import Path
         import matplotlib
@@ -553,11 +553,9 @@ class TestDeformableXrayRender(unittest.TestCase):
         
         output_image(res.gray_image_coronary, "gray_image_coronary")
         output_image(res.gray_image_whole, "gray_image_whole")
-        output_image(res.depth, "depth")
-        output_image(res.alpha, "alpha")
 
 if __name__ == "__main__":
     # unittest.main()
     test = TestDeformableXrayRender()
     test.setUp()
-    test.test_training_forward()
+    test.test_forward()

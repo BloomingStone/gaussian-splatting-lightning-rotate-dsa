@@ -50,7 +50,7 @@ pyvista = ">=0.46.3,<0.47"
 monai = ">=1.5.1,<2"
 
 [tool.pixi.pypi-options]
-no-build-isolation = ["diff_gaussian_rasterization" ,"simple-knn", "tinycudann", "gsplat", "fused_ssim"]
+no-build-isolation = ["diff_gaussian_rasterization" ,"simple-knn", "tinycudann", "gsplat", "fused_ssim", "xray-gaussian-rasterization-voxelization"]
 
 [tool.pixi.pypi-dependencies]
 gaussian-splatting-lightning = { path = ".", editable = true }
@@ -74,8 +74,12 @@ gsplat = { git = "https://github.com/yzslab/gsplat.git"}
 [tool.pixi.feature.gsplat-v1.pypi-dependencies]
 gsplat = { git = "https://github.com/nerfstudio-project/gsplat.git", tag = "v1.5.3"}
 
+[tool.pixi.feature.r2-gaussian.pypi-dependencies]
+xray_gaussian_rasterization_voxelization.git = "https://github.com/Ruyi-Zha/r2_gaussian.git"
+xray_gaussian_rasterization_voxelization.subdirectory  = "r2_gaussian/submodules/xray-gaussian-rasterization-voxelization"
+
 [tool.pixi.environments]
-default = ["vanilla-gs-rasterization", "default", "gsplat-v1"]  # 实际上 gs-rasterization 和 gsplat 应该是互斥的，但目前先这样
+default = ["vanilla-gs-rasterization", "default", "gsplat-v1", "r2-gaussian"]  # 实际上 gs-rasterization 和 gsplat 应该是互斥的，但目前先这样
 x-gs = ["x-gs-rasterization", "default", "gsplat-v1"]
 gsplat-v0 = ["vanilla-gs-rasterization", "default", "gsplat-v0"]
 
