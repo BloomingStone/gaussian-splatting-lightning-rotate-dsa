@@ -16,7 +16,7 @@ def skew(w: torch.Tensor) -> torch.Tensor:
     Returns:
       W: (N, 3, 3) A skew matrix such that W @ v == w x v
     """
-    zeros = torch.zeros(w.shape[0], device=w.device)
+    zeros = torch.zeros(w.shape[0]).to(w)
     w_skew_list = [zeros, -w[:, 2], w[:, 1],
                    w[:, 2], zeros, -w[:, 0],
                    -w[:, 1], w[:, 0], zeros]
@@ -55,7 +55,7 @@ def exp_so3(w: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
         magnitude theta about axis w.
     """
     W = skew(w)
-    identity = torch.eye(3).unsqueeze(0).repeat(W.shape[0], 1, 1).to(W.device)
+    identity = torch.eye(3).unsqueeze(0).repeat(W.shape[0], 1, 1).to(W)
     W_sqr = torch.bmm(W, W)  # batch matrix multiplication
     R = identity + torch.sin(theta.unsqueeze(-1)) * W + (1.0 - torch.cos(theta.unsqueeze(-1))) * W_sqr
     return R

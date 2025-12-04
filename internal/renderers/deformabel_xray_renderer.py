@@ -6,20 +6,16 @@ import torch
 from torch import Tensor
 from lightning import LightningModule
 from gsplat import rasterization
-from gsplat.strategy import DefaultStrategy
 from jaxtyping import Float32
 
 from .renderer import Renderer, RendererOutputInfo, RendererOutputTypes
 from ..cameras import Camera
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel, XrayGassianState
-from .vanilla_renderer import VanillaRenderer
 from ..cameras import Camera
-from ..models.deform_model import DeformModel
+from ..models.coronary_deform_model import DeformModel, DeformModel6DoF, DeformModelConfig
 from ..utils.network_factory import NetworkFactory
 from ..utils.general_utils import get_linear_noise_func
-from ..utils.rigid_utils import from_homogenous, to_homogenous
-from ..utils.rotation import qvec2rot
-from ..utils.gaussian_utils import GaussianTransformUtils
+
 
 
 @dataclass
@@ -33,8 +29,6 @@ class DeformNetworkConfig:
     n_layers: int = 8
     n_neurons: int = 256
     is_6dof: bool = False
-    rotate_xyz: bool = False
-    chunk: int = -1  # avoid CUDA oom,
 
 
 @dataclass
@@ -133,12 +127,9 @@ class CoronaryDeformableXrayRenderer(Renderer):
         pc.state = XrayGassianState.CORONARY
         N = pc.get_xyz.shape[0]
         time_input = viewpoint_camera.time.unsqueeze(0).expand(N, -1)
-        d_xyz, d_rotation, d_scaling = self.deform_model(pc.get_xyz.detach(), time_input)
         
         res = self._render(
-            d_xyz,
-            d_rotation,
-            d_scaling,
+            time_input,
             viewpoint_camera=viewpoint_camera,
             pc=pc
         )
@@ -155,22 +146,16 @@ class CoronaryDeformableXrayRenderer(Renderer):
             **kwargs,
     ) -> RenderRes:
         pc.state = XrayGassianState.CORONARY
-        d_xyz, d_rotation, d_scaling = 0.0, 0.0, 0.0
-        if step <= self.optimization_config.warm_up:
-            pass    # TODO
         N = pc.get_xyz.shape[0]
         time_input = viewpoint_camera.time.unsqueeze(0).expand(N, -1)
         ast_noise = 0
         if self.optimization_config.enable_ast is True:
             time_interval = 1 / ((step % self.train_set_length) + 1)
             ast_noise = torch.randn(1, 1, device=pc.get_xyz.device).expand(N, -1) * time_interval * self.smooth_term(step)
-        d_xyz, d_rotation, d_scaling = self.deform_model(pc.get_xyz.detach(), time_input + ast_noise)
-        torch.cuda.empty_cache()  # avoid CUDA OOM
+        pc.state = XrayGassianState.CORONARY
         
         res = self._render(
-            d_xyz,
-            d_rotation,
-            d_scaling,
+            time_input + ast_noise,
             viewpoint_camera=viewpoint_camera,
             pc=pc
         )
@@ -181,38 +166,19 @@ class CoronaryDeformableXrayRenderer(Renderer):
     
     def _render(
             self,
-            d_xyz,
-            d_rotation,
-            d_scaling,
+            time_input: torch.Tensor,
             viewpoint_camera: Camera,
             pc: XrayCoronaryGaussianModel
     ) -> RenderRes:
         pc.state = XrayGassianState.CORONARY
-        if self.deform_network_config.rotate_xyz is True:
-            if torch.is_tensor(d_xyz) is True:
-                normalized_qvec = torch.nn.functional.normalize(d_rotation)
-                # rotate gaussians
-                rotations = GaussianTransformUtils.quat_multiply(pc.get_rotation, normalized_qvec)
-                # transform xyz
-                so3 = qvec2rot(normalized_qvec)
-                means3D = torch.matmul(pc.get_xyz.unsqueeze(1), torch.transpose(so3, 1, 2)).squeeze(1) + d_xyz
-            else:
-                # in warm up
-                means3D = pc.get_xyz
-                rotations = pc.get_rotation
-        else:
-            # original processing
-            if self.deform_network_config.is_6dof is True:
-                if torch.is_tensor(d_xyz) is False:
-                    means3D = pc.get_xyz
-                else:
-                    means3D = from_homogenous(torch.bmm(d_xyz, to_homogenous(pc.get_xyz).unsqueeze(-1)).squeeze(-1))
-            else:
-                means3D = pc.get_xyz + d_xyz
-            rotations = pc.get_rotation + d_rotation
-
+        means3D, rotations, scales = self.deform_model(
+            pc.get_xyz,
+            time_input,
+            pc.get_rotation,
+            pc.get_scaling
+        )
+        torch.cuda.empty_cache()  # avoid CUDA OOM
         opacity = pc.get_opacity
-        scales = pc.get_scaling + d_scaling
         features = pc.get_features
         
         viewmats = viewpoint_camera.world_to_camera.transpose(-1, -2)[None]     # C=1, 4, 4
@@ -305,18 +271,17 @@ class CoronaryDeformableXrayRenderer(Renderer):
             self.train_set_length = len(lightning_module.trainer.datamodule.dataparser_outputs.train_set)
 
         network_factory = NetworkFactory(tcnn=self.deform_network_config.tcnn)
-
-        self.deform_model = DeformModel(
-            network_factory=network_factory,
+        cfg = DeformModelConfig(
             D=self.deform_network_config.n_layers,
             W=self.deform_network_config.n_neurons,
             multires=self.xyz_encoding_config.n_frequencies,
-            t_D=self.time_encoding_config.n_layers,
-            t_W=self.time_encoding_config.n_neurons,
-            t_multires=self.time_encoding_config.n_frequencies,
-            is_6dof=self.deform_network_config.is_6dof,
-            chunk=self.deform_network_config.chunk,
+            t_D=self.time_encoding_config.n_layers
         )
+        if self.deform_network_config.is_6dof is True:
+            self.deform_model = DeformModel6DoF(network_factory, cfg)
+        else:
+            self.deform_model = DeformModel(network_factory, cfg)
+        
         self.smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=20000)
     
     def training_setup(self, module) -> Tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LRScheduler]]:

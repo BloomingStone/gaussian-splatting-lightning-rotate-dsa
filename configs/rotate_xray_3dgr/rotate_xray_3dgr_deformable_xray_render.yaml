@@ -1,8 +1,8 @@
-max_steps: 200000
+max_steps: 20000
 save_val: true
 cache_all_images: true
 trainer:
-  check_val_every_n_epoch: 100
+  check_val_every_n_epoch: 20
 
 data:
   val_max_num_images_to_cache: -1

@@ -480,7 +480,7 @@ class TestSplitKey(unittest.TestCase):
 class TestDeformableXrayRender(unittest.TestCase):
     def setUp(self):
         parser = RotatedXRay(
-            init_point_cloud_mode="label"
+            init_point_cloud_mode="central-line"
         ).instantiate(
             path="/media/data3/sj/Code/Gen4D/test/output/intergration_full/volume_dvf_reader_multipli_contrast_LCA",
             output_path="/media/data3/sj/Code/gaussian-splatting-lightning/outputs/temp",
@@ -505,10 +505,15 @@ class TestDeformableXrayRender(unittest.TestCase):
         self.gs_model = self.gs_model.to(self.device)
         
         self.render = CoronaryDeformableXrayRenderer(
-            deform_network=DeformNetworkConfig(rotate_xyz=True),
+            deform_network=DeformNetworkConfig(is_6dof=True),
             xyz_encoding=XYZEncodingConfig(),
-            time_encoding=TimeEncodingConfig(),
+            time_encoding=TimeEncodingConfig(
+                n_frequencies=6,
+                n_layers=2,
+                n_neurons=256
+            ),
             optimization=DeformableRendererOptimizationConfig(),
+            reverse_gray_scale=True,
         )
         self.render.setup("fit", self.lightning_module)
         self.render.to('cuda')
