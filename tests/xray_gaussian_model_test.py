@@ -505,7 +505,7 @@ class TestDeformableXrayRender(unittest.TestCase):
         self.gs_model = self.gs_model.to(self.device)
         
         self.render = CoronaryDeformableXrayRenderer(
-            deform_network=DeformNetworkConfig(rotate_xyz=False),
+            deform_network=DeformNetworkConfig(rotate_xyz=False, is_6dof=True),
             xyz_encoding=XYZEncodingConfig(),
             time_encoding=TimeEncodingConfig(),
             optimization=DeformableRendererOptimizationConfig(),

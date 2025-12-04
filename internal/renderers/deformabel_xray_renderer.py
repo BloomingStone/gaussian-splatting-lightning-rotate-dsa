@@ -250,8 +250,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
                 # rotate gaussians
                 rotations = GaussianTransformUtils.quat_multiply(pc.get_rotation, normalized_qvec)
                 # transform xyz
-                so3 = qvec2rot(normalized_qvec)
-                means3D = torch.matmul(pc.get_xyz.unsqueeze(1), torch.transpose(so3, 1, 2)).squeeze(1) + d_xyz
+                means3D = pc.get_xyz + d_xyz
             else:
                 # in warm up
                 means3D = pc.get_xyz
@@ -267,6 +266,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
                 means3D = pc.get_xyz + d_xyz
             rotations = pc.get_rotation + d_rotation
         
+        rotations = torch.nn.functional.normalize(rotations, dim=-1)
         raster_settings = GaussianRasterizationSettings(
             image_height=int(viewpoint_camera.height),
             image_width=int(viewpoint_camera.width),
