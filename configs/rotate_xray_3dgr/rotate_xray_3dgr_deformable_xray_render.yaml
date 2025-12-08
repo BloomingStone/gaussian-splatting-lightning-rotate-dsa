@@ -1,8 +1,8 @@
-max_steps: 200000
+max_steps: 20000
 save_val: true
 cache_all_images: true
 trainer:
-  check_val_every_n_epoch: 100
+  check_val_every_n_epoch: 5
 
 data:
   val_max_num_images_to_cache: -1
@@ -13,9 +13,9 @@ data:
     class_path: internal.dataparsers.rotated_xray_dataparser.RotatedXRay
     init_args:
       mode: reconstruction
-      init_point_cloud_mode: central-line
+      init_point_cloud_mode: random
 model:
-  # max_save_val_output: 50
+  max_save_val_output: 1
   renderer:
     class_path: internal.renderers.deformabel_xray_renderer.CoronaryDeformableXrayRenderer
     init_args:
@@ -36,9 +36,7 @@ model:
     class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
     init_args:
       absgrad: true
-  renderer_output_types: 
-    - gray_image_coronary
-    - gray_image_whole
+  renderer_output_types: ["gray_image_coronary", "gray_image_background", "gray_image_whole"]
   saver:
     class_path: internal.savers.x_ray_saver.XRaySaver
     init_args:

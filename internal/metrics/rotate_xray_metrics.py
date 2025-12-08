@@ -5,6 +5,7 @@ import torch
 from torchmetrics.image import PeakSignalNoiseRatio
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from monai.losses.dice import DiceCELoss
+import lightning
 
 from internal.utils.ssim import ssim
 from .metric import Metric, MetricImpl
@@ -16,8 +17,8 @@ from ..cameras.cameras import Camera
 class RotateXrayMetrics(Metric):
     w_gray_loss_whole: float = 1.0
     w_ssim_loss_whole: float = 1.0
-    w_gray_loss_coronary: float = 1.0
-    w_dice_loss: float = 0.01
+    w_dice_loss_start: float = 1.0
+    w_dice_loss_end: float = 0.1
 
     rgb_diff_loss: Literal["l1", "l2"] = "l1"
 
@@ -27,6 +28,8 @@ class RotateXrayMetrics(Metric):
     """
 
     fused_ssim: bool = False
+    
+    max_step_of_dice_loss: int = 2000
 
     def instantiate(self, *args, **kwargs) -> MetricImpl:
         return RotateXrayMetricsImpl(self)
@@ -66,7 +69,7 @@ class RotateXrayMetricsImpl(MetricImpl):
     
     def _get_basic_metrics(
         self, 
-        pl_module, 
+        pl_module: lightning.LightningModule, 
         gaussian_model, 
         batch, 
         outputs: RenderRes
@@ -78,30 +81,34 @@ class RotateXrayMetricsImpl(MetricImpl):
         masked_pixels = masked_pixels[0:1]
         
         gray_loss_whole = self.rgb_diff_loss_fn(outputs.gray_image_whole, gt_image)
-        gray_loss_coronary = self.rgb_diff_loss_fn(outputs.gray_image_whole[masked_pixels], gt_image[masked_pixels])
         
         ssim_metric_whole = self.ssim(outputs.gray_image_whole, gt_image)
         ssim_loss_whole = 1.0 - ssim_metric_whole
         
-        soft_coronary_mask = torch.sigmoid((outputs.alpha - 0.01) * 10)
+        soft_coronary_mask = torch.sigmoid(((1-outputs.gray_image_coronary) - 0.01) * 10)
         dice_loss = self.dice_loss_fn(soft_coronary_mask[None], masked_pixels[None])
+        
+        step_now = pl_module.global_step
+        step_max = self.config.max_step_of_dice_loss
+        w0, w1 = self.config.w_dice_loss_start, self.config.w_dice_loss_end
+        if step_now >= step_max:
+            w_dice_loss = w1
+        else:
+            w_dice_loss = w0 + (w1 - w0) * (step_now / step_max)
         
         loss = (
             self.config.w_gray_loss_whole    * gray_loss_whole +
             self.config.w_ssim_loss_whole    * ssim_loss_whole +
-            self.config.w_gray_loss_coronary * gray_loss_coronary + 
-            self.config.w_dice_loss          * dice_loss
+            w_dice_loss                      * dice_loss
         )
         
         return {
             "loss": loss,
-            "gray_loss_coronary": gray_loss_coronary,
             "gray_loss_whole": gray_loss_whole,
             "ssim_loss_whole": ssim_loss_whole,
             "dice_loss": dice_loss
         }, {
             "loss": True,
-            "gray_loss_coronary": True,
             "gray_loss_whole": True,
             "ssim_loss_whole": True,
             "dice_loss": True
