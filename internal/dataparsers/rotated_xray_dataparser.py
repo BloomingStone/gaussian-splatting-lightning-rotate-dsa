@@ -160,7 +160,7 @@ def _get_cameras(json_data: dict, indices: list[int] | None = None) -> Cameras:
         normalized_appearance_id=torch.zeros(n_camras),
         distortion_params=None,
         camera_type=torch.zeros(n_camras),
-        time=_get_frames_param(json_data, "time_s", indices),
+        time=_get_frames_param(json_data, "phase", indices),
         zfar=1e5
     )
 

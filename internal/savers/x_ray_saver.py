@@ -8,12 +8,11 @@ from gsplat.exporter import export_splats
 from . import Saver, SaverModule
 from lightning import LightningModule
 from internal.mp_strategy import MPStrategy
-from internal.models.xray_coronary_gaussian import XrayCoronaryGaussianModel, XrayGassianState
+from internal.models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 
 
 @dataclass
 class XRaySaver(Saver):
-    save_states: list[Literal["coronary", "background", "whole"]] = field(default_factory=lambda: ["coronary"])
     def instantiate(self, *args, **kwargs) -> "XRaySaverModule":
         return XRaySaverModule(self)
 
@@ -44,20 +43,17 @@ class XRaySaverModule(SaverModule):
         def model_(key: str) -> torch.Tensor:
             return model.gaussians[key]
         
-        for state in self.config.save_states:
-            ply_path = ckpt_dir / f"epoch={epoch}-step={step}{ckpt_suffix}-{state}.ply"
-            model.state = XrayGassianState(state)
-            
-            gray = model_("gray")
-            sh0 = gray[..., None].repeat(1, 1, 3)
-            export_splats(
-                means=model_("means"),
-                scales=model_("scales"),
-                quats=model_("rotations"),
-                opacities=model_("opacities").squeeze(),
-                sh0=sh0,
-                shN=torch.zeros(gray.shape[0], 0, 3).to(sh0),
-                save_to=str(ply_path)
-            )
-        model.state = XrayGassianState.WHOLE
+        ply_path = ckpt_dir / f"epoch={epoch}-step={step}{ckpt_suffix}.ply"
+        
+        gray = model_("gray")
+        sh0 = gray[..., None].repeat(1, 1, 3)
+        export_splats(
+            means=model_("means"),
+            scales=model_("scales"),
+            quats=model_("rotations"),
+            opacities=model_("opacities").squeeze(),
+            sh0=sh0,
+            shN=torch.zeros(gray.shape[0], 0, 3).to(sh0),
+            save_to=str(ply_path)
+        )
         

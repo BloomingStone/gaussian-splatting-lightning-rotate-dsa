@@ -20,3 +20,4 @@
 !sparse_adam_gaussian.py
 !xray_coronary_gaussian.py
 !coronary_deform_model.py
+!coronary_segmentation_model.py

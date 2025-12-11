@@ -10,14 +10,15 @@ from internal.utils.ssim import ssim
 from .metric import Metric, MetricImpl
 from ..configs.instantiate_config import InstantiatableConfig
 from ..renderers.deformabel_xray_renderer import RenderRes
-from ..cameras.cameras import Camera
+from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 
 @dataclass
 class RotateXrayMetrics(Metric):
     w_gray_loss_whole: float = 1.0
     w_ssim_loss_whole: float = 1.0
-    w_gray_loss_coronary: float = 1.0
     w_dice_loss: float = 0.01
+    w_motion_mean: float = 1e-5
+    w_motion_var: float = 1e-5
 
     rgb_diff_loss: Literal["l1", "l2"] = "l1"
 
@@ -67,7 +68,7 @@ class RotateXrayMetricsImpl(MetricImpl):
     def _get_basic_metrics(
         self, 
         pl_module, 
-        gaussian_model, 
+        gaussian_model: XrayCoronaryGaussianModel, 
         batch, 
         outputs: RenderRes
     ):
@@ -77,34 +78,41 @@ class RotateXrayMetricsImpl(MetricImpl):
         gt_image = gt_image[0:1]
         masked_pixels = masked_pixels[0:1]
         
-        gray_loss_whole = self.rgb_diff_loss_fn(outputs.gray_image_whole, gt_image)
-        gray_loss_coronary = self.rgb_diff_loss_fn(outputs.gray_image_whole[masked_pixels], gt_image[masked_pixels])
+        gray_loss_whole = self.rgb_diff_loss_fn(outputs.gray_image, gt_image)
         
-        ssim_metric_whole = self.ssim(outputs.gray_image_whole, gt_image)
+        ssim_metric_whole = self.ssim(outputs.gray_image, gt_image)
         ssim_loss_whole = 1.0 - ssim_metric_whole
         
-        soft_coronary_mask = torch.sigmoid((outputs.alpha - 0.01) * 10)
-        dice_loss = self.dice_loss_fn(soft_coronary_mask[None], masked_pixels[None])
+        if outputs.coronary_probs is not None:
+            dice_loss = self.dice_loss_fn(outputs.coronary_probs[None], masked_pixels[None])
+        else:
+            dice_loss = torch.tensor(0.0)
+        
+        loss_motion_mean = outputs.d_motion_mean_total
+        loss_motion_var = outputs.d_motion_var_total
         
         loss = (
             self.config.w_gray_loss_whole    * gray_loss_whole +
             self.config.w_ssim_loss_whole    * ssim_loss_whole +
-            self.config.w_gray_loss_coronary * gray_loss_coronary + 
-            self.config.w_dice_loss          * dice_loss
+            self.config.w_dice_loss          * dice_loss + 
+            self.config.w_motion_mean        * loss_motion_mean +
+            self.config.w_motion_var         * loss_motion_var
         )
         
         return {
             "loss": loss,
-            "gray_loss_coronary": gray_loss_coronary,
             "gray_loss_whole": gray_loss_whole,
             "ssim_loss_whole": ssim_loss_whole,
-            "dice_loss": dice_loss
+            "dice_loss": dice_loss,
+            "loss_motion_mean": loss_motion_mean,
+            "loss_motion_var": loss_motion_var
         }, {
             "loss": True,
-            "gray_loss_coronary": True,
             "gray_loss_whole": True,
             "ssim_loss_whole": True,
-            "dice_loss": True
+            "dice_loss": True,
+            "loss_motion_mean": True,
+            "loss_motion_var": True
         }
     
     def get_train_metrics(self, pl_module, gaussian_model, step: int, batch, outputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:
@@ -123,20 +131,13 @@ class RotateXrayMetricsImpl(MetricImpl):
         _, gt_image, masked_pixels = image_info
         gt_image = gt_image[0:1]
 
-        metrics["psnr_whole"] = self.psnr(outputs.gray_image_whole, gt_image)
+        metrics["psnr_whole"] = self.psnr(outputs.gray_image, gt_image)
         prog_bar["psnr_whole"] = True
         
-        gray2rgb_whole = outputs.gray_image_whole.clamp(0., 1.)[None].repeat(1, 3, 1, 1)    # [1, 3, H, W]
+        gray2rgb_whole = outputs.gray_image.clamp(0., 1.)[None].repeat(1, 3, 1, 1)    # [1, 3, H, W]
         gray2rgb_gt_whole = gt_image.clamp(0., 1.)[None].repeat(1, 3, 1, 1)
         metrics["lpips_whole"] = self.no_state_dict_models["lpips"](gray2rgb_whole, gray2rgb_gt_whole)
         prog_bar["lpips_whole"] = True
-        
-        if outputs.alpha is not None:
-            masked_pixels = masked_pixels[0:1].to(torch.uint8)
-            soft_coronary_mask = torch.sigmoid((outputs.alpha - 0.01) * 5)
-            dice_loss = self.dice_loss_fn(soft_coronary_mask[None], masked_pixels[None])
-            metrics["dice_loss"] = dice_loss
-            prog_bar["dice_loss"] = True
 
         return metrics, prog_bar
     
