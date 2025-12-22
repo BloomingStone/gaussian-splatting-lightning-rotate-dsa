@@ -10,14 +10,14 @@ from internal.utils.ssim import ssim
 from .metric import Metric, MetricImpl
 from ..configs.instantiate_config import InstantiatableConfig
 from ..renderers.deformabel_xray_renderer import RenderRes
-from ..cameras.cameras import Camera
+from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 
 @dataclass
 class RotateXrayMetrics(Metric):
     w_gray_loss_whole: float = 1.0
     w_ssim_loss_whole: float = 1.0
-    w_gray_loss_coronary: float = 1.0
-    w_dice_loss: float = 0.01
+    w_motion_mean: float = 1e-5
+    w_motion_var: float = 1e-5
 
     rgb_diff_loss: Literal["l1", "l2"] = "l1"
 
@@ -78,33 +78,32 @@ class RotateXrayMetricsImpl(MetricImpl):
         masked_pixels = masked_pixels[0:1]
         
         gray_loss_whole = self.rgb_diff_loss_fn(outputs.gray_image_whole, gt_image)
-        gray_loss_coronary = self.rgb_diff_loss_fn(outputs.gray_image_whole[masked_pixels], gt_image[masked_pixels])
         
         ssim_metric_whole = self.ssim(outputs.gray_image_whole, gt_image)
         ssim_loss_whole = 1.0 - ssim_metric_whole
         
-        soft_coronary_mask = torch.sigmoid((outputs.alpha - 0.01) * 10)
-        dice_loss = self.dice_loss_fn(soft_coronary_mask[None], masked_pixels[None])
+        motion_mean = outputs.d_motion_mean_total
+        motion_var = outputs.d_motion_var_total
         
         loss = (
-            self.config.w_gray_loss_whole    * gray_loss_whole +
-            self.config.w_ssim_loss_whole    * ssim_loss_whole +
-            self.config.w_gray_loss_coronary * gray_loss_coronary + 
-            self.config.w_dice_loss          * dice_loss
+            self.config.w_gray_loss_whole * gray_loss_whole +
+            self.config.w_ssim_loss_whole * ssim_loss_whole + 
+            self.config.w_motion_mean     * motion_mean +
+            self.config.w_motion_var      * motion_var
         )
         
         return {
             "loss": loss,
-            "gray_loss_coronary": gray_loss_coronary,
             "gray_loss_whole": gray_loss_whole,
             "ssim_loss_whole": ssim_loss_whole,
-            "dice_loss": dice_loss
+            "motion_mean": motion_mean,
+            "motion_var": motion_var,
         }, {
             "loss": True,
-            "gray_loss_coronary": True,
             "gray_loss_whole": True,
             "ssim_loss_whole": True,
-            "dice_loss": True
+            "motion_mean": True,
+            "motion_var": True,
         }
     
     def get_train_metrics(self, pl_module, gaussian_model, step: int, batch, outputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:

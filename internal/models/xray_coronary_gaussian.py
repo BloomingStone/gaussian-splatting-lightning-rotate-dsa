@@ -372,6 +372,9 @@ class XrayCoronaryGaussianModel(
 ):
     
     gaussians: XrayGaussianParameterDict
+    d_motion_mean: torch.Tensor
+    d_motion_2_mean: torch.Tensor
+    
     def __init__(self, config: XrayCoronaryGaussian) -> None:
         super().__init__()
         self.config = config
@@ -394,7 +397,73 @@ class XrayCoronaryGaussianModel(
         self.opacity_inverse_activation = inverse_sigmoid
         self.rotation_activation = F.normalize
         self.rotation_inverse_activation = _identity_act
+        
+        self.ema_lambda = 0.95
 
+    def _init_motions(self, n_gaussians: int):
+        self.motion_ch = 3 + 3 + 1
+        self.register_buffer("d_motion_mean", torch.zeros(n_gaussians, self.motion_ch))
+        self.register_buffer("d_motion_2_mean", torch.zeros(n_gaussians, self.motion_ch))
+    
+    def update_motions(
+        self, 
+        d_xyz: torch.Tensor, 
+        d_scale: torch.Tensor, 
+        d_rotation: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        n_d_xyz, n_d_scale, n_d_rot = d_xyz.shape[0], d_scale.shape[0], d_rotation.shape[0]
+        n_gaussian = self.n_gaussians
+        assert n_d_xyz == n_d_scale == n_d_rot == n_gaussian
+        
+        d_rotation_norm = torch.nn.functional.normalize(d_rotation, dim=-1)
+        d_rotation_norm.clamp_(-1 + 1e-6, 1 - 1e-6)
+        d_angle = 2 * torch.acos(d_rotation_norm[:, 0]).unsqueeze(-1)
+        motion = torch.cat((d_xyz, d_scale, d_angle), dim=-1)
+        
+        motion_2 = torch.square(motion)
+        k = self.ema_lambda
+        d_motion_mean = k * self.d_motion_mean + (1-k) * motion
+        d_motion_2_mean = k * self.d_motion_2_mean + (1-k) * motion_2
+
+        d_motion_mean_total = d_motion_mean.abs().mean()
+        d_motion_var_total = (d_motion_2_mean - torch.square(d_motion_mean)).abs().mean()
+        
+        self.d_motion_mean = d_motion_mean.detach()
+        self.d_motion_2_mean = d_motion_2_mean.detach()
+        
+        return d_motion_mean_total, d_motion_var_total
+    
+    def get_motion_var(self) -> torch.Tensor:
+        return self.d_motion_2_mean - torch.square(self.d_motion_mean)
+    
+    def get_motion_mean(self) -> torch.Tensor:
+        return self.d_motion_mean
+    
+    def clone_motion_by_mask(self, mask: torch.Tensor, repeats: int):
+        new_d_motion_mean = self.d_motion_mean[mask].repeat(repeats, 1)
+        new_d_motion_2_mean = self.d_motion_2_mean[mask].repeat(repeats, 1)
+        
+        self.d_motion_mean = torch.cat(
+            (self.d_motion_mean, new_d_motion_mean), 
+            dim=0
+        )
+        self.d_motion_2_mean = torch.cat(
+            (self.d_motion_2_mean, new_d_motion_2_mean),
+            dim = 0
+        )
+        
+        assert self.state == XrayGassianState.CORONARY
+        assert self.n_gaussians == self.d_motion_mean.shape[0] == self.d_motion_2_mean.shape[0]
+    
+    
+    def filter_motion_by_mask(self, valid_mask: torch.Tensor):
+        self.d_motion_mean = self.d_motion_mean[valid_mask]
+        self.d_motion_2_mean = self.d_motion_2_mean[valid_mask]
+        
+        assert self.state == XrayGassianState.CORONARY
+        assert self.n_gaussians == self.d_motion_mean.shape[0] == self.d_motion_2_mean.shape[0]
+        
+    
     # --- Part1: Use `XrayGaussianState` and `XrayGaussianParameterDict` to control gaussian module's output point cloud
     
     @property
@@ -454,6 +523,8 @@ class XrayCoronaryGaussianModel(
             "scales":    (  scales_coronary    ,   scales_background   ),
             "rotations": (  inits.rotations    ,   inits.rotations     ),
         })
+        
+        self._init_motions(n_gaussians)
     
     @override
     def setup_from_number(self, n: int, *args, **kwargs):
@@ -468,6 +539,8 @@ class XrayCoronaryGaussianModel(
             "scales":    (  inits.scales       ,   inits.scales.clone()     ),
             "rotations": (  inits.rotations    ,   inits.rotations.clone()  ),
         })
+        
+        self._init_motions(n)
         
     @override
     def set_properties(self, properties: Mapping[str, Any]):

@@ -235,7 +235,7 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
         prune_filter = torch.cat((
             selected_pts_mask,
             torch.zeros(
-                N * selected_pts_mask.sum(),
+                N * int(selected_pts_mask.sum()),
                 device=device,
                 dtype=torch.bool,
             ),
