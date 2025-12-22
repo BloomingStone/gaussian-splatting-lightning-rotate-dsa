@@ -97,12 +97,12 @@ class BackgroundDensityControllerImpl(VanillaDensityControllerImpl):
 
 @dataclass
 class CoronaryDensityController(VanillaDensityController):
-    movement_var_threshold_percentile: float = 0.90 # filter < 0.90th percentile
+    movement_var_threshold_percentile: float = 0.90
     coronary_feature_prune_from_iter: int = 3550    # has 50 offset from densify
-    coronary_feature_prune_interval: int = 1000
-    coronary_feature_prune_until_iter: int = 10000
+    coronary_feature_prune_interval: int = 500
+    coronary_feature_prune_until_iter: int = 9000
     
-    scale_2_threshold_percentile: float = 0.90      # filter > 0.90th percentile
+    scale_2_threshold_percentile: float = 0.90
     
     def instantiate(self, *args, **kwargs) -> "CoronaryDensityControllerImpl":
         return CoronaryDensityControllerImpl(self)
@@ -113,7 +113,6 @@ class CoronaryDensityControllerImpl(BackgroundDensityControllerImpl):
         self.config = config
         
         self.movement_var_threshold = None
-        self.scale_2_threshold = None
     
     @override
     def after_backward(
@@ -171,8 +170,7 @@ class CoronaryDensityControllerImpl(BackgroundDensityControllerImpl):
         scale = gaussian_model.get_scales().squeeze()
         s = scale.sort(dim=-1).values
         s2 = s[:, 1]                    # "second largest" scale
-        if self.scale_2_threshold is None:
-            T = torch.quantile(s2, self.config.scale_2_threshold_percentile)
+        T = torch.quantile(s2, self.config.scale_2_threshold_percentile)
         prune_mask = torch.where(
             s2 > T,
             True,
