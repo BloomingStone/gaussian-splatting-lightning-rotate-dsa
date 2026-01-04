@@ -86,7 +86,7 @@ class RotatedXRay(DataParserConfig):
     base_name: str = "rotate_dsa"
     mode: Literal["reconstruction", "render-new-views"] = "reconstruction"
     init_point_cloud_mode: Literal["uniform", "random", "FBP", "DL", "label", "central-line"] = "uniform"
-    init_point_cloud_num: int = 5_000
+    init_point_cloud_num: int = 200_000
     coronary_type: Literal["LCA", "RCA"] = "LCA"
     
     # use_angles: bool = True    # if use angles to init cameras, will use angles to init cameras, otherwise will use R_w2c and T_w2c to init cameras

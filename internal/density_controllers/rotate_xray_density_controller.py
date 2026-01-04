@@ -8,7 +8,7 @@ from .density_controller import Utils
 
 @dataclass
 class RotateXrayDensityController(VanillaDensityController):
-    densify_from_iter: int = 5000
+    densify_from_iter: int = 500
     def instantiate(self, *args, **kwargs) -> "RotateXrayDensityControllerImpl":
         return RotateXrayDensityControllerImpl(self)
 

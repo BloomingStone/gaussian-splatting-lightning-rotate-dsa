@@ -26,7 +26,7 @@ class DeformableRendererOptimizationConfig:
     max_steps: int = 40_000
     lr_final_factor: float = 0.002
     eps: float = 1e-15
-    warm_up: int = 2000
+    warm_up: int = 300
     enable_ast: bool = True
 
 
