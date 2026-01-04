@@ -169,14 +169,13 @@ class XrayCoronaryGaussianModel(
         k = self.ema_lambda
         d_motion_mean = k * self.d_motion_mean + (1-k) * motion
         d_motion_2_mean = k * self.d_motion_2_mean + (1-k) * motion_2
-
-        d_motion_mean_total = d_motion_mean.abs().mean()
-        d_motion_var_total = (d_motion_2_mean - torch.square(d_motion_mean)).abs().mean()
         
         self.d_motion_mean = d_motion_mean.detach()
         self.d_motion_2_mean = d_motion_2_mean.detach()
+
+        d_motion_var = d_motion_2_mean - torch.square(d_motion_mean)
         
-        return d_motion_mean_total, d_motion_var_total
+        return d_motion_mean, d_motion_var
     
     def get_motion_var(self) -> torch.Tensor:
         return self.d_motion_2_mean - torch.square(self.d_motion_mean)

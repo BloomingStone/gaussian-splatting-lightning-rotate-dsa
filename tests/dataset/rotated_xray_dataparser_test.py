@@ -10,7 +10,7 @@ class RotatedXRayDataparserTestCase(unittest.TestCase):
         return RotatedXRay(
             init_point_cloud_mode="central-line"
         ).instantiate(
-            path="/media/data3/sj/Code/Gen4D/test/output/intergration_full/static_volume_reader_multipli_contrast_LCA",
+            path="data/volume_dvf_reader_multipli_contrast_LCA",
             output_path="/media/data3/sj/Code/gaussian-splatting-lightning/outputs/temp",
             global_rank=0
         )

@@ -1,22 +1,22 @@
 import torch
+from dataclasses import dataclass
 from typing import override
 
 from internal.models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from .vanilla_density_controller import VanillaDensityControllerImpl, VanillaDensityController
 from .density_controller import Utils
 
-
+@dataclass
 class RotateXrayDensityController(VanillaDensityController):
-    densify_from_iter: int = 2000
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-    
+    densify_from_iter: int = 5000
     def instantiate(self, *args, **kwargs) -> "RotateXrayDensityControllerImpl":
         return RotateXrayDensityControllerImpl(self)
 
+
 class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
-    def __init__(self, config, *args, **kwargs) -> None:
+    def __init__(self, config: RotateXrayDensityController, *args, **kwargs) -> None:
         super().__init__(config, *args, **kwargs)
+        self.config = config
     
     @override
     def _densify_and_clone(self, grads, gaussian_model: XrayCoronaryGaussianModel, optimizers: list):

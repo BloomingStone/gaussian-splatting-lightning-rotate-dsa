@@ -2,7 +2,8 @@ max_steps: 40000
 save_val: true
 cache_all_images: true
 trainer:
-  check_val_every_n_epoch: 40
+  check_val_every_n_epoch: 10
+  log_every_n_steps: 50   # test
 
 data:
   val_max_num_images_to_cache: -1
@@ -13,20 +14,12 @@ data:
     class_path: internal.dataparsers.rotated_xray_dataparser.RotatedXRay
     init_args:
       mode: reconstruction
-      init_point_cloud_mode: central-line
+      init_point_cloud_mode: random
 model:
-  max_save_val_output: 10
+  max_save_val_output: 2
   renderer:
     class_path: internal.renderers.deformabel_xray_renderer.CoronaryDeformableXrayRenderer
     init_args:
-      deform_network:
-        tcnn: true
-      segmentation_network:
-        tcnn: true
-      time_encoding:
-        n_frequencies: 6
-        n_layers: 2
-        n_neurons: 256
       optimization:
         enable_ast: true
       reverse_gray_scale: true    # DSA image usually has reverse gray scale
@@ -42,8 +35,6 @@ model:
       absgrad: true
   renderer_output_types: 
     - gray_image
-    - coronary_probs
-    - depth
+    - gray_coronary
   saver:
     class_path: internal.savers.x_ray_saver.XRaySaver
-  
