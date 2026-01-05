@@ -17,15 +17,19 @@ from internal.gaussian_splatting import GaussianSplatting
 class RotateXrayMetrics(Metric):
     w_gray_loss_whole: float = 1.0
     w_ssim_loss_whole: float = 1.0
+    w_corr_loss: float = 0.01
+    
+    w_coronary_props_entropy: float = 0.01
+    w_coronary_props_mean: float = 0.01
+    
     w_motion_contrast: float = 1.0
     w_motion_sparsity: float = 1.0
     w_shape_anisotropy: float = 1.0
 
-    margin: float = 10.0    # for loss_motion_contrast, make it positive for most case
     p_max: float = 0.2      # for loss_motion_sparsity
     eps: float = 1e-3       # for loss_shape_anisotropy
     
-    motion_loss_start_step: int = 45000
+    motion_loss_start_step: int = 2000
 
     rgb_diff_loss: Literal["l1", "l2"] = "l1"
 
@@ -39,6 +43,13 @@ class RotateXrayMetrics(Metric):
     def instantiate(self, *args, **kwargs) -> MetricImpl:
         return RotateXrayMetricsImpl(self)
 
+def corr_loss(A: torch.Tensor, B: torch.Tensor, eps: float=1e-8) -> torch.Tensor:
+    A = A - A.mean()
+    B = B - B.mean()
+    cov = (A * B).mean()
+    stdA = A.std() + eps
+    stdB = B.std() + eps
+    return 1.0 - cov / (stdA * stdB)
 
 class RotateXrayMetricsImpl(MetricImpl):
     config:  RotateXrayMetrics
@@ -89,61 +100,42 @@ class RotateXrayMetricsImpl(MetricImpl):
         ssim_metric_whole = self.ssim(outputs.gray_image, gt_image)
         ssim_loss_whole = 1.0 - ssim_metric_whole
         
-        if pl_module.trainer.global_step < self.config.motion_loss_start_step:
-            loss = (
-                self.config.w_gray_loss_whole    * gray_loss_whole +
-                self.config.w_ssim_loss_whole    * ssim_loss_whole
-            )
-            return {
-                "loss": loss,
-                "gray_loss_whole": gray_loss_whole,
-                "ssim_loss_whole": ssim_loss_whole,
-            }, {
-                "loss": True,
-                "gray_loss_whole": True,
-                "ssim_loss_whole": True,
-            }
+        p = outputs.coronary_props
+        p_entropy = - (p * torch.log(p + 1e-8) + (1 - p) * torch.log(1 - p + 1e-8))
+        p_entropy = p_entropy.mean()
         
-        assert outputs.moving_mask is not None and outputs.d_motion_var is not None and outputs.scales is not None
-        p = outputs.moving_mask.float().mean()  # proportion of moving coronary gaussian
-        loss_motion_sparsity = (
-            torch.relu(p - self.config.p_max)
+        loss_corr = corr_loss(
+            outputs.coronary_props,
+            torch.norm(outputs.d_motion_var[:, :3], dim=-1).detach()
         )
-        
-        motion_mag = torch.norm(outputs.d_motion_var[:, :3], dim=-1)
-        fg = motion_mag[outputs.moving_mask]
-        bg = motion_mag[ ~ outputs.moving_mask]
-        loss_motion_contrast = torch.relu(bg.mean() - fg.mean() + self.config.margin)
-        
-        scales = outputs.scales[outputs.moving_mask].squeeze()
-        scales_sorted = scales.sort(dim=-1, descending=True).values
-        s1, s2 = scales_sorted[:, 0], scales_sorted[:, 1]
-        loss_shape_aniso = (
-            (s2 / (s1 + self.config.eps)).mean()   # coronary's s2 is relatively small
-        )
+        if torch.isnan(loss_corr) or loss_corr > 0.3:
+            loss_corr = torch.tensor(0.0, device=loss_corr.device)
+
+        p_mean = outputs.coronary_props.mean()
         
         loss = (
             self.config.w_gray_loss_whole    * gray_loss_whole +
-            self.config.w_ssim_loss_whole    * ssim_loss_whole +
-            self.config.w_motion_contrast    * loss_motion_contrast +
-            self.config.w_motion_sparsity    * loss_motion_sparsity
-            # self.config.w_shape_anisotropy   * loss_shape_aniso
+            self.config.w_ssim_loss_whole    * ssim_loss_whole + 
+            self.config.w_coronary_props_entropy * p_entropy + 
+            self.config.w_corr_loss          * loss_corr +
+            self.config.w_coronary_props_mean    * p_mean
         )
         
         return {
             "loss": loss,
             "gray_loss_whole": gray_loss_whole,
             "ssim_loss_whole": ssim_loss_whole,
-            "motion_contrast": loss_motion_contrast,
-            "motion_sparsity": loss_motion_sparsity
-            # "shape_anisotropy": loss_shape_aniso,
+            "loss_corr": loss_corr,
+            "coronary_props_entropy": p_entropy,
+            "coronary_props_mean": p_mean,
+            
         }, {
             "loss": True,
             "gray_loss_whole": True,
             "ssim_loss_whole": True,
-            "motion_contrast": True,
-            "motion_sparsity": True
-            # "shape_anisotropy": True,
+            "loss_corr": True,
+            "coronary_props_entropy": True,
+            "coronary_props_mean": True,
         }
     
     def get_train_metrics(self, pl_module, gaussian_model, step: int, batch, outputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:

@@ -38,14 +38,14 @@ class RenderRes:
     visibility_filter: Float32[Tensor, "n"]
     radii: Float32[Tensor, "n"]
     
-    d_motion_mean: Tensor | None
-    d_motion_var: Tensor | None
+    d_motion_mean: Tensor
+    d_motion_var: Tensor
     
     means3D: Tensor
     rotation: Tensor
     scales: Tensor
     
-    moving_mask: Tensor | None
+    coronary_props: Tensor
     
     def reverse_gray_scale(self):
         self.gray_image.mul_(-1).add_(1)    # 1 - gray_image
@@ -106,9 +106,9 @@ class CoronaryDeformableXrayRenderer(Renderer):
         opacity = pc.get_opacity.detach()
         time = viewpoint_camera.time.unsqueeze(0).expand(means3D.shape[0], -1)
         
-        d_xyz, d_scaling, d_rotation, moving_probs = self.deform_model(means3D, time)
+        d_xyz, d_scaling, d_rotation, coronary_props = self.deform_model(means3D, time)
         torch.cuda.empty_cache()  # avoid CUDA OOM
-        moving_mask = (moving_probs > 0.5).squeeze()
+        coronary_props = coronary_props
         
         means3D = means3D + d_xyz
         normalized_qvec = torch.nn.functional.normalize(d_rotation)
@@ -123,21 +123,17 @@ class CoronaryDeformableXrayRenderer(Renderer):
         viewspace_points = meta_whole["means2d"]
         radii = meta_whole["radii"][0].amax(dim=-1)
         visibility_filter = radii > 0
-
-        if torch.any(moving_mask):
-            gray_coronary, _ = self._render(
-                viewpoint_camera, means3D[moving_mask], rotation[moving_mask], 
-                scales[moving_mask], opacity[moving_mask], gray[moving_mask]
-            )
-        else:
-            gray_coronary = torch.zeros_like(gray_image).to(gray_image)
+        gray_coronary, _ = self._render(
+            viewpoint_camera, means3D, rotation, 
+            scales, opacity*coronary_props, gray
+        )
         
         res = RenderRes(
             gray_image, gray_coronary,      # rendered
             viewspace_points, visibility_filter, radii, # grad meta
             d_motion_mean, d_motion_var,    # moving mean & var
             means3D, rotation, scales,      # properties after deform
-            moving_mask                     # moving mask from segmentation model
+            coronary_props.squeeze()
         )
 
         if self.reverse_gray_scale is True:
@@ -172,7 +168,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
             ast_noise = torch.randn(1, 1, device=means3D.device).expand(N, -1) * time_interval * self.smooth_term(step)
         
             # update means3D, rotation, scales
-            d_xyz, d_scaling, d_rotation, moving_probs = self.deform_model(
+            d_xyz, d_scaling, d_rotation, coronary_props = self.deform_model(
                 means3D.detach(), 
                 time + ast_noise
             )
@@ -186,7 +182,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
             d_motion_mean, d_motion_var = pc.update_motions(d_xyz, d_scaling, d_rotation)
         
         else:
-            _, _, _, moving_probs = self.deform_model(
+            _, _, _, coronary_props = self.deform_model(
                 means3D.detach(), 
                 time
             )
@@ -206,7 +202,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
             viewspace_points, visibility_filter, radii, # grad meta
             d_motion_mean, d_motion_var,    # moving mean & var
             means3D, rotation, scales,      # properties after deform
-            moving_mask = (moving_probs > 0.5).squeeze()  # moving mask from segmentation model
+            coronary_props = coronary_props.squeeze()
         )
 
         if self.reverse_gray_scale is True:
