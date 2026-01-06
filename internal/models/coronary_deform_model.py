@@ -63,7 +63,7 @@ class DeformModelConfig:
     
     tcnn: bool = True
     
-    x_multires: int = 8
+    x_multires: int = 5
     n_features_per_level: int = 4
     log2_hashmap_size: int = 19
     base_resolution: int = 16
@@ -105,8 +105,10 @@ class DeformModel(nn.Module):
             input_ch = (emb_t_ch + emb_x_ch)
         )
         
+        self.temp_coeff = nn.Parameter(torch.tensor(1.5), requires_grad=True)
+        
         _linear = self.network_factory.get_linear
-        self.coronary_props = _linear(emb_x_ch, 1)
+        self.coronary_props_warp = _linear(emb_x_ch, 1)
         
         self.xyz_warp = _linear(self.cfg.combine_W, 3)
         self.scaling_warp = _linear(self.cfg.combine_W, 3)
@@ -123,7 +125,7 @@ class DeformModel(nn.Module):
         
         h_combine = self.combine_mlp(torch.cat([x_emb, phase_emb], dim=-1))
         
-        coronary_props = F.sigmoid(self.coronary_props(x_emb))
+        coronary_props = F.sigmoid(self.coronary_props_warp(x_emb) * self.temp_coeff)
         
         d_xyz = self.xyz_warp(h_combine) * coronary_props
         d_scaling = self.scaling_warp(h_combine) * coronary_props

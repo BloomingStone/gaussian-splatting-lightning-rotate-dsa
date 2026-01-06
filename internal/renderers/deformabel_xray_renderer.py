@@ -48,10 +48,10 @@ class RenderRes:
     coronary_props: Tensor
     
     def reverse_gray_scale(self):
-        self.gray_image.mul_(-1).add_(1)    # 1 - gray_image
+        self.gray_image = 1 - self.gray_image
         if self.gray_coronary is not None:
-            self.gray_coronary.mul_(-1).add_(1)  # 1 - gray_coronary
-    
+            self.gray_coronary = 1 - self.gray_coronary
+
     def __getitem__(self, item):
         return getattr(self, item)
     
@@ -161,7 +161,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         N = means3D.shape[0]
         time = viewpoint_camera.time.unsqueeze(0).expand(N, -1)
         if (self.optimization_config.enable_ast is True\
-                and not torch.allclose(time, torch.zeros_like(time))
+                and not torch.allclose(time, torch.zeros_like(time))    # t != 0
                 and step > self.optimization_config.warm_up
         ):
             time_interval = 1 / ((step % self.train_set_length) + 1)
@@ -169,10 +169,15 @@ class CoronaryDeformableXrayRenderer(Renderer):
         
             # update means3D, rotation, scales
             d_xyz, d_scaling, d_rotation, coronary_props = self.deform_model(
-                means3D.detach(), 
+                means3D, 
                 time + ast_noise
             )
             torch.cuda.empty_cache()  # avoid CUDA OOM
+            
+            assert torch.isnan(d_xyz).sum() == 0, "d_xyz has NaN!"
+            assert torch.isnan(d_scaling).sum() == 0, "d_scaling has NaN!"
+            assert torch.isnan(d_rotation).sum() == 0, "d_rotation has NaN!"
+            assert torch.isnan(coronary_props).sum() == 0, "coronary_props has NaN!"
             
             means3D = means3D + d_xyz
             normalized_qvec = torch.nn.functional.normalize(d_rotation)
@@ -183,7 +188,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         
         else:
             _, _, _, coronary_props = self.deform_model(
-                means3D.detach(), 
+                means3D, 
                 time
             )
             d_motion_mean = pc.get_motion_mean().detach()

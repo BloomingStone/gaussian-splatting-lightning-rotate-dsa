@@ -161,7 +161,7 @@ class XrayCoronaryGaussianModel(
         assert n_d_xyz == n_d_scale == n_d_rot == n_gaussian
         
         d_rotation_norm = torch.nn.functional.normalize(d_rotation, dim=-1)
-        d_rotation_norm.clamp_(-1 + 1e-6, 1 - 1e-6)
+        d_rotation_norm = d_rotation_norm.clamp(-1 + 1e-6, 1 - 1e-6)
         d_angle = 2 * torch.acos(d_rotation_norm[:, 0]).unsqueeze(-1)
         motion = torch.cat((d_xyz, d_scale, d_angle), dim=-1)
         
@@ -220,9 +220,7 @@ class XrayCoronaryGaussianModel(
         if isinstance(xyz, np.ndarray):
             xyz_coronary = torch.tensor(xyz, dtype=torch.float)
         
-
-        xyz_background = self._get_backgound_gaussian_from_xyz(xyz_coronary)
-        fused_point_cloud = torch.cat([xyz_coronary, xyz_background]).float()
+        fused_point_cloud = xyz_coronary
 
         from simple_knn._C import distCUDA2
         dist2 = torch.clamp_min(distCUDA2(fused_point_cloud.cuda()), 0.0000001).to(fused_point_cloud.device)

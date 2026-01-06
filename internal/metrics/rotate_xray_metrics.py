@@ -17,19 +17,14 @@ from internal.gaussian_splatting import GaussianSplatting
 class RotateXrayMetrics(Metric):
     w_gray_loss_whole: float = 1.0
     w_ssim_loss_whole: float = 1.0
-    w_corr_loss: float = 0.01
     
+    w_motion_var_loss: float = 0.001
+    w_motion_mean_loss: float = 0.001
+    
+    structure_loss_start_step: int = 2000
+    w_coronary_props: float = 0.
     w_coronary_props_entropy: float = 0.01
-    w_coronary_props_mean: float = 0.01
-    
-    w_motion_contrast: float = 1.0
-    w_motion_sparsity: float = 1.0
-    w_shape_anisotropy: float = 1.0
-
-    p_max: float = 0.2      # for loss_motion_sparsity
-    eps: float = 1e-3       # for loss_shape_anisotropy
-    
-    motion_loss_start_step: int = 2000
+    w_corr_loss: float = 0.1
 
     rgb_diff_loss: Literal["l1", "l2"] = "l1"
 
@@ -43,7 +38,7 @@ class RotateXrayMetrics(Metric):
     def instantiate(self, *args, **kwargs) -> MetricImpl:
         return RotateXrayMetricsImpl(self)
 
-def corr_loss(A: torch.Tensor, B: torch.Tensor, eps: float=1e-8) -> torch.Tensor:
+def corr_loss(A: torch.Tensor, B: torch.Tensor, eps: float=1e-6) -> torch.Tensor:
     A = A - A.mean()
     B = B - B.mean()
     cov = (A * B).mean()
@@ -100,42 +95,71 @@ class RotateXrayMetricsImpl(MetricImpl):
         ssim_metric_whole = self.ssim(outputs.gray_image, gt_image)
         ssim_loss_whole = 1.0 - ssim_metric_whole
         
-        p = outputs.coronary_props
-        p_entropy = - (p * torch.log(p + 1e-8) + (1 - p) * torch.log(1 - p + 1e-8))
-        p_entropy = p_entropy.mean()
+        p = outputs.coronary_props.clamp(0., 1.)
+        p_mean = p.mean()
+        p_entropy = - (p * torch.log(p + 1e-6) + (1 - p) * torch.log(1 - p + 1e-6)).mean()
         
-        loss_corr = corr_loss(
-            outputs.coronary_props,
-            torch.norm(outputs.d_motion_var[:, :3], dim=-1).detach()
-        )
+        xyz_var_norm = torch.norm(outputs.d_motion_var[:, :3], dim=-1)
+        xyz_mean_norm = torch.norm(outputs.d_motion_mean[:, :3], dim=-1)
+        motion_var_mean = xyz_var_norm[p.squeeze() > 0.5].mean()
+        motion_mean_mean = xyz_mean_norm[p.squeeze() > 0.5].mean()
+
+        if pl_module.global_step < self.config.structure_loss_start_step:
+            w_p_entropy = 0.0
+            w_p_mean = 0.0
+            loss_corr = torch.tensor(0.0, device=gt_image.device)
+        else:
+            w_p_entropy = self.config.w_coronary_props_entropy
+            w_p_mean = self.config.w_coronary_props
+            loss_corr = corr_loss(p, xyz_var_norm+xyz_mean_norm)
+            
         if torch.isnan(loss_corr) or loss_corr > 0.3:
             loss_corr = torch.tensor(0.0, device=loss_corr.device)
-
-        p_mean = outputs.coronary_props.mean()
+        
+        if torch.isnan(p_entropy):
+            p_entropy = torch.tensor(0.0, device=p_entropy.device)
+            
+        if torch.isnan(motion_mean_mean):
+            motion_mean_mean = torch.tensor(0.0, device=motion_mean_mean.device)
+            
+        if torch.isnan(motion_var_mean):
+            motion_var_mean = torch.tensor(0.0, device=motion_var_mean.device)
         
         loss = (
-            self.config.w_gray_loss_whole    * gray_loss_whole +
-            self.config.w_ssim_loss_whole    * ssim_loss_whole + 
-            self.config.w_coronary_props_entropy * p_entropy + 
-            self.config.w_corr_loss          * loss_corr +
-            self.config.w_coronary_props_mean    * p_mean
+            # image loss
+            self.config.w_gray_loss_whole * gray_loss_whole +
+            self.config.w_ssim_loss_whole * ssim_loss_whole +
+            
+            # motion & coronary props loss
+            self.config.w_motion_var_loss * motion_var_mean +
+            self.config.w_motion_mean_loss * motion_mean_mean +
+            
+            # structural loss
+            w_p_mean                * p_mean +
+            w_p_entropy             * p_entropy + 
+            self.config.w_corr_loss * loss_corr
         )
+        
+        assert not torch.isnan(loss), "Loss is NaN!"
         
         return {
             "loss": loss,
             "gray_loss_whole": gray_loss_whole,
             "ssim_loss_whole": ssim_loss_whole,
-            "loss_corr": loss_corr,
-            "coronary_props_entropy": p_entropy,
             "coronary_props_mean": p_mean,
-            
+            "motion_var_mean": motion_var_mean,
+            "motion_mean_mean": motion_mean_mean,
+            "coronary_props_entropy": p_entropy,
+            "loss_corr": loss_corr
         }, {
             "loss": True,
             "gray_loss_whole": True,
             "ssim_loss_whole": True,
-            "loss_corr": True,
-            "coronary_props_entropy": True,
             "coronary_props_mean": True,
+            "motion_var_mean": True,
+            "motion_mean_mean": True,
+            "coronary_props_entropy": True,
+            "loss_corr": True,
         }
     
     def get_train_metrics(self, pl_module, gaussian_model, step: int, batch, outputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:

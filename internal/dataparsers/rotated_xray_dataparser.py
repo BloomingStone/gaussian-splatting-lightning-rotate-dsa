@@ -85,7 +85,7 @@ class RotatedXRay(DataParserConfig):
     """
     base_name: str = "rotate_dsa"
     mode: Literal["reconstruction", "render-new-views"] = "reconstruction"
-    init_point_cloud_mode: Literal["uniform", "random", "FBP", "DL", "label", "central-line"] = "uniform"
+    init_point_cloud_mode: Literal["uniform", "random", "random-ball", "FBP", "DL", "label", "central-line"] = "uniform"
     init_point_cloud_num: int = 200_000
     coronary_type: Literal["LCA", "RCA"] = "LCA"
     
@@ -168,7 +168,7 @@ def _get_cameras(json_data: dict, indices: list[int] | None = None) -> Cameras:
 def _get_bounds(json_data: dict) -> np.ndarray:
     shape = np.array(json_data["volume_size"])
     affine = np.array(json_data["volume_affine"])
-    return affine[:3, :3] @ shape
+    return np.abs(affine[:3, :3]) @ shape
 
 
 class RotatedXRayDataParser(DataParser):
@@ -249,6 +249,18 @@ class RotatedXRayDataParser(DataParser):
                 xyz = np.array(np.meshgrid(*axes, indexing="ij")).reshape(3, -1).T
             case "random":
                 xyz = np.random.rand(self.params.init_point_cloud_num, 3) * bounds - 0.5 * bounds
+            case "random-ball":
+                rng = np.random.default_rng(self.params.seed)
+                phi = rng.uniform(0, 2 * np.pi, self.params.init_point_cloud_num)
+                costheta = rng.uniform(-1, 1, self.params.init_point_cloud_num)
+                u = rng.uniform(0, 1, self.params.init_point_cloud_num)
+                theta = np.arccos(costheta)
+                r = np.cbrt(u) * bounds.min() / 2  # cube root to ensure uniform distribution
+                xyz = np.array([
+                    r * np.sin(theta) * np.cos(phi),
+                    r * np.sin(theta) * np.sin(phi),
+                    r * np.cos(theta)
+                ]).T
             case "FBP":
                 raise NotImplementedError   # TODO
             case "DL":

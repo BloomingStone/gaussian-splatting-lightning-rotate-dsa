@@ -9,6 +9,9 @@ from .density_controller import Utils
 @dataclass
 class RotateXrayDensityController(VanillaDensityController):
     densify_from_iter: int = 500
+    
+    opacity_reset_interval: int = 2000
+    
     def instantiate(self, *args, **kwargs) -> "RotateXrayDensityControllerImpl":
         return RotateXrayDensityControllerImpl(self)
 

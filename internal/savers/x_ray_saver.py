@@ -52,7 +52,7 @@ class XRaySaverModule(SaverModule):
             torch.zeros(means3D.shape[0], 1).to(means3D.device)
         )
         
-        moving_mask = (moving_probs > 0.5).squeeze()
+        moving_mask = (moving_probs > 0.05).squeeze()
         if not torch.any(moving_mask):
             return
         
