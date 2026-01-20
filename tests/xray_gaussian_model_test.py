@@ -12,21 +12,17 @@ from internal.models.xray_coronary_gaussian import (
     XrayCoronaryGaussian,
 )
 from internal.renderers.deformabel_xray_renderer import (
-    RenderRes, DeformNetworkConfig, XYZEncodingConfig, TimeEncodingConfig,
-    DeformableRendererOptimizationConfig, CoronaryDeformableXrayRenderer,
-    SegNetworkConfig
+    DeformableRendererOptimizationConfig, DeformModelConfig, CoronaryDeformableXrayRenderer,
 )
 
-from internal.dataparsers.rotated_xray_dataparser import (
-    RotatedXRayDataParser, RotatedXRay, DataParserOutputs
-)
+from internal.dataparsers.rotated_xray_dataparser import RotatedXRay
 from internal.dataset import Dataset
 from internal.savers.x_ray_saver import XRaySaver
 
 class TestDeformableXrayRenderAndSaver(unittest.TestCase):
     def setUp(self):
         parser = RotatedXRay(
-            init_point_cloud_mode="central-line"
+            init_point_cloud_mode="random"
         ).instantiate(
             path="data/volume_dvf_reader_multipli_contrast_LCA",
             output_path="outputs/temp",
@@ -59,11 +55,8 @@ class TestDeformableXrayRenderAndSaver(unittest.TestCase):
         gs_model = gs_model.to(self.device)
         
         render = CoronaryDeformableXrayRenderer(
-            deform_network=DeformNetworkConfig(),
-            segmentation_network=SegNetworkConfig(),
-            xyz_encoding=XYZEncodingConfig(),
-            time_encoding=TimeEncodingConfig(),
             optimization=DeformableRendererOptimizationConfig(),
+            deform_network=DeformModelConfig(),
         )
         render.setup("fit", lightning_module)
         render.to('cuda')
@@ -103,15 +96,10 @@ class TestDeformableXrayRenderAndSaver(unittest.TestCase):
         output_dir.mkdir(exist_ok=True)
         def output_image(image: torch.Tensor, name: str):
             image_np = image.detach().cpu().numpy()
-            if image_np.max() > 0:
-                vmin = np.min(image_np[image_np>0])
-            else:
-                vmin = np.min(image_np)
-            plt.imshow(image_np.squeeze(), vmin=vmin, cmap="gray")
+            plt.imshow(image_np.squeeze(), cmap="gray")
             plt.savefig(output_dir / f"{name}.png")
             plt.close()
         
-        output_image(res.gray_coronary, "gray_image_coronary")
         output_image(res.gray_image, "gray_image_whole")
 
     def test_saver(self):

@@ -407,6 +407,15 @@ class GaussianSplatting(LightningModule):
         )
         # backward
         self.manual_backward(metrics["loss"])
+
+        # optimize
+        for optimizer in optimizers:
+            optimizer.step()
+
+        # schedule lr
+        for scheduler in schedulers:
+            scheduler.step()
+        
         # invoke `after_backward` interface of density controller
         self.density_controller.after_backward(
             outputs=outputs,
@@ -419,14 +428,6 @@ class GaussianSplatting(LightningModule):
         # invoke other hooks
         for i in self.on_after_backward_hooks:
             i(outputs, batch, self.gaussian_model, global_step, self)
-
-        # optimize
-        for optimizer in optimizers:
-            optimizer.step()
-
-        # schedule lr
-        for scheduler in schedulers:
-            scheduler.step()
 
     def light_gaussian_prune(self, global_step):
         # TODO: move elsewhere

@@ -1,9 +1,10 @@
-max_steps: 20000
+max_steps: 10000
 save_val: true
 cache_all_images: true
 trainer:
   check_val_every_n_epoch: 10
   log_every_n_steps: 50   # test
+  precision: 16-mixed
 
 data:
   val_max_num_images_to_cache: -1
@@ -22,7 +23,6 @@ model:
     init_args:
       optimization:
         enable_ast: true
-      reverse_gray_scale: true    # DSA image usually has reverse gray scale
   metric:
     class_path: internal.metrics.rotate_xray_metrics.RotateXrayMetrics
     init_args:
@@ -31,8 +31,6 @@ model:
     class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
   density:
     class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
-    init_args:
-      absgrad: true
   renderer_output_types: 
     - gray_image
     - gray_coronary

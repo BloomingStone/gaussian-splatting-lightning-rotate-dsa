@@ -171,6 +171,46 @@ def _get_bounds(json_data: dict) -> np.ndarray:
     return np.abs(affine[:3, :3]) @ shape
 
 
+def _filter_points_visible(
+    points: np.ndarray,
+    cameras: Cameras,
+) -> np.ndarray:
+    """
+    Filter points that are visible in at least min_visible_ratio of the cameras.
+    """
+    points_ = torch.from_numpy(points)
+    device = torch.device('cpu')
+    N = points.shape[0]
+    full_projection = cameras.full_projection
+    M = full_projection.shape[0]
+
+    # (N,4)
+    points_h = torch.cat([points_, torch.ones(N,1, device=device)], dim=1).float()
+
+    # full_projection: (M,4,4)
+    # full_projection is row major, so need to transpose it to column major
+    # i.e. points_ndc = points_h @ proj
+    clip = torch.einsum('ni,mij->mnj', points_h, full_projection)  # (M,N,4)
+
+    # NDC
+    ndc = clip[..., :3] / (clip[..., 3:4] + 1e-8)   # (x, y, z, w) -> (x/w, y/w, z/w, 1)
+
+    x = ndc[..., 0]
+    y = ndc[..., 1]
+    z = ndc[..., 2]
+
+    in_frustum = (
+        (x >= -1) & (x <= 1) &
+        (y >= -1) & (y <= 1) &
+        (z >=  0) & (z <= 1)
+    )  # (M, N)
+
+    # 只要进过任意一个相机
+    visible_any = in_frustum.any(dim=0)  # (N,)
+    return points_[visible_any].cpu().numpy()
+    
+
+
 class RotatedXRayDataParser(DataParser):
     def __init__(
         self,
@@ -272,6 +312,7 @@ class RotatedXRayDataParser(DataParser):
             case _:
                 raise ValueError(f"Unknown init_point_cloud_mod: {self.params.init_point_cloud_mode}")
         
+        xyz = _filter_points_visible(xyz, train_set.cameras)
         rgb = np.ones(xyz.shape) * 127
         return DataParserOutputs(
             train_set=train_set,

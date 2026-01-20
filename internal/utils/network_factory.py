@@ -161,6 +161,7 @@ class HashGridEncoding(nn.Module):
                     "log2_hashmap_size": self.log2_hashmap_size,
                     "base_resolution": self.base_resolution,
                     "per_level_scale": self.growth_factor,
+                    "interpolation": "Smoothstep"
                 }
             )
         else:
@@ -176,6 +177,7 @@ class HashGridEncoding(nn.Module):
     def forward(self, x):
         # Normalize coordinates from [-128, 128] to [0, 1]
         x_norm = (x - self.scene_min) / self.scene_range
+        x_norm = x_norm.clamp(0.0, 1.0)
         return self.encoder(x_norm)
     
     def get_output_n_channels(self):

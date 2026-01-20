@@ -45,7 +45,7 @@ class XRaySaverModule(SaverModule):
         assert isinstance(pl_module.renderer, CoronaryDeformableXrayRenderer)
         deform_model = pl_module.renderer.deform_model
         
-        means3D = pc.get_xyz.clone()
+        means3D = pc.get_means().clone()
         
         d_xyz, d_scaling, d_rotation, moving_probs = deform_model(
             means3D.detach(), 
@@ -56,18 +56,15 @@ class XRaySaverModule(SaverModule):
         if not torch.any(moving_mask):
             return
         
-        def model_(key: str) -> torch.Tensor:
-            return pc.gaussians[key]
-        
         ply_path = ckpt_dir / f"epoch={epoch}-step={step}{ckpt_suffix}.ply"
-        
-        gray = model_("gray")[moving_mask]
+
+        gray = torch.exp( - pc.get_density()[moving_mask])
         sh0 = gray[..., None].repeat(1, 1, 3)
         export_splats(
-            means=model_("means")[moving_mask],
-            scales=model_("scales")[moving_mask],
-            quats=model_("rotations")[moving_mask],
-            opacities=model_("opacities")[moving_mask].squeeze(),
+            means=pc.get_means()[moving_mask],
+            scales=pc.get_scales()[moving_mask],
+            quats=pc.get_rotations()[moving_mask],
+            opacities=gray.squeeze(),
             sh0=sh0,
             shN=torch.zeros(gray.shape[0], 0, 3).to(sh0),
             save_to=str(ply_path)

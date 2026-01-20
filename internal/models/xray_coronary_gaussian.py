@@ -17,7 +17,6 @@ from .gaussian import (
     HasMeanGetter,
     HasScaleGetter,
     HasRotationGetter,
-    HasOpacityGetter,
 )
 from internal.utils.general_utils import (
     inverse_sigmoid,
@@ -41,9 +40,7 @@ class OptimizationConfig:
     
     spatial_lr_scale: float = -1  # auto calculate from camera poses if <= 0
     
-    gray_lr: float = 0.0025
-
-    opacities_lr: float = 0.05
+    density_lr: float = 0.02
 
     scales_lr: float = 0.005
 
@@ -55,20 +52,17 @@ class OptimizationConfig:
         return getattr(self, f"{key}_lr")
 
 @dataclass
-class GaussianIniter:
+class GaussianInits:
     n_gs       :int
     means      :Float32[Tensor, "n_gs 3"]           = field(init=False)
-    gray       :Float32[Tensor, "n_gs 1"]           = field(init=False)
+    density       :Float32[Tensor, "n_gs 1"]        = field(init=False)
     scales     :Float32[Tensor, "n_gs 3"]           = field(init=False)
-    opacities  :Float32[Tensor, "n_gs 1"]           = field(init=False)
     rotations  :Float32[Tensor, "n_gs 4"]           = field(init=False)
     
     def __post_init__(self):
         self.scales = torch.zeros(self.n_gs, 3, dtype=torch.float32)
         self.means = torch.zeros(self.n_gs, 3, dtype=torch.float32)
-        self.gray = torch.ones(self.n_gs, 1, dtype=torch.float32)*0.5
-        
-        self.opacities = inverse_sigmoid(0.01 * torch.ones((self.n_gs, 1), dtype=torch.float32))
+        self.density = torch.ones(self.n_gs, 1, dtype=torch.float32)
         
         self.rotations = torch.zeros((self.n_gs, 4), dtype=torch.float32)
         self.rotations[:, 0] = 1
@@ -83,35 +77,50 @@ class XrayCoronaryGaussian(Gaussian):
 def _identity_act(x: Tensor) -> Tensor:
     return x
 
-class HasGrayGetter(ABC):
-    gaussians: nn.ParameterDict
-    _gray_name: str = "gray"
-    gray_activation: Callable[[torch.Tensor], torch.Tensor]
-    gray_inverse_activation: Callable[[torch.Tensor], torch.Tensor]
 
-    def get_gray(self) -> torch.Tensor:
-        """Return activated gray"""
-        return self.gray_activation(self.gray)
+def inverse_softplus(beta: float = 1.0, epsilon: float = 1e-6):
+    """
+    stable inverse_softplus for FP16。
+    y = log(exp(beta * x) - 1) / beta
+    """
+    def _forward(x: torch.Tensor) -> torch.Tensor:
+        # Precision protection for small x use expm1(x) = exp(x) - 1
+        stable_val = torch.log(torch.expm1(beta * x) + epsilon) / beta
+        
+        # when x is large, use linear approximation
+        is_large = (beta * x) > 9.0 
+        
+        return torch.where(is_large, x, stable_val)
+
+    return _forward
+
+class HasDensityGetter(ABC):
+    gaussians: nn.ParameterDict
+    _density_name: str = "density"
+    density_activation: Callable[[torch.Tensor], torch.Tensor]
+    density_inverse_activation: Callable[[torch.Tensor], torch.Tensor]
+    def get_density(self) -> torch.Tensor:
+        """Return activated density"""
+        return self.density_activation(self.density)
 
     @property
-    def gray(self) -> torch.Tensor:
-        """Return raw gray"""
-        return self.gaussians[self._gray_name]
+    def density(self) -> torch.Tensor:
+        """Return raw density"""
+        return self.gaussians[self._density_name]
 
-    @gray.setter
-    def gray(self, v):
-        """Set raw gray"""
-        self.gaussians[self._gray_name] = v
+    @density.setter
+    def density(self, v):
+        """Set raw density"""
+        self.gaussians[self._density_name] = v
 
 
 class XrayCoronaryGaussianModel(
     HasVanillaGetters,
     GaussianModel,
     HasMeanGetter,
-    HasGrayGetter,
+    HasDensityGetter,
     HasScaleGetter,
     HasRotationGetter,
-    HasOpacityGetter,
 ):
     gaussians: nn.ParameterDict
     
@@ -124,22 +133,24 @@ class XrayCoronaryGaussianModel(
         self.config = config
 
         self._keys = (
-            "means", "gray", "opacities", "scales", "rotations"
+            "means", "density", "scales", "rotations"
         )
 
         self.is_pre_activated = False
         
-        self.scale_activation = torch.exp
-        self.scale_inverse_activation = torch.log
-        self.gray_activation = torch.sigmoid
-        self.gray_inverse_activation = inverse_sigmoid
-        self.opacity_activation = torch.sigmoid
-        self.opacity_inverse_activation = inverse_sigmoid
+        self.scale_activation = torch.nn.Softplus(threshold=10.0)
+        self.scale_inverse_activation = inverse_softplus()
+        self.density_activation = lambda x: 1e-3 * torch.nn.Softplus(threshold=10.0)(x)    # scale by 1e-3
+        self.density_inverse_activation = lambda x: inverse_softplus()(x * 1e3)     # reverse scale by 1e3
         self.rotation_activation = F.normalize
         self.rotation_inverse_activation = _identity_act
         
         self.ema_lambda = 0.95
 
+    @property
+    def n_gaussians(self) -> int:
+        return self.gaussians["means"].shape[0]
+    
     @override
     @staticmethod
     def setup_gaussians_container():
@@ -190,18 +201,18 @@ class XrayCoronaryGaussianModel(
         self.d_motion_mean = torch.cat(
             (self.d_motion_mean, new_d_motion_mean), 
             dim=0
-        )
+        ).detach()
         self.d_motion_2_mean = torch.cat(
             (self.d_motion_2_mean, new_d_motion_2_mean),
             dim = 0
-        )
+        ).detach()
         
         assert self.n_gaussians == self.d_motion_mean.shape[0] == self.d_motion_2_mean.shape[0]
     
     
     def filter_motion_by_mask(self, valid_mask: torch.Tensor):
-        self.d_motion_mean = self.d_motion_mean[valid_mask]
-        self.d_motion_2_mean = self.d_motion_2_mean[valid_mask]
+        self.d_motion_mean = self.d_motion_mean[valid_mask].detach()
+        self.d_motion_2_mean = self.d_motion_2_mean[valid_mask].detach()
         
         assert self.n_gaussians == self.d_motion_mean.shape[0] == self.d_motion_2_mean.shape[0]
         
@@ -227,12 +238,11 @@ class XrayCoronaryGaussianModel(
         scales = torch.log(torch.sqrt(dist2))[..., None].repeat(1, 3)
 
         n_gaussians = fused_point_cloud.shape[0]
-        inits = GaussianIniter(n_gaussians)
+        inits = GaussianInits(n_gaussians)
         
         self.set_properties({
             "means":     fused_point_cloud,
-            "gray":      inits.gray,
-            "opacities": inits.opacities,
+            "density":   inits.density,
             "scales":    scales,
             "rotations": inits.rotations,
         })
@@ -240,12 +250,11 @@ class XrayCoronaryGaussianModel(
     
     @override
     def setup_from_number(self, n: int, *args, **kwargs):
-        inits = GaussianIniter(n)
+        inits = GaussianInits(n)
 
         self.set_properties({
             "means":     inits.means,
-            "gray":      inits.gray,
-            "opacities": inits.opacities,
+            "density":   inits.density,
             "scales":    inits.scales,
             "rotations": inits.rotations,
         })
@@ -397,12 +406,14 @@ class XrayCoronaryGaussianModel(
     @property
     @override
     def get_features(self):
-        return self.get_gray()
+        raise NotImplementedError()
+        # return torch.exp(-self.get_density())
 
     @property
     @override
     def get_opacity(self):
-        return self.get_opacities()
+        raise NotImplementedError()
+        # return torch.exp(-self.get_density())
     
     # --- Part6: pre-activate all parameters before inference
     
@@ -412,33 +423,26 @@ class XrayCoronaryGaussianModel(
         # replace parameters with pre-activated versions
         self.scales = self.get_scales()
         self.rotations = self.get_rotations()
-        self.opacities = self.get_opacities()
-        self.gray = self.get_gray()
+        self.density = self.get_density()
 
         self.scale_activation = _identity_act
         self.scale_inverse_activation = _identity_act
         self.rotation_activation = _identity_act
         self.rotation_inverse_activation = _identity_act
-        self.opacity_activation = _identity_act
-        self.opacity_inverse_activation = _identity_act
-        self.gray_activation = _identity_act
-        self.gray_inverse_activation = _identity_act
+        self.density_activation = _identity_act
+        self.density_inverse_activation = _identity_act
     
     def get_non_pre_activated_properties(self):
         if self.is_pre_activated is True:
             activated_properties = self.properties
             keys = list(activated_properties.keys())
             non_pre_activated_properties = {}
-            for suffix in ["_coronary", "_background"]:
-                scales = "scales" + suffix
-                opacities = "opacities" + suffix
-                gray = "gray" + suffix
-                non_pre_activated_properties[scales] = torch.log(activated_properties[scales])
-                keys.remove(scales)
-                non_pre_activated_properties[opacities] = inverse_sigmoid(activated_properties[opacities])
-                keys.remove(opacities)
-                non_pre_activated_properties[gray] = torch.log(activated_properties[gray])
-                keys.remove(gray)
+            scales = "scales"
+            density = "density"
+            non_pre_activated_properties[scales] = self.scale_inverse_activation(activated_properties[scales])
+            keys.remove(scales)
+            non_pre_activated_properties[density] = self.density_inverse_activation(activated_properties[density])
+            keys.remove(density)
 
             for key in keys:
                 non_pre_activated_properties[key] = activated_properties[key]

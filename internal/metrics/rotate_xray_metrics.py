@@ -18,13 +18,18 @@ class RotateXrayMetrics(Metric):
     w_gray_loss_whole: float = 1.0
     w_ssim_loss_whole: float = 1.0
     
-    w_motion_var_loss: float = 0.001
-    w_motion_mean_loss: float = 0.001
+    w_motion_var_loss: float = 0.
+    w_motion_mean_loss: float = 0.
     
     structure_loss_start_step: int = 2000
     w_coronary_props: float = 0.
-    w_coronary_props_entropy: float = 0.01
+    w_coronary_props_entropy: float = 0.1
+    props_entropy_k = 1.
     w_corr_loss: float = 0.1
+    
+    time_aware_window_length = 500
+    
+    time_0_repeats: float = 3.0
 
     rgb_diff_loss: Literal["l1", "l2"] = "l1"
 
@@ -46,8 +51,14 @@ def corr_loss(A: torch.Tensor, B: torch.Tensor, eps: float=1e-6) -> torch.Tensor
     stdB = B.std() + eps
     return 1.0 - cov / (stdA * stdB)
 
+
+def entropy(p: torch.Tensor, eps: float=1e-6) -> torch.Tensor:
+    return - (p * torch.log(p + eps) + (1 - p) * torch.log(1 - p + eps)).mean()
+
+
 class RotateXrayMetricsImpl(MetricImpl):
     config:  RotateXrayMetrics
+    
     def __init__(self, config: RotateXrayMetrics, *args, **kwargs) -> None:
         super().__init__(config, *args, **kwargs)
 
@@ -97,12 +108,20 @@ class RotateXrayMetricsImpl(MetricImpl):
         
         p = outputs.coronary_props.clamp(0., 1.)
         p_mean = p.mean()
-        p_entropy = - (p * torch.log(p + 1e-6) + (1 - p) * torch.log(1 - p + 1e-6)).mean()
+        p_entropy = entropy(p ** self.config.props_entropy_k, eps=1e-6)
         
         xyz_var_norm = torch.norm(outputs.d_motion_var[:, :3], dim=-1)
         xyz_mean_norm = torch.norm(outputs.d_motion_mean[:, :3], dim=-1)
         motion_var_mean = xyz_var_norm[p.squeeze() > 0.5].mean()
         motion_mean_mean = xyz_mean_norm[p.squeeze() > 0.5].mean()
+        
+        if torch.allclose(outputs.time, torch.zeros_like(outputs.time)):  # time == 0
+            # phase or time == 0 as static scene, need to emphasize the loss
+            w_gray_loss_whole = self.config.w_gray_loss_whole * self.config.time_0_repeats
+            w_ssim_loss_whole = self.config.w_ssim_loss_whole * self.config.time_0_repeats
+        else:
+            w_gray_loss_whole = self.config.w_gray_loss_whole
+            w_ssim_loss_whole = self.config.w_ssim_loss_whole
 
         if pl_module.global_step < self.config.structure_loss_start_step:
             w_p_entropy = 0.0
@@ -124,11 +143,11 @@ class RotateXrayMetricsImpl(MetricImpl):
             
         if torch.isnan(motion_var_mean):
             motion_var_mean = torch.tensor(0.0, device=motion_var_mean.device)
-        
+
         loss = (
             # image loss
-            self.config.w_gray_loss_whole * gray_loss_whole +
-            self.config.w_ssim_loss_whole * ssim_loss_whole +
+            w_gray_loss_whole * gray_loss_whole +
+            w_ssim_loss_whole * ssim_loss_whole +
             
             # motion & coronary props loss
             self.config.w_motion_var_loss * motion_var_mean +
@@ -140,24 +159,34 @@ class RotateXrayMetricsImpl(MetricImpl):
             self.config.w_corr_loss * loss_corr
         )
         
+        window = min(pl_module.global_step / self.config.time_aware_window_length, 1.0)
+        if outputs.time.detach() > window:
+            loss = loss * 0.01
+        
         assert not torch.isnan(loss), "Loss is NaN!"
         
         return {
             "loss": loss,
+            
             "gray_loss_whole": gray_loss_whole,
             "ssim_loss_whole": ssim_loss_whole,
-            "coronary_props_mean": p_mean,
+            
             "motion_var_mean": motion_var_mean,
             "motion_mean_mean": motion_mean_mean,
+            
+            "coronary_props_mean": p_mean,
             "coronary_props_entropy": p_entropy,
             "loss_corr": loss_corr
         }, {
             "loss": True,
+            
             "gray_loss_whole": True,
             "ssim_loss_whole": True,
-            "coronary_props_mean": True,
+            
             "motion_var_mean": True,
             "motion_mean_mean": True,
+            
+            "coronary_props_mean": True,
             "coronary_props_entropy": True,
             "loss_corr": True,
         }
