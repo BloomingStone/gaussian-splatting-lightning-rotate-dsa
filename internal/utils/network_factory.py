@@ -145,8 +145,8 @@ class HashGridEncoding(nn.Module):
             self.growth_factor = 1.0
         
         # Scene bounds: -128 to 128
-        self.scene_min = -128.0
-        self.scene_max = 128.0
+        self.scene_min = -150.0
+        self.scene_max = 150.0
         self.scene_range = self.scene_max - self.scene_min
         
         if use_tcnn:
