@@ -111,9 +111,6 @@ class DeformModel(nn.Module):
         self.xyz_warp = _linear(self.cfg.combine_W, 3)
         self.scaling_warp = _linear(self.cfg.combine_W, 3)
         self.axial_angle_warp = _linear(self.cfg.combine_W, 3)
-        
-        self.separate_alpha = nn.Parameter(torch.tensor(2.0, requires_grad=True))
-        self.separate_beta = nn.Parameter(torch.tensor(-1.0, requires_grad=True))
 
     def forward(
             self, 
@@ -124,7 +121,7 @@ class DeformModel(nn.Module):
         x_emb = self.embed_fn(xyz)
         
         assert not torch.any(torch.isnan(x_emb)), "NaN detected in x_emb"
-        coronary_props = F.sigmoid(self.coronary_props_warp(x_emb) * self.separate_alpha + self.separate_beta)
+        coronary_props = F.sigmoid(self.coronary_props_warp(x_emb)*10.)
         
         h_combine = self.combine_mlp(torch.cat([x_emb, phase_emb], dim=-1))
         

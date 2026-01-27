@@ -19,14 +19,14 @@ class RotateXrayMetrics(Metric):
     w_ssim_loss_whole: float = 1.0
     
     w_motion_var_loss: float = 0.
-    w_motion_mean_loss: float = 0.
+    w_motion_mean_loss: float = 0.005
     
-    structure_loss_start_step: int = 1000
-    w_coronary_props: float = 0.2
-    w_coronary_props_entropy: float = 0.2
+    structure_loss_start_step: int = 2000
+    w_coronary_props: float = 0.005
+    w_coronary_props_entropy: float = 0.005
     props_entropy_k = 1.0
-    w_motion_corr_loss: float = 0.2
-    w_density_corr_loss: float = 0.1
+    w_motion_corr_loss: float = 1.
+    w_density_corr_loss: float = 1.
     
     iter_aware_window_length = 1000
 
@@ -118,8 +118,9 @@ class RotateXrayMetricsImpl(MetricImpl):
         
         xyz_var_norm = torch.norm(outputs.d_motion_var[:, :3], dim=-1)
         xyz_mean_norm = torch.norm(outputs.d_motion_mean[:, :3], dim=-1)
+        
         motion_var_mean = xyz_var_norm[p.squeeze() > 0.5].mean()
-        motion_mean_mean = xyz_mean_norm[p.squeeze() > 0.5].mean()
+        L_motion = torch.exp( - xyz_mean_norm[p.squeeze() > 0.5]).mean().clamp(0., 1.)   # we want to maximize the motion
 
         if pl_module.global_step < self.config.structure_loss_start_step:
             w_p_entropy = 0.0
@@ -130,7 +131,8 @@ class RotateXrayMetricsImpl(MetricImpl):
             w_p_entropy = self.config.w_coronary_props_entropy
             w_p_mean = self.config.w_coronary_props
             loss_motion_corr = corr_loss(p, xyz_var_norm+xyz_mean_norm)
-            pho = gaussian_model.get_density().squeeze() / gaussian_model.get_scales().cumprod(dim=-1)
+            s = torch.topk(gaussian_model.get_scales(), k=2, dim=-1)[0][:, -1]
+            pho = gaussian_model.get_density().squeeze() / s
             pho = pho.clamp(1e-5, 1e5)
             loss_density_corr = corr_loss(p, pho)
             
@@ -140,8 +142,8 @@ class RotateXrayMetricsImpl(MetricImpl):
         if torch.isnan(p_entropy):
             p_entropy = torch.tensor(0.0, device=p_entropy.device)
             
-        if torch.isnan(motion_mean_mean):
-            motion_mean_mean = torch.tensor(0.0, device=motion_mean_mean.device)
+        if torch.isnan(L_motion):
+            L_motion = torch.tensor(0.0, device=L_motion.device)
             
         if torch.isnan(motion_var_mean):
             motion_var_mean = torch.tensor(0.0, device=motion_var_mean.device)
@@ -153,7 +155,7 @@ class RotateXrayMetricsImpl(MetricImpl):
             
             # motion  loss
             self.config.w_motion_var_loss * motion_var_mean +
-            self.config.w_motion_mean_loss * motion_mean_mean +
+            self.config.w_motion_mean_loss * L_motion +
             
             # structural loss
             w_p_mean                * p_mean +
@@ -175,7 +177,7 @@ class RotateXrayMetricsImpl(MetricImpl):
             "ssim_loss_whole": ssim_loss_whole,
             
             "motion_var_mean": motion_var_mean,
-            "motion_mean_mean": motion_mean_mean,
+            "motion_mean_mean": L_motion,
             
             "coronary_props_mean": p_mean,
             "coronary_props_entropy": p_entropy,
@@ -186,7 +188,7 @@ class RotateXrayMetricsImpl(MetricImpl):
             "gray_loss_whole": True,
             "ssim_loss_whole": True,
             
-            "motion_var_mean": True,
+            "motion_var_mean": False,
             "motion_mean_mean": True,
             
             "coronary_props_mean": True,
