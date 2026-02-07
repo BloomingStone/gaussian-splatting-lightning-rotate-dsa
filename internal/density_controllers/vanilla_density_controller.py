@@ -4,8 +4,8 @@ import torch
 from torch import nn
 from lightning import LightningModule
 
-from internal.models.vanilla_gaussian import VanillaGaussianModel
-from internal.utils.general_utils import build_rotation
+from ..models.vanilla_gaussian import VanillaGaussianModel
+from ..utils.general_utils import build_rotation
 from .density_controller import DensityController, DensityControllerImpl, Utils
 
 
@@ -43,8 +43,8 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
         super().setup(stage, pl_module)
 
         if stage == "fit":
-            self.cameras_extent = pl_module.trainer.datamodule.dataparser_outputs.camera_extent * self.config.camera_extent_factor
-            self.prune_extent = pl_module.trainer.datamodule.prune_extent * self.config.camera_extent_factor
+            self.cameras_extent = pl_module.trainer.datamodule.dataparser_outputs.camera_extent * self.config.camera_extent_factor  #type: ignore
+            self.prune_extent = pl_module.trainer.datamodule.prune_extent * self.config.camera_extent_factor  #type: ignore
 
             if self.config.scene_extent_override > 0:
                 self.cameras_extent = self.config.scene_extent_override

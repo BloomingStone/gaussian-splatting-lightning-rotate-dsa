@@ -8,8 +8,8 @@ import viser
 import viser.transforms as vtf
 from queue import Queue
 
-from internal.viewer.viewer import Viewer
-from internal.cameras.cameras import Cameras
+from ..viewer.viewer import Viewer
+from ..cameras import Cameras
 
 
 class MockGaussianModel:

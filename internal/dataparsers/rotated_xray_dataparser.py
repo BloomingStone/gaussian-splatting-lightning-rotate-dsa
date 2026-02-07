@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .dataparser import DataParserConfig, DataParser, DataParserOutputs, ImageSet, PointCloud
+from ..dataparsers.dataparser import DataParserConfig, DataParser, DataParserOutputs, ImageSet, PointCloud
 from ..cameras import Cameras
 
 # ref: DiffDRR at diffdrr/pose.py
@@ -156,9 +156,6 @@ def _get_cameras(json_data: dict, indices: list[int] | None = None) -> Cameras:
         cy = torch.ones(n_camras) * cy,
         width = torch.ones(n_camras) * width,
         height = torch.ones(n_camras) * height,
-        appearance_id=torch.zeros(n_camras),
-        normalized_appearance_id=torch.zeros(n_camras),
-        distortion_params=None,
         camera_type=torch.zeros(n_camras),
         time=_get_frames_param(json_data, "phase", indices),
         zfar=1e5

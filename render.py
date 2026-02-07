@@ -13,7 +13,7 @@ import torch
 import torchvision
 import mediapy
 from tqdm import tqdm
-from internal.cameras.cameras import Cameras
+from internal.cameras import Cameras
 from internal.renderers.vanilla_renderer import VanillaRenderer
 from internal.utils.gaussian_model_loader import GaussianModelLoader
 from internal.utils.gaussian_model_editor import MultipleGaussianModelEditor

@@ -2,11 +2,11 @@ import torch
 from dataclasses import dataclass
 from typing import override
 
-from internal.models.xray_coronary_gaussian import XrayCoronaryGaussianModel
+from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from .vanilla_density_controller import VanillaDensityControllerImpl, DensityController
 from .density_controller import Utils
-from internal.gaussian_splatting import GaussianSplatting
-from internal.models.xray_coronary_gaussian import GaussianInits
+from ..gaussian_splatting import GaussianSplatting
+from ..models.xray_coronary_gaussian import GaussianInits
 
 @dataclass
 class RotateXrayDensityController(DensityController):
@@ -20,7 +20,7 @@ class RotateXrayDensityController(DensityController):
 
     densify_until_iter: int = 15_000
 
-    densify_grad_threshold: float = 0.5
+    densify_grad_threshold: float = 1e-4
 
     cull_density_threshold: float = 1e-3
 

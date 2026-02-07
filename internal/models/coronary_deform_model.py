@@ -6,8 +6,8 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from internal.utils.network_factory import NetworkFactory
-from internal.encodings.vector_positional_encoding import VectorPositionalEncoding
+from ..utils.network_factory import NetworkFactory
+from ..encodings.vector_positional_encoding import VectorPositionalEncoding
 
 
 def get_phase_embedder(

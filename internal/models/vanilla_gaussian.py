@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Tuple, Union, Optional
+from typing import List, Dict, Tuple, Union, Optional, Mapping
 import torch
 import numpy as np
 from torch import nn
@@ -11,13 +11,18 @@ from .gaussian import (
     HasNewGetters,
     HasVanillaGetters,
 )
-from internal.utils.general_utils import (
+from ..utils.general_utils import (
     inverse_sigmoid,
     strip_symmetric,
     build_scaling_rotation,
 )
-from internal.optimizers import OptimizerConfig, Adam, SelectiveAdam, SparseGaussianAdam
-from internal.schedulers import Scheduler, ExponentialDecayScheduler
+from ..optimizers import OptimizerConfig, Adam, SelectiveAdam, SparseGaussianAdam
+from ..schedulers import Scheduler, ExponentialDecayScheduler
+
+@dataclass
+class VannilaExponentialDecayScheduler(ExponentialDecayScheduler):
+    lr_final = 0.0000016
+    max_steps = 30_000
 
 
 @dataclass
@@ -28,13 +33,7 @@ class OptimizationConfig:
     #     max_steps=30_000,
     # ))
     # only in below format can work with jsonargparse
-    means_lr_scheduler: Scheduler = field(default_factory=lambda: {
-        "class_path": "ExponentialDecayScheduler",
-        "init_args": {
-            "lr_final": 0.0000016,
-            "max_steps": 30_000,
-        },
-    })
+    means_lr_scheduler: VannilaExponentialDecayScheduler = field(default_factory= VannilaExponentialDecayScheduler)
     spatial_lr_scale: float = -1  # auto calculate from camera poses if <= 0
 
     shs_dc_lr: float = 0.0025
@@ -49,7 +48,7 @@ class OptimizationConfig:
 
     sh_degree_up_interval: int = 1_000
 
-    optimizer: OptimizerConfig = field(default_factory=lambda: {"class_path": "Adam"})
+    optimizer: OptimizerConfig = field(default_factory=Adam)
 
 
 @dataclass
@@ -89,7 +88,7 @@ class VanillaGaussianModel(
     def get_extra_property_names(self):
         return []
 
-    def before_setup_set_properties_from_pcd(self, xyz: torch.Tensor, rgb: torch.Tensor, property_dict: Dict[str, torch.Tensor], *args, **kwargs):
+    def before_setup_set_properties_from_pcd(self, xyz: torch.Tensor, rgb: torch.Tensor, property_dict: Mapping[str, torch.Tensor|nn.Parameter], *args, **kwargs):
         pass
 
     def _add_optimizer_after_backward_hook_if_available(self, optimizer, pl_module):
@@ -99,7 +98,7 @@ class VanillaGaussianModel(
         pl_module.on_after_backward_hooks.append(hook)
 
     def setup_from_pcd(self, xyz: Union[torch.Tensor, np.ndarray], rgb: Union[torch.Tensor, np.ndarray], *args, **kwargs):
-        from internal.utils.sh_utils import RGB2SH
+        from ..utils.sh_utils import RGB2SH
 
         if isinstance(xyz, np.ndarray):
             xyz = torch.tensor(xyz)

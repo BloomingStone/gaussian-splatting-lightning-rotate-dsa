@@ -6,12 +6,11 @@ from torchmetrics.image import PeakSignalNoiseRatio
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from monai.losses.dice import DiceCELoss
 
-from internal.utils.ssim import ssim
+from ..utils.ssim import ssim
 from .metric import Metric, MetricImpl
-from ..configs.instantiate_config import InstantiatableConfig
 from ..renderers.deformabel_xray_renderer import RenderRes
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
-from internal.gaussian_splatting import GaussianSplatting
+from ..gaussian_splatting import GaussianSplatting
 
 @dataclass
 class RotateXrayMetrics(Metric):

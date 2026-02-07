@@ -10,30 +10,15 @@ name = "gaussian-splatting-lightning"
 dynamic = ["version"]
 requires-python = ">=3.10"
 
-[project.scripts]
-gs-fit = "internal.entrypoints.gspl:cli_fit"
-gs-val = "internal.entrypoints.gspl:cli_val"
-gs-test = "internal.entrypoints.gspl:cli_test"
-gs-predict = "internal.entrypoints.gspl:cli_predict"
-
-segany-fit = "internal.entrypoints.seganygs:cli_fit"
-segany-val = "internal.entrypoints.seganygs:cli_val"
-segany-test = "internal.entrypoints.seganygs:cli_test"
-segany-predict = "internal.entrypoints.seganygs:cli_predict"
-
-gs-viewer = "internal.entrypoints.viewer:cli"
-
 [tool.pixi.workspace]
-channels = ["nvidia/label/cuda-12.4.0", "nvidia", "conda-forge", "pytorch"]
+channels = ["conda-forge"]
 platforms = ["linux-64"]
 
-[tool.pixi.activation.env]
-CUDA_VISIBLE_DEVICES = "1"
+[tool.pixi.system-requirements]
+cuda = "13.0"
 
 [tool.pixi.dependencies]
-pytorch = { version = "2.5.1.*", channel = "pytorch" }
-pytorch-cuda = { version = "12.4.*", channel = "pytorch" }
-torchvision = { version = "0.20.1.*", channel = "pytorch" }
+python = ">=3.12, <3.13"
 wandb = ">=0.21.1,<0.22"
 viser = ">=0.2.23,<0.3"
 matplotlib = ">=3.9.1,<4"
@@ -45,7 +30,6 @@ einops = ">=0.8.1,<0.9"
 notebook = "*"
 nibabel = ">=5.3.2,<6"
 pyvista = ">=0.46.3,<0.47"
-monai = ">=1.5.1,<2"
 
 [tool.pixi.pypi-options]
 no-build-isolation = [
@@ -55,10 +39,12 @@ no-build-isolation = [
     "gsplat",
     "fused_ssim",
     "xray-gaussian-rasterization-voxelization",
+    "monai",
 ]
 
 [tool.pixi.pypi-dependencies]
-gaussian-splatting-lightning = { path = ".", editable = true }
+torch = { version = ">=2.5.1", index = "https://mirrors.nju.edu.cn/pytorch/whl/cu121" }
+torchvision = { version = ">=0.20.1", index = "https://mirrors.nju.edu.cn/pytorch/whl/cu121" }
 simple-knn = { git = "https://github.com/yzslab/simple-knn.git", rev = "86710c2d4b46680c02301765dd79e465819c8f19" }
 tinycudann = { git = "https://github.com/NVlabs/tiny-cuda-nn.git", subdirectory = "bindings/torch", rev = "68d4f0f1f81fa9085fff66077d9966c8323095bc" }
 fused_ssim = { git = "https://github.com/rahul-goel/fused-ssim.git", branch = "main" }
@@ -66,6 +52,8 @@ opencv-python-headless = ">=4.11.0.86,<5"
 pytorch-lightning = ">=2.5.5,<3"
 lightning = { version = ">=2.5.5,<3", extras = ["pytorch-extra"] }
 jaxtyping = "*"
+gaussian-splatting-lightning = { path = ".", editable = true }
+monai = ">=1.5.1,<2"
 
 [tool.pixi.feature.vanilla-gs-rasterization.pypi-dependencies]
 diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gaussian-rasterization.git", branch = "main" }
@@ -73,11 +61,11 @@ diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gau
 [tool.pixi.feature.x-gs-rasterization.pypi-dependencies]
 diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gaussian-rasterization.git", branch = "X-Gaussian" }
 
-[tool.pixi.feature.gsplat-v0.pypi-dependencies]
-gsplat = { git = "https://github.com/yzslab/gsplat.git" }
+# [tool.pixi.feature.gsplat-v0.pypi-dependencies]
+# gsplat = { git = "https://github.com/yzslab/gsplat.git" }
 
-[tool.pixi.feature.gsplat-v1.pypi-dependencies]
-gsplat = { git = "https://github.com/nerfstudio-project/gsplat.git", tag = "v1.5.3" }
+# [tool.pixi.feature.gsplat-v1.pypi-dependencies]
+# gsplat = { git = "https://github.com/nerfstudio-project/gsplat.git", tag = "v1.5.3" }
 
 [tool.pixi.feature.r2-gaussian.pypi-dependencies]
 xray_gaussian_rasterization_voxelization.git = "https://github.com/Ruyi-Zha/r2_gaussian.git"
@@ -87,10 +75,9 @@ xray_gaussian_rasterization_voxelization.subdirectory = "r2_gaussian/submodules/
 default = [
     "vanilla-gs-rasterization",
     "default",
-    "gsplat-v1",
     "r2-gaussian",
 ] # 实际上 gs-rasterization 和 gsplat 应该是互斥的，但目前先这样
-x-gs = ["x-gs-rasterization", "default", "gsplat-v1"]
-gsplat-v0 = ["vanilla-gs-rasterization", "default", "gsplat-v0"]
+x-gs = ["x-gs-rasterization", "default"]
+gsplat-v0 = ["vanilla-gs-rasterization", "default"]
 
 [tool.pixi.tasks]

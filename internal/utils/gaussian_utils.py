@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import torch
-from internal.utils.colmap import rotmat2qvec, qvec2rotmat
+from .colmap import rotmat2qvec, qvec2rotmat
 from typing import Union
 from dataclasses import dataclass
 from plyfile import PlyData, PlyElement

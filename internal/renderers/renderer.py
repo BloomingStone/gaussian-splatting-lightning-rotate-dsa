@@ -2,9 +2,9 @@ from dataclasses import dataclass
 import lightning
 import torch
 from typing import Any, Union, List, Tuple, Optional, Dict, Callable
-from internal.configs.instantiate_config import InstantiatableConfig
-from internal.cameras.cameras import Camera
-from internal.models.gaussian import GaussianModel
+from ..instantiate_config import Instantiable
+from ..cameras import Camera
+from ..models.gaussian import GaussianModel
 
 
 class RendererOutputTypes:
@@ -26,7 +26,7 @@ class RendererOutputInfo:
     type: int = RendererOutputTypes.RGB
     """One defined in `RendererOutputTypes` above"""
 
-    visualizer: RendererOutputVisualizer = None
+    visualizer: RendererOutputVisualizer|None = None
     """
     The first parameter is the value retrieved from the dict returned by `forward()`. 
     The second parameter is the dict returned by `forward()`. 
@@ -61,7 +61,7 @@ class Renderer(torch.nn.Module):
             viewpoint_camera: Camera,
             pc: GaussianModel,
             bg_color: torch.Tensor,
-            render_types: list = None,
+            render_types: list|None = None,
             **kwargs,
     ):
         return self(
@@ -114,6 +114,6 @@ class Renderer(torch.nn.Module):
 
 
 @dataclass
-class RendererConfig(InstantiatableConfig):
+class RendererConfig(Instantiable):
     def instantiate(self, *args, **kwargs) -> Renderer:
         raise NotImplementedError()

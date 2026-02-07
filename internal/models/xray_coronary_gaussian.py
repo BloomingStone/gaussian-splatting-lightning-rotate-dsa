@@ -18,13 +18,13 @@ from .gaussian import (
     HasScaleGetter,
     HasRotationGetter,
 )
-from internal.utils.general_utils import (
+from ..utils.general_utils import (
     inverse_sigmoid,
     strip_symmetric,
     build_scaling_rotation,
 )
-from internal.schedulers import ExponentialDecayScheduler
-from internal.optimizers import OptimizerConfig, Adam
+from ..schedulers import ExponentialDecayScheduler
+from ..optimizers import OptimizerConfig, Adam
 
 @dataclass
 class XrayExponentialDecayScheduler(ExponentialDecayScheduler):

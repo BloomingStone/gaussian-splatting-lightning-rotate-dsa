@@ -10,9 +10,7 @@ from xray_gaussian_rasterization_voxelization import (
     GaussianRasterizer,
 )
 
-from internal.models.gaussian import GaussianModel
 from .renderer import Renderer, RendererOutputInfo, RendererOutputTypes
-from ..schedulers import ExponentialDecayScheduler
 from ..cameras import Camera
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from ..cameras import Camera

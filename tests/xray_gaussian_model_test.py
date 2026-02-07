@@ -15,13 +15,13 @@ from internal.renderers.deformabel_xray_renderer import (
     DeformableRendererOptimizationConfig, DeformModelConfig, CoronaryDeformableXrayRenderer,
 )
 
-from internal.dataparsers.rotated_xray_dataparser import RotatedXRay
+from internal.dataparsers.rotated_xray_dataparser import RotatedXRayParserParam
 from internal.dataset import Dataset
 from internal.savers.x_ray_saver import XRaySaver
 
 class TestDeformableXrayRenderAndSaver(unittest.TestCase):
     def setUp(self):
-        parser = RotatedXRay(
+        parser = RotatedXRayParserParam(
             init_point_cloud_mode="random"
         ).instantiate(
             path="data/volume_dvf_reader_multipli_contrast_LCA",

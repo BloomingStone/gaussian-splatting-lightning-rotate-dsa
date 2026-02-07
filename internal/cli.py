@@ -1,12 +1,13 @@
 import os.path
-import internal.utils.fix_lightning_save_hyperparameters
-import internal.utils.wandb_logger_patch
 import torch
 import jsonargparse
 from jsonargparse import Namespace
 from jsonargparse._typehints import subclass_spec_as_namespace
 from typing import Optional, Union, List, Literal
 from lightning.pytorch.cli import LightningCLI, LightningArgumentParser
+
+from .utils import fix_lightning_save_hyperparameters
+from .utils import wandb_logger_patch
 
 
 def discard_init_args_on_class_path_change(parser_or_action, prev_val, value):

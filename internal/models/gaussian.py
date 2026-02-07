@@ -4,8 +4,8 @@ import torch
 from torch import nn
 import lightning
 
-from internal.configs.instantiate_config import InstantiatableConfig
-from internal.utils.gaussian_containers import FreezableParameterDict
+from ..instantiate_config import Instantiable
+from ..utils.gaussian_containers import FreezableParameterDict
 
 
 class GaussianModel(nn.Module, ABC):
@@ -112,7 +112,7 @@ class GaussianModel(nn.Module, ABC):
         pass
 
 
-class Gaussian(InstantiatableConfig):
+class Gaussian(Instantiable):
     def instantiate(self, *args, **kwargs) -> GaussianModel:
         raise NotImplementedError()
 

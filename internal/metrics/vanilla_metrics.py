@@ -3,10 +3,10 @@ from typing import Tuple, Dict, Literal, Any
 import torch
 from torchmetrics.image import PeakSignalNoiseRatio
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from internal.utils.ssim import ssim
+from ..utils.ssim import ssim
 
 from .metric import Metric, MetricImpl
-from ..configs.instantiate_config import InstantiatableConfig
+from ..instantiate_config import Instantiable
 
 @dataclass
 class VanillaMetrics(Metric):
@@ -26,7 +26,7 @@ class VanillaMetrics(Metric):
 
 
 class VanillaMetricsImpl(MetricImpl):
-    def __init__(self, config: InstantiatableConfig, *args, **kwargs) -> None:
+    def __init__(self, config: Instantiable, *args, **kwargs) -> None:
         super().__init__(config, *args, **kwargs)
 
         self.no_state_dict_models = {}

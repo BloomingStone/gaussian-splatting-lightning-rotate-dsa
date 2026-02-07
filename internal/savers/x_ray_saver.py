@@ -3,13 +3,13 @@ from typing import Literal
 from pathlib import Path
 
 import torch
-from gsplat.exporter import export_splats
 
 from . import Saver, SaverModule
-from internal.gaussian_splatting import GaussianSplatting
-from internal.mp_strategy import MPStrategy
-from internal.models.xray_coronary_gaussian import XrayCoronaryGaussianModel
-from internal.renderers.deformabel_xray_renderer import CoronaryDeformableXrayRenderer
+from ..gaussian_splatting import GaussianSplatting
+from ..mp_strategy import MPStrategy
+from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
+from ..renderers.deformabel_xray_renderer import CoronaryDeformableXrayRenderer
+from ..utils.graphics_utils import store_ply
 
 
 @dataclass
@@ -59,14 +59,9 @@ class XRaySaverModule(SaverModule):
         ply_path = ckpt_dir / f"epoch={epoch}-step={step}{ckpt_suffix}.ply"
 
         gray = torch.exp( - pc.get_density()[moving_mask])
-        sh0 = gray[..., None].repeat(1, 1, 3)
-        export_splats(
-            means=pc.get_means()[moving_mask],
-            scales=pc.get_scales()[moving_mask],
-            quats=pc.get_rotations()[moving_mask],
-            opacities=gray.squeeze(),
-            sh0=sh0,
-            shN=torch.zeros(gray.shape[0], 0, 3).to(sh0),
-            save_to=str(ply_path)
+        store_ply(
+            path=str(ply_path),
+            xyz=pc.get_means()[moving_mask].cpu().numpy(),
+            rgb=(gray.clamp(min=0., max=1.)*255).to(torch.int).cpu().numpy()
         )
         
