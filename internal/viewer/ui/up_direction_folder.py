@@ -2,8 +2,36 @@ import numpy as np
 import viser
 import viser.transforms as vtf
 import torch
-from internal.dataparsers.colmap_dataparser import ColmapDataParser
 
+
+def rotation_matrix(a, b):
+    """Compute the rotation matrix that rotates vector a to vector b.
+
+    Args:
+        a: The vector to rotate.
+        b: The vector to rotate to.
+    Returns:
+        The rotation matrix.
+    """
+    a = a / torch.linalg.norm(a)
+    b = b / torch.linalg.norm(b)
+    v = torch.cross(a, b, dim=-1)
+    c = torch.dot(a, b)
+    # If vectors are exactly opposite, we add a little noise to one of them
+    if c < -1 + 1e-8:
+        eps = (torch.rand(3, dtype=a.dtype, device=a.device) - 0.5) * 0.01
+        return rotation_matrix(a + eps, b)
+    s = torch.linalg.norm(v)
+    skew_sym_mat = torch.tensor(
+        [
+            [0, -v[2], v[1]],
+            [v[2], 0, -v[0]],
+            [-v[1], v[0], 0],
+        ],
+        dtype=a.dtype,
+        device=a.device,
+    )
+    return torch.eye(3, dtype=a.dtype, device=a.device) + skew_sym_mat + skew_sym_mat @ skew_sym_mat * ((1 - c) / (s ** 2 + 1e-8))
 
 class UpDirectionFolder:
     def __init__(self, viewer, server):
@@ -16,7 +44,7 @@ class UpDirectionFolder:
 
         # calculate rotation from current up vector
         def calculate_up_rotation():
-            rotation_matrix_of_up_direction = ColmapDataParser.rotation_matrix(
+            rotation_matrix_of_up_direction = rotation_matrix(
                 torch.tensor(self.viewer.up_direction / np.linalg.norm(self.viewer.up_direction), dtype=torch.float),
                 torch.tensor([0., 0., 1.], dtype=torch.float),
             ).T.numpy()

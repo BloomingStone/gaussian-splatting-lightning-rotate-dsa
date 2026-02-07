@@ -2,9 +2,10 @@ import os
 import glob
 import torch
 from typing import Tuple
-from internal.models.gaussian import Gaussian
-from internal.renderers import RendererConfig
-from internal.renderers.vanilla_renderer import VanillaRenderer
+
+from ..models.gaussian import Gaussian
+from ..renderers import RendererConfig
+from ..renderers.vanilla_renderer import VanillaRenderer
 
 
 class GaussianModelLoader:

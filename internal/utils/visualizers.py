@@ -1,7 +1,7 @@
 from typing import Literal, Dict, Callable
 import torch
 import matplotlib
-from internal.renderers.renderer import RendererOutputTypes, RendererOutputVisualizer, RendererOutputInfo
+from ..renderers.renderer import RendererOutputTypes, RendererOutputVisualizer, RendererOutputInfo
 
 
 class Visualizers:

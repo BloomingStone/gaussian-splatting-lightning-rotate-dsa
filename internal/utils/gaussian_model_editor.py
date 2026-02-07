@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from internal.utils import gaussian_utils
+from ..utils import gaussian_utils
 
 
 class MultipleGaussianModelEditor:
@@ -62,11 +62,11 @@ class MultipleGaussianModelEditor:
     def get_opacity(self):
         return self.get_opacities()
 
-    def select(self, mask: torch.tensor):
+    def select(self, mask: torch.Tensor):
         self._modified_opacities = torch.clone(self.gaussian_model.get_opacities())
         self._modified_opacities[mask] = 0.
 
-    def delete_gaussians(self, mask: torch.tensor):
+    def delete_gaussians(self, mask: torch.Tensor):
         self._modified_opacities = None
 
         gaussians_to_be_preserved = torch.bitwise_not(mask).to(device=self.gaussian_model.means.device)

@@ -6,10 +6,10 @@ import torch
 from gsplat.exporter import export_splats
 
 from . import Saver, SaverModule
-from internal.gaussian_splatting import GaussianSplatting
-from internal.mp_strategy import MPStrategy
-from internal.models.xray_coronary_gaussian import XrayCoronaryGaussianModel
-from internal.renderers.deformabel_xray_renderer import CoronaryDeformableXrayRenderer
+from ..gaussian_splatting import GaussianSplatting
+from ..mp_strategy import MPStrategy
+from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
+from ..renderers.deformabel_xray_renderer import CoronaryDeformableXrayRenderer
 
 
 @dataclass

@@ -1,6 +1,6 @@
 from typing import Tuple, Dict, Any
 import torch
-from internal.configs.instantiate_config import InstantiatableConfig
+from ..instantiate_config import Instantiable
 
 
 class MetricModule(torch.nn.Module):
@@ -31,16 +31,16 @@ class MetricModule(torch.nn.Module):
         return [], []
 
     def get_validate_metrics(self, pl_module, gaussian_model, batch, outputs) -> Tuple[Dict[str, float], Dict[str, bool]]:
-        pass
+        raise NotImplementedError
 
     def on_parameter_move(self, *args, **kwargs):
-        pass
+        raise NotImplementedError
 
 
 class MetricImpl(MetricModule):
     pass
 
 
-class Metric(InstantiatableConfig):
+class Metric(Instantiable):
     def instantiate(self, *args, **kwargs) -> MetricModule:
-        pass
+        raise NotImplementedError

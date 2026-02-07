@@ -4,8 +4,8 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from internal.cameras.cameras import Cameras
-from internal.configs.instantiate_config import InstantiatableConfig
+from ..cameras import Cameras
+from ..instantiate_config import Instantiable
 
 
 @dataclass
@@ -32,6 +32,7 @@ class ImageSet:
         return len(self.image_names)
 
     def __getitem__(self, index):
+        assert self.mask_paths is not None and self.extra_data is not None
         return self.image_names[index], self.image_paths[index], self.mask_paths[index], self.cameras[index], self.extra_data[index]
 
     def __iter__(self):
@@ -89,10 +90,11 @@ class DataParser:
         :return: [training set, validation set, point cloud]
         """
 
-        pass
+        raise NotImplementedError
 
 
 @dataclass
-class DataParserConfig(InstantiatableConfig):
+class DataParserConfig(Instantiable):
     def instantiate(self, path: str, output_path: str, global_rank: int) -> DataParser:
-        pass
+        
+        raise NotImplementedError

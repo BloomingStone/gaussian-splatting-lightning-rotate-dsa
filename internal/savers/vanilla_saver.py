@@ -4,10 +4,10 @@ import torch
 
 from . import Saver, SaverModule
 from lightning import LightningModule
-from internal.mp_strategy import MPStrategy
-from internal.utils.sh_utils import eval_sh
-from internal.utils.graphics_utils import store_ply
-from internal.utils.gaussian_utils import GaussianPlyUtils
+from ..mp_strategy import MPStrategy
+from ..utils.sh_utils import eval_sh
+from ..utils.graphics_utils import store_ply
+from ..utils.gaussian_utils import GaussianPlyUtils
 
 
 @dataclass

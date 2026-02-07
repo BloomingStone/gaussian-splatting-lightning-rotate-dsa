@@ -3,11 +3,11 @@ from abc import ABC, abstractmethod
 
 from lightning import LightningModule
 
-from internal.configs.instantiate_config import InstantiatableConfig
+from internal.instantiate_config import Instantiable
 
 
 @dataclass
-class Saver(InstantiatableConfig, ABC):
+class Saver(Instantiable, ABC):
     @abstractmethod
     def instantiate(self, *args, **kwargs) -> "SaverModule":
         pass

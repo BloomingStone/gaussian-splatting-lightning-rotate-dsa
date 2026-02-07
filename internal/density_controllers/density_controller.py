@@ -2,7 +2,8 @@ from typing import Tuple, Union, List, Dict, Optional, Type
 import torch
 from torch import nn
 from lightning import LightningModule
-from internal.configs.instantiate_config import InstantiatableConfig
+from ..instantiate_config import Instantiable
+from ..models.gaussian import GaussianModel
 
 
 class DensityControllerImpl(torch.nn.Module):
@@ -29,9 +30,9 @@ class DensityControllerImpl(torch.nn.Module):
         pass
 
 
-class DensityController(InstantiatableConfig):
+class DensityController(Instantiable):
     def instantiate(self, *args, **kwargs) -> DensityControllerImpl:
-        pass
+        raise NotImplementedError
 
 
 class Utils:
@@ -87,7 +88,7 @@ class Utils:
         return new_parameters
 
     @classmethod
-    def cat_tensors_to_properties(cls, new_properties: Dict[str, torch.Tensor], model: "internal.models.gaussian.GaussianModel", optimizers: List[torch.optim.Optimizer]):
+    def cat_tensors_to_properties(cls, new_properties: Dict[str, torch.Tensor], model: GaussianModel, optimizers: List[torch.optim.Optimizer]):
         new_parameters = cls.cat_tensors_to_optimizers_(
             new_properties=new_properties,
             optimizers=optimizers,
@@ -133,7 +134,7 @@ class Utils:
         return new_parameters
 
     @classmethod
-    def prune_properties(cls, mask: torch.Tensor, model: "internal.models.gaussian.GaussianModel", optimizers: List[torch.optim.Optimizer]):
+    def prune_properties(cls, mask: torch.Tensor, model: GaussianModel, optimizers: List[torch.optim.Optimizer]):
         new_parameters = cls.prune_optimizers_(mask=mask, optimizers=optimizers)
 
         if len(model.property_names) != len(new_parameters):

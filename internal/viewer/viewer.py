@@ -10,12 +10,11 @@ import viser.transforms as vtf
 import torch
 import yaml
 
-from internal.renderers import VanillaRenderer
-from internal.utils.gaussian_model_loader import GaussianModelLoader
-from internal.utils.gaussian_model_editor import MultipleGaussianModelEditor
-from internal.viewer import ClientThread, ViewerRenderer
-from internal.viewer.ui import populate_render_tab, TransformPanel, EditPanel
-from internal.viewer.ui.up_direction_folder import UpDirectionFolder
+from ..utils.gaussian_model_loader import GaussianModelLoader
+from ..utils.gaussian_model_editor import MultipleGaussianModelEditor
+from ..viewer import ClientThread, ViewerRenderer
+from ..viewer.ui import populate_render_tab, TransformPanel, EditPanel
+from ..viewer.ui.up_direction_folder import UpDirectionFolder
 
 DROPDOWN_USE_DIRECT_APPEARANCE_EMBEDDING_VALUE = "@Direct"
 

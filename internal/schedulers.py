@@ -1,6 +1,6 @@
 from typing import Literal, Optional, Any
 from dataclasses import dataclass, field
-from internal.configs.instantiate_config import InstantiatableConfig
+from internal.instantiate_config import Instantiable
 from torch.optim import Optimizer, lr_scheduler
 from torch.optim.lr_scheduler import LRScheduler
 import numpy as np
@@ -8,7 +8,7 @@ import numpy as np
 
 # `ExponentialDecayScheduler` is copied from NeRFStudio
 
-class Scheduler(InstantiatableConfig):
+class Scheduler(Instantiable):
     def instantiate(self, *args, **kwargs) -> "SchedulerImpl":
         raise NotImplementedError()
 

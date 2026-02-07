@@ -16,9 +16,9 @@ import torch.utils.data
 from lightning import LightningDataModule
 from lightning.pytorch.utilities.types import EVAL_DATALOADERS, TRAIN_DATALOADERS
 
-from internal.cameras.cameras import CameraType, Camera
-from internal.dataparsers import DataParserConfig, ImageSet
-from internal.utils.graphics_utils import store_ply, BasicPointCloud
+from .cameras import CameraType, Camera
+from .dataparsers import DataParserConfig, ImageSet
+from .utils.graphics_utils import store_ply, BasicPointCloud
 
 from tqdm import tqdm
 
@@ -315,7 +315,7 @@ class DataModule(LightningDataModule):
     def __init__(
             self,
             path: str,
-            parser: DataParserConfig = None,
+            parser: DataParserConfig,
             distributed: bool = False,
             undistort_image: bool = False,
             val_on_train: bool = False,
@@ -351,10 +351,8 @@ class DataModule(LightningDataModule):
         super().__init__()
 
         assert image_scale_factor == 1., f"specifying 'image_scale_factor' has not been implemented yet"
-
-        if parser is None:
-            parser = self.detect_dataset_type(path)
-            print(f"Detected dataset type: {parser.__class__.__name__}")
+        
+        self.parser = parser
 
         self.save_hyperparameters()
 
@@ -367,23 +365,6 @@ class DataModule(LightningDataModule):
         if self.hparams["image_on_cpu"] is False:
             self.image_device = device
 
-    @staticmethod
-    def detect_dataset_type(path):
-        if os.path.isdir(os.path.join(path, "sparse")) is True:
-            from internal.dataparsers.colmap_dataparser import Colmap
-            return Colmap()
-        elif os.path.exists(os.path.join(path, "transforms_train.json")):
-            from internal.dataparsers.blender_dataparser import Blender
-            return Blender()
-        elif os.path.exists(os.path.join(path, "intrinsics.txt")) and os.path.exists(os.path.join(path, "bbox.txt")):
-            from internal.dataparsers.nsvf_dataparser import NSVF
-            return NSVF()
-        elif os.path.exists(os.path.join(path, "dataset.json")):
-            from internal.dataparsers.nerfies_dataparser import Nerfies
-            return Nerfies()
-        else:
-            raise ValueError("Can not detect dataset type, please specify via '--data.parser'")
-
     def setup(self, stage: str) -> None:
         super().setup(stage)
 
@@ -392,7 +373,7 @@ class DataModule(LightningDataModule):
         # store global rank, will be used as the seed of the CacheDataLoader
         self.global_rank = self.trainer.global_rank
 
-        dataparser = self.hparams["parser"].instantiate(path=self.hparams["path"], output_path=output_path, global_rank=self.global_rank)
+        dataparser = self.parser.instantiate(path=self.hparams["path"], output_path=output_path, global_rank=self.global_rank)
 
         # load dataset
         self.dataparser_outputs = dataparser.get_outputs()
@@ -435,9 +416,7 @@ class DataModule(LightningDataModule):
                     'fx': float(camera.fx),
                     'cx': camera.cx.item(),
                     'cy': camera.cy.item(),
-                    'time': camera.time.item() if camera.time is not None else None,
-                    'appearance_id': camera.appearance_id.item() if camera.appearance_id is not None else None,
-                    'normalized_appearance_id': camera.normalized_appearance_id.item() if camera.normalized_appearance_id is not None else None,
+                    'time': camera.time.item() if camera.time is not None else None
                 })
             with open(os.path.join(output_path, "cameras.json"), "w") as f:
                 json.dump(cameras, f, indent=4, ensure_ascii=False)

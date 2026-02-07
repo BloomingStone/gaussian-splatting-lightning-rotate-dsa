@@ -1,14 +1,14 @@
 from typing import Tuple
 import torch
-import internal.renderers as renderers
-from internal.utils.visualizers import Visualizers
+from ..renderers.renderer import Renderer, RendererConfig, RendererOutputInfo, RendererOutputTypes, RendererOutputVisualizer
+from ..utils.visualizers import Visualizers
 
 
 class ViewerRenderer:
     def __init__(
             self,
             gaussian_model,
-            renderer: renderers.Renderer,
+            renderer: Renderer,
             background_color,
             difix: bool = False,
     ):
@@ -22,9 +22,9 @@ class ViewerRenderer:
         self.depth_map_color_map = "turbo"
 
         # TODO: initial value should get from renderer
-        self.output_info: Tuple[str, renderers.RendererOutputInfo, renderers.RendererOutputVisualizer] = (
+        self.output_info: Tuple[str, RendererOutputInfo, RendererOutputVisualizer] = (
             "rgb",
-            renderers.RendererOutputInfo("render"),
+            RendererOutputInfo("render"),
             self.no_processing,
         )
 
@@ -36,8 +36,8 @@ class ViewerRenderer:
     def set_output_info(
             self,
             name: str,
-            renderer_output_info: renderers.RendererOutputInfo,
-            visualizer: renderers.RendererOutputVisualizer,
+            renderer_output_info: RendererOutputInfo,
+            visualizer: RendererOutputVisualizer,
     ):
         self.output_info = (
             name,
@@ -75,25 +75,25 @@ class ViewerRenderer:
         self.max_depth_gui_number.visible = visible
         self.depth_map_color_map_dropdown.visible = visible
 
-    def _set_output_type(self, name: str, renderer_output_info: renderers.RendererOutputInfo):
+    def _set_output_type(self, name: str, renderer_output_info: RendererOutputInfo):
         """
         Update properties
         """
         # toggle depth map option, only enable when type is `gray` and `visualizer` is None
-        self._set_depth_map_option_visibility(renderer_output_info.type == renderers.RendererOutputTypes.GRAY and renderer_output_info.visualizer is None)
+        self._set_depth_map_option_visibility(renderer_output_info.type == RendererOutputTypes.GRAY and renderer_output_info.visualizer is None)
 
         # set visualizer
         visualizer = renderer_output_info.visualizer
         if visualizer is None:
-            if renderer_output_info.type == renderers.RendererOutputTypes.RGB:
+            if renderer_output_info.type == RendererOutputTypes.RGB:
                 visualizer = self.no_processing
                 if self.difix_enabled:
                     visualizer = self.difix_processor
-            elif renderer_output_info.type == renderers.RendererOutputTypes.GRAY:
+            elif renderer_output_info.type == RendererOutputTypes.GRAY:
                 visualizer = self.depth_map_processor
-            elif renderer_output_info.type == renderers.RendererOutputTypes.NORMAL_MAP:
+            elif renderer_output_info.type == RendererOutputTypes.NORMAL_MAP:
                 visualizer = self.normal_map_processor
-            elif renderer_output_info.type == renderers.RendererOutputTypes.FEATURE_MAP:
+            elif renderer_output_info.type == RendererOutputTypes.FEATURE_MAP:
                 visualizer = self.feature_map_processor
             else:
                 raise ValueError(f"Unsupported output type `{renderer_output_info.type}`")

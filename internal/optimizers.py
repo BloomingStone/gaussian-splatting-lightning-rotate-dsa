@@ -2,11 +2,11 @@ from typing import Tuple
 from dataclasses import dataclass
 from typing import Any
 import torch
-from internal.configs.instantiate_config import InstantiatableConfig
+from internal.instantiate_config import Instantiable
 
 
 @dataclass
-class OptimizerConfig(InstantiatableConfig):
+class OptimizerConfig(Instantiable):
     def instantiate(self, params, lr: float, *args, **kwargs) -> Any:
         raise NotImplementedError()
 

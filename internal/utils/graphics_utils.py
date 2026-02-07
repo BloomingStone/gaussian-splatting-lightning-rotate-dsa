@@ -19,9 +19,9 @@ from plyfile import PlyData, PlyElement
 
 @dataclass
 class BasicPointCloud:
-    points: np.array
-    colors: np.array
-    normals: np.array = None
+    points: np.ndarray
+    colors: np.ndarray
+    normals: np.ndarray = None
 
 
 def fetch_ply_without_rgb_normalization(path):
