@@ -449,4 +449,4 @@ class XrayCoronaryGaussianModel(
 
             return non_pre_activated_properties
         else:
-            return self.properties 
+            return self.properties

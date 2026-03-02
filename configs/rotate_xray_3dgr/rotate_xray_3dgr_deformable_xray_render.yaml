@@ -6,6 +6,20 @@ trainer:
   log_every_n_steps: 50   # test
   precision: 16-mixed
 
+save_iterations:
+  - 1000
+  - 2000
+  - 4000
+  - 6000
+  - 8000
+  - 10000
+  - 12000
+  - 14000
+  - 16000
+  - 18000
+  - 20000
+
+
 data:
   val_max_num_images_to_cache: -1
   test_max_num_images_to_cache: -1

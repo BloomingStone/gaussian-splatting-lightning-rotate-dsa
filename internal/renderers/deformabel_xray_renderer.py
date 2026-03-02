@@ -45,7 +45,6 @@ class RenderRes:
     d_rotation: Tensor
     d_scales: Tensor
     
-    coronary_props: Tensor
     time: Tensor
     
     in_warm_up: bool
@@ -101,7 +100,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         time = viewpoint_camera.time.unsqueeze(0).expand(means3D.shape[0], -1)
         
 
-        d_xyz, d_scaling, d_rotation, coronary_props = self.deform_model(means3D.detach(), time)
+        d_xyz, d_scaling, d_rotation = self.deform_model(means3D.detach(), time)
         torch.cuda.empty_cache()  # avoid CUDA OOM
         means3D = means3D + d_xyz
         d_rotation = torch.nn.functional.normalize(d_rotation)
@@ -116,9 +115,15 @@ class CoronaryDeformableXrayRenderer(Renderer):
         viewspace_points = meta_whole["viewspace_points"]
         radii = meta_whole["radii"]
         visibility_filter = radii > 0
+        
+        density_95_percentile = torch.quantile(density, 0.95)
+        mask = (density > density_95_percentile).squeeze()
+        if not torch.any(mask):
+            mask = torch.ones_like(mask, dtype=torch.bool)
+        
         gray_coronary, _ = self._render(
-            viewpoint_camera, means3D, rotation, 
-            scales, density*coronary_props
+            viewpoint_camera, means3D[mask], rotation[mask], 
+            scales[mask], density[mask]
         )
         
         res = RenderRes(
@@ -126,7 +131,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
             viewspace_points, visibility_filter, radii, # grad meta
             d_motion_mean, d_motion_var,    # moving mean & var
             d_xyz, d_rotation, d_scaling,      # deform properties
-            coronary_props.squeeze(), viewpoint_camera.time,
+            viewpoint_camera.time,
             in_warm_up=False
         )
         return res
@@ -155,8 +160,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
             time = time + ast_noise
 
         # update means3D, rotation, scales
-        d_xyz, d_scaling, d_rotation, coronary_props = self.deform_model(means3D.detach(), time.detach())
-        assert torch.isnan(coronary_props).sum() == 0, "coronary_props has NaN!"
+        d_xyz, d_scaling, d_rotation = self.deform_model(means3D.detach(), time.detach())
         
         means3D = means3D + d_xyz
         scales = scales + d_scaling
@@ -177,7 +181,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
             viewspace_points, visibility_filter, radii, # grad meta
             d_motion_mean, d_motion_var,    # moving mean & var
             d_xyz, d_rotation, d_scaling,      # deforms
-            coronary_props.squeeze(), viewpoint_camera.time,
+            viewpoint_camera.time,
             in_warm_up=step <= self.optimization_config.warm_up
         )
     

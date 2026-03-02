@@ -110,57 +110,11 @@ class RotateXrayMetricsImpl(MetricImpl):
         
         ssim_metric_whole = self.ssim(outputs.gray_image, gt_image)
         ssim_loss_whole = 1.0 - ssim_metric_whole
-        
-        p = outputs.coronary_props.clamp(0., 1.)
-        p_mean = p.mean()
-        p_entropy = entropy(p ** self.config.props_entropy_k, eps=1e-6)
-        
-        xyz_var_norm = torch.norm(outputs.d_motion_var[:, :3], dim=-1)
-        xyz_mean_norm = torch.norm(outputs.d_motion_mean[:, :3], dim=-1)
-        
-        motion_var_mean = xyz_var_norm[p.squeeze() > 0.5].mean()
-        L_motion = torch.exp( - xyz_mean_norm[p.squeeze() > 0.5]).mean().clamp(0., 1.)   # we want to maximize the motion
 
-        if pl_module.global_step < self.config.structure_loss_start_step:
-            w_p_entropy = 0.0
-            w_p_mean = 0.0
-            loss_motion_corr = torch.tensor(0.0, device=gt_image.device)
-            loss_density_corr = torch.tensor(0.0, device=gt_image.device)
-        else:
-            w_p_entropy = self.config.w_coronary_props_entropy
-            w_p_mean = self.config.w_coronary_props
-            loss_motion_corr = corr_loss(p, xyz_var_norm+xyz_mean_norm)
-            s = torch.topk(gaussian_model.get_scales(), k=2, dim=-1)[0][:, -1]
-            pho = gaussian_model.get_density().squeeze() / s
-            pho = pho.clamp(1e-5, 1e5)
-            loss_density_corr = corr_loss(p, pho)
-            
-        if torch.isnan(loss_motion_corr) or loss_motion_corr > 0.3:
-            loss_motion_corr = torch.tensor(0.0, device=loss_motion_corr.device)
-        
-        if torch.isnan(p_entropy):
-            p_entropy = torch.tensor(0.0, device=p_entropy.device)
-            
-        if torch.isnan(L_motion):
-            L_motion = torch.tensor(0.0, device=L_motion.device)
-            
-        if torch.isnan(motion_var_mean):
-            motion_var_mean = torch.tensor(0.0, device=motion_var_mean.device)
-        
         loss = (
             # image loss
             self.config.w_gray_loss_whole * gray_loss_whole +
-            self.config.w_ssim_loss_whole * ssim_loss_whole +
-            
-            # motion  loss
-            self.config.w_motion_var_loss * motion_var_mean +
-            self.config.w_motion_mean_loss * L_motion +
-            
-            # structural loss
-            w_p_mean                * p_mean +
-            w_p_entropy             * p_entropy + 
-            self.config.w_motion_corr_loss * loss_motion_corr + 
-            self.config.w_density_corr_loss * loss_density_corr
+            self.config.w_ssim_loss_whole * ssim_loss_whole
         )
         
         window = min(pl_module.global_step / self.config.iter_aware_window_length, 1.0)
@@ -174,25 +128,11 @@ class RotateXrayMetricsImpl(MetricImpl):
             
             "gray_loss_whole": gray_loss_whole,
             "ssim_loss_whole": ssim_loss_whole,
-            
-            "motion_var_mean": motion_var_mean,
-            "motion_mean_mean": L_motion,
-            
-            "coronary_props_mean": p_mean,
-            "coronary_props_entropy": p_entropy,
-            "loss_corr": loss_motion_corr
         }, {
             "loss": True,
             
             "gray_loss_whole": True,
             "ssim_loss_whole": True,
-            
-            "motion_var_mean": False,
-            "motion_mean_mean": True,
-            
-            "coronary_props_mean": True,
-            "coronary_props_entropy": True,
-            "loss_corr": True,
         }
     
     def get_train_metrics(self, pl_module, gaussian_model, step: int, batch, outputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:

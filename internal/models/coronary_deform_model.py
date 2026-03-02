@@ -116,23 +116,22 @@ class DeformModel(nn.Module):
             self, 
             xyz: torch.Tensor,
             phase: torch.Tensor,
-        )-> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        )-> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         phase_emb = self.embed_phase_fn(phase)
         x_emb = self.embed_fn(xyz)
         
         assert not torch.any(torch.isnan(x_emb)), "NaN detected in x_emb"
-        coronary_props = F.sigmoid(self.coronary_props_warp(x_emb)*10.)
         
         h_combine = self.combine_mlp(torch.cat([x_emb, phase_emb], dim=-1))
         
-        d_xyz = self.xyz_warp(h_combine) * coronary_props
-        d_scaling = self.scaling_warp(h_combine) * coronary_props
+        d_xyz = self.xyz_warp(h_combine)
+        d_scaling = self.scaling_warp(h_combine)
         
         # \omega = |\vec{v}|
         # q = (\cos(\omega/2), \frac{\vec{v}}{\omega} \cdot \sin(\omega/2))
         #   = (\cos(\omega/2), vec{v}/2 \cdot \text{sinc}(\frac{\omega}{2\pi}))
         # torch.sinc(x) = sin(pi*x)/(pi*x)
-        axial_angle: torch.Tensor = self.axial_angle_warp(h_combine)  * coronary_props
+        axial_angle: torch.Tensor = self.axial_angle_warp(h_combine)
         axial_angle = axial_angle.float()
         omega = torch.sqrt(torch.sum(axial_angle**2, dim=-1, keepdim=True) + 1e-10)
         q_w = torch.cos(omega / 2.)
@@ -140,4 +139,4 @@ class DeformModel(nn.Module):
         
         d_rotation = torch.cat([q_w, q_v], dim=-1).to(xyz)
         
-        return d_xyz, d_scaling, d_rotation, coronary_props
+        return d_xyz, d_scaling, d_rotation
