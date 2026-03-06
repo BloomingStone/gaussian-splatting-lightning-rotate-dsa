@@ -116,8 +116,8 @@ class CoronaryDeformableXrayRenderer(Renderer):
         radii = meta_whole["radii"]
         visibility_filter = radii > 0
         
-        density_95_percentile = torch.quantile(density, 0.95)
-        mask = (density > density_95_percentile).squeeze()
+        density_90_percentile = torch.quantile(density, 0.90)
+        mask = (density > density_90_percentile).squeeze()
         if not torch.any(mask):
             mask = torch.ones_like(mask, dtype=torch.bool)
         

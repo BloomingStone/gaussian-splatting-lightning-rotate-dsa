@@ -229,8 +229,9 @@ def gaussians_to_volume(
             inv = Sigma_inv[i]
             
             # 只在 3σ bounding box 内计算
-            local_min = mu - 3 * sigma.max()
-            local_max = mu + 3 * sigma.max()
+            sigma_max = torch.abs(sigma).max()
+            local_min = mu - 3 * sigma_max
+            local_max = mu + 3 * sigma_max
             
             # 转为 voxel index
             vmin = ((local_min - mins) / spacing).long()
