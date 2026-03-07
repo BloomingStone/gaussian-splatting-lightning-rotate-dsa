@@ -11,7 +11,7 @@ from ..gaussian_splatting import GaussianSplatting
 from ..mp_strategy import MPStrategy
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from ..renderers.deformabel_xray_renderer import CoronaryDeformableXrayRenderer
-from ..utils.gaussian_utils import GaussianTransformUtils
+from ..models.coronary_deform_model import DeformModel
 
 
 def quaternion_to_matrix(q: torch.Tensor) -> torch.Tensor:
@@ -264,6 +264,9 @@ def gaussians_to_volume(
                 grid[:, 2].long()
             ] += val
             
+            if not torch.isfinite(volume).all():
+                raise FloatingPointError(f"val contains inf or nan")
+            
 
         volume = volume.reshape(D, H, W)
 
@@ -312,11 +315,10 @@ class XRaySaverModule(SaverModule):
             means3D.detach(), 
             torch.zeros(means3D.shape[0], 1).to(means3D.device)
         )
-
-        means3D = means3D + d_xyz
-        scales = scales + d_scaling
-        d_rotation = torch.nn.functional.normalize(d_rotation)
-        rotation = GaussianTransformUtils.quat_multiply(rotation, d_rotation)
+        
+        means3D, rotation, scales = DeformModel.deform(
+            means3D, rotation, scales, d_xyz, d_rotation, d_scaling
+        )
         
         ply_path = ckpt_dir / f"epoch={epoch}-step={step}{ckpt_suffix}.ply"
 

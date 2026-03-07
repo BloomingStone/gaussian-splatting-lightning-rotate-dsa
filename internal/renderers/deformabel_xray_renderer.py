@@ -102,10 +102,9 @@ class CoronaryDeformableXrayRenderer(Renderer):
 
         d_xyz, d_scaling, d_rotation = self.deform_model(means3D.detach(), time)
         torch.cuda.empty_cache()  # avoid CUDA OOM
-        means3D = means3D + d_xyz
-        d_rotation = torch.nn.functional.normalize(d_rotation)
-        rotation = GaussianTransformUtils.quat_multiply(rotation, d_rotation)
-        scales = scales + d_scaling
+        means3D, rotation, scales = DeformModel.deform(
+            means3D, rotation, scales, d_xyz, d_rotation, d_scaling
+        )
         
         d_motion_mean = pc.get_motion_mean().detach()
         d_motion_var = pc.get_motion_var().detach()
@@ -161,11 +160,10 @@ class CoronaryDeformableXrayRenderer(Renderer):
 
         # update means3D, rotation, scales
         d_xyz, d_scaling, d_rotation = self.deform_model(means3D.detach(), time.detach())
-        
-        means3D = means3D + d_xyz
-        scales = scales + d_scaling
-        d_rotation = torch.nn.functional.normalize(d_rotation)
-        rotation = GaussianTransformUtils.quat_multiply(rotation, d_rotation)
+        torch.cuda.empty_cache()  # avoid CUDA OOM
+        means3D, rotation, scales = DeformModel.deform(
+            means3D, rotation, scales, d_xyz, d_rotation, d_scaling
+        )
         d_motion_mean, d_motion_var = pc.update_motions(d_xyz, d_scaling, d_rotation)   #EMA of motion
 
         gray_image, meta_whole = self._render(viewpoint_camera, means3D, rotation, scales, density)

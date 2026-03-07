@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from ..utils.network_factory import NetworkFactory
+from ..utils.gaussian_utils import GaussianTransformUtils
 from ..encodings.vector_positional_encoding import VectorPositionalEncoding
 
 
@@ -69,6 +70,13 @@ class DeformModelConfig:
     base_resolution: int = 16
     max_resolution: int = 2048
 
+class Scale(nn.Module):
+    def __init__(self, s):
+        super().__init__()
+        self.s = s
+    def forward(self, x):
+        return x * self.s
+
 class DeformModel(nn.Module):
     def __init__(
             self,
@@ -109,14 +117,33 @@ class DeformModel(nn.Module):
         self.coronary_props_warp = _linear(emb_x_ch, 1)
         
         self.xyz_warp = _linear(self.cfg.combine_W, 3)
-        self.scaling_warp = _linear(self.cfg.combine_W, 3)
-        self.axial_angle_warp = _linear(self.cfg.combine_W, 3)
+        self.scaling_warp = nn.Sequential(
+            _linear(self.cfg.combine_W, 3),
+            nn.Tanh(),      # to avoid too large scaling change
+        )
+        
+        _linear(self.cfg.combine_W, 3)
+        self.axial_angle_warp = nn.Sequential(
+            _linear(self.cfg.combine_W, 3),
+            nn.Tanh(),      # w = |\vec{v}| <= \sqrt(1+1+1) = 1.73 rad = 99.2 degree
+        )
+        
 
     def forward(
-            self, 
-            xyz: torch.Tensor,
-            phase: torch.Tensor,
-        )-> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        self, 
+        xyz: torch.Tensor,
+        phase: torch.Tensor,
+    )-> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Forward pass of the deformable model.
+        Args:
+            xyz: [n, 3] the coordinates of the points to be deformed
+            phase: [1] the current phase of the cardiac cycle, normalized to [0, 1]
+        Returns:
+            d_xyz: [n, 3] \\in R^3, the translation for each point
+            d_scaling: [n, 3] \\in [-1, 1], the scaling change for each point, where the new scaling will be scaling * (1 + d_scaling)
+            d_rotation: [n, 4] \\in [-0.1*\\sqrt{3}, 0.1*\\sqrt{3}], the rotation for each point in quaternion format (w, x, y, z), where the new rotation will be rotation * d_rotation
+        """
         phase_emb = self.embed_phase_fn(phase)
         x_emb = self.embed_fn(xyz)
         
@@ -131,12 +158,27 @@ class DeformModel(nn.Module):
         # q = (\cos(\omega/2), \frac{\vec{v}}{\omega} \cdot \sin(\omega/2))
         #   = (\cos(\omega/2), vec{v}/2 \cdot \text{sinc}(\frac{\omega}{2\pi}))
         # torch.sinc(x) = sin(pi*x)/(pi*x)
-        axial_angle: torch.Tensor = self.axial_angle_warp(h_combine)
-        axial_angle = axial_angle.float()
+        axial_angle: torch.Tensor = self.axial_angle_warp(h_combine).float()
         omega = torch.sqrt(torch.sum(axial_angle**2, dim=-1, keepdim=True) + 1e-10)
         q_w = torch.cos(omega / 2.)
         q_v = axial_angle / 2. * torch.sinc(omega / (2. * torch.pi))
         
         d_rotation = torch.cat([q_w, q_v], dim=-1).to(xyz)
+        d_rotation = torch.nn.functional.normalize(d_rotation)
         
         return d_xyz, d_scaling, d_rotation
+    
+    @staticmethod
+    def deform(
+        xyz: torch.Tensor,
+        rotation: torch.Tensor,
+        scaling: torch.Tensor,
+        d_xyz: torch.Tensor,
+        d_rotation: torch.Tensor,
+        d_scaling: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        xyz = xyz + d_xyz
+        scaling = scaling * (1 + d_scaling)
+        rotation = GaussianTransformUtils.quat_multiply(rotation, d_rotation)
+        
+        return xyz, rotation, scaling
