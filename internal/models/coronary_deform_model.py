@@ -117,15 +117,12 @@ class DeformModel(nn.Module):
         self.coronary_props_warp = _linear(emb_x_ch, 1)
         
         self.xyz_warp = _linear(self.cfg.combine_W, 3)
-        self.scaling_warp = nn.Sequential(
-            _linear(self.cfg.combine_W, 3),
-            nn.Tanh(),      # to avoid too large scaling change
-        )
+        self.scaling_warp = _linear(self.cfg.combine_W, 3)
         
         _linear(self.cfg.combine_W, 3)
         self.axial_angle_warp = nn.Sequential(
             _linear(self.cfg.combine_W, 3),
-            nn.Tanh(),      # w = |\vec{v}| <= \sqrt(1+1+1) = 1.73 rad = 99.2 degree
+            nn.Tanh(),      # w = |\vec{v}| <= \sqrt(1+1+1) = 1.73 rad = 99.2 degree  
         )
         
 
@@ -178,7 +175,7 @@ class DeformModel(nn.Module):
         d_scaling: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         xyz = xyz + d_xyz
-        scaling = scaling * (1 + d_scaling)
+        scaling = scaling * torch.exp(d_scaling)
         rotation = GaussianTransformUtils.quat_multiply(rotation, d_rotation)
         
         return xyz, rotation, scaling

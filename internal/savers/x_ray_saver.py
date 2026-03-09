@@ -5,6 +5,8 @@ import numpy as np
 import torch
 from gsplat.exporter import export_splats
 import nibabel as nib
+from nibabel import loadsave as nib_io
+from nibabel.nifti1 import Nifti1Image
 
 from . import Saver, SaverModule
 from ..gaussian_splatting import GaussianSplatting
@@ -194,9 +196,8 @@ def gaussians_to_volume(
         density = density.detach().float()
 
         # ---------- bounding box ----------
-        extent = 3.0 * scales.max(dim=1)[0].unsqueeze(1)
-        mins = (means3D - extent).min(dim=0).values
-        maxs = (means3D + extent).max(dim=0).values
+        mins = means3D.min(dim=0).values
+        maxs = means3D.max(dim=0).values
         
         bounding_min = torch.quantile(mins, 0.01)
         bounding_max = torch.quantile(maxs, 0.99)
@@ -340,5 +341,5 @@ class XRaySaverModule(SaverModule):
         torch.cuda.empty_cache()  # avoid CUDA OOM
         
         nii_path = ckpt_dir / f"volume__epoch={epoch}-step={step}{ckpt_suffix}.nii.gz"
-        nib.loadsave.save(nib.nifti1.Nifti1Image(volume, affine), str(nii_path))
+        nib_io.save(Nifti1Image(volume, affine), str(nii_path))
         
