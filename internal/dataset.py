@@ -374,6 +374,7 @@ class DataModule(LightningDataModule):
         self.global_rank = self.trainer.global_rank
 
         dataparser = self.parser.instantiate(path=self.hparams["path"], output_path=output_path, global_rank=self.global_rank)
+        self.dataparser = dataparser
 
         # load dataset
         self.dataparser_outputs = dataparser.get_outputs()

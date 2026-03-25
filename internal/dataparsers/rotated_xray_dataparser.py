@@ -5,6 +5,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch import Tensor
+from jaxtyping import Float32
 
 from ..dataparsers.dataparser import DataParserConfig, DataParser, DataParserOutputs, ImageSet, PointCloud
 from ..cameras import Cameras
@@ -82,12 +84,14 @@ class RotatedXRay(DataParserConfig):
         random: will use random sampling in given range to init point cloud
         FBP: use FBP to construct volume from images firstly, then sample points by volume value.
         DL: use deep learning to init point cloud.
+    init_point_cloud_num: number of points to init point cloud, only used when init_point_cloud_mode is uniform or random.
+    coronary_type: only used when init_point_cloud_mode is label, specify which coronary to reconstruct
     """
     base_name: str = "rotate_dsa"
     mode: Literal["reconstruction", "render-new-views"] = "reconstruction"
     init_point_cloud_mode: Literal["uniform", "random", "random-ball", "FBP", "DL", "label", "central-line"] = "uniform"
     init_point_cloud_num: int = 100_000
-    coronary_type: Literal["LCA", "RCA"] = "LCA"
+    coronary_type: Literal["LCA", "RCA"]|None = None
     
     # use_angles: bool = True    # if use angles to init cameras, will use angles to init cameras, otherwise will use R_w2c and T_w2c to init cameras
     
@@ -101,7 +105,7 @@ def _get_frames_param(json_data: dict, key: str, indices: list[int] | None = Non
     if indices is None:
         return torch.tensor([d[key] for d in json_data["frames"]])
     else:
-        return torch.tensor([d[key] for i, d in enumerate(json_data["frames"]) if i in indices])
+        return torch.tensor([json_data["frames"][i][key] for i in indices])
 
 
 def _get_cameras(json_data: dict, indices: list[int] | None = None) -> Cameras:
@@ -162,12 +166,6 @@ def _get_cameras(json_data: dict, indices: list[int] | None = None) -> Cameras:
     )
 
 
-def _get_bounds(json_data: dict) -> np.ndarray:
-    shape = np.array(json_data["volume_size"])
-    affine = np.array(json_data["volume_affine"])
-    return np.abs(affine[:3, :3]) @ shape
-
-
 def _filter_points_visible(
     points: np.ndarray,
     cameras: Cameras,
@@ -221,6 +219,10 @@ class RotatedXRayDataParser(DataParser):
         self.output_path = output_path
         self.global_rank = global_rank
         self.params = params
+        self._data: dict|None = None
+        self._coronary_type: Literal["LCA", "RCA"]|None = params.coronary_type
+        self._volume_shape: tuple[int, int, int]|None = None
+        self._affine_dict: dict[Literal["LCA", "RCA", "volume"], np.ndarray]|None = None
     
     def _random_split(self, n_images: int) -> tuple[list[int], list[int]]:
         indices = np.arange(n_images)
@@ -236,10 +238,20 @@ class RotatedXRayDataParser(DataParser):
         images_dir = data_root / self.params.base_name
         label_dir = data_root / "label"
         json_path = data_root / f"{self.params.base_name}.json"
-        depth_npy = np.load(data_root / "depth_map.npy")
+        depth_npy = np.load(data_root / "depth_map.npz")["arr_0"]
         
         with open(json_path, "r") as f:
             data = json.load(f)
+        
+        self._data = data
+        self._coronary_type = data["coronary_type"].upper()
+        assert self._coronary_type in ["LCA", "RCA"], f"Unknown coronary type: {self._coronary_type}"
+        self._volume_shape = tuple(data["volume_size"])
+        self._affine_dict = {
+            "LCA": np.array(data["lca_centering_affine"]),
+            "RCA": np.array(data["rca_centering_affine"]),
+            "volume": np.array(data["volume_affine"]),
+        }
         
         image_paths = [f.absolute() for f in sorted(images_dir.glob("*.png"))]
         label_paths = [f.absolute() for f in sorted(label_dir.glob("*.png"))]
@@ -278,7 +290,7 @@ class RotatedXRayDataParser(DataParser):
         else:
             raise ValueError(f"Unknown mode: {self.params.mode}")
         
-        bounds = _get_bounds(data)
+        bounds = self._get_bounds()
         match self.params.init_point_cloud_mode:
             case "uniform":
                 size = int(round(self.params.init_point_cloud_num ** (1/3)))
@@ -303,9 +315,15 @@ class RotatedXRayDataParser(DataParser):
             case "DL":
                 raise NotImplementedError   # TODO
             case "label":
+                assert self.params.coronary_type is not None, "coronary_type must be specified when init_point_cloud_mode is label"
+                assert self.params.coronary_type == self._coronary_type, f"coronary_type in params ({self.params.coronary_type}) must be the same as coronary_type in data ({self._coronary_type})"
                 xyz = init_point_cloud_from_label(data_root / "label_3d.nii.gz", coronary_type=self.params.coronary_type)
+                xyz_background = _get_backgound_gaussian_from_xyz(torch.from_numpy(xyz).float()).numpy()
+                xyz = np.concatenate([xyz, xyz_background], axis=0)
             case "central-line":
-                xyz = np.load(data_root / "central_line.npy")
+                xyz = np.load(data_root / "central_line.npz")["arr_0"]
+                xyz_background = _get_backgound_gaussian_from_xyz(torch.from_numpy(xyz).float()).numpy()
+                xyz = np.concatenate([xyz, xyz_background], axis=0)
             case _:
                 raise ValueError(f"Unknown init_point_cloud_mod: {self.params.init_point_cloud_mode}")
         
@@ -317,6 +335,36 @@ class RotatedXRayDataParser(DataParser):
             test_set=test_set,
             point_cloud=PointCloud(xyz=xyz, rgb=rgb)
         )
+    
+    @property
+    def coronary_type(self) -> Literal["LCA", "RCA"]:
+        assert self._coronary_type is not None, "coronary_type is not set yet"
+        return self._coronary_type
+    
+    @property
+    def volume_shape(self) -> tuple[int, int, int]:
+        assert self._volume_shape is not None, "volume_shape is not set yet"
+        return self._volume_shape
+    
+    @property
+    def volume_affine(self) -> np.ndarray:
+        assert self._affine_dict is not None, "affine_dict is not set yet"
+        return self._affine_dict["volume"]
+    
+    @property
+    def data(self) -> dict:
+        assert self._data is not None, "data is not set yet"
+        return self._data
+    
+    @property
+    def coronary_affine(self) -> np.ndarray:
+        assert self._affine_dict is not None, "affine_dict is not set yet"
+        return self._affine_dict[self.coronary_type]
+
+    def _get_bounds(self) -> np.ndarray:
+        shape = np.array(self.volume_shape)
+        affine = self.volume_affine
+        return np.abs(affine[:3, :3]) @ shape
 
 
 def init_point_cloud_from_label(
@@ -344,8 +392,8 @@ def init_point_cloud_from_label(
     if not nii_file.exists():
         raise FileNotFoundError(f"Label file not found: {nii_file}")
 
-    nii_image = nib.loadsave.load(nii_file)
-    assert isinstance(nii_image, nib.nifti1.Nifti1Image)
+    nii_image = nib.load(nii_file)
+    assert isinstance(nii_image, nib.Nifti1Image)
     data = nii_image.get_fdata().astype(np.uint8)
     lca, rca = separate_coronary(data)
     data = lca if coronary_type == "LCA" else rca
@@ -424,3 +472,22 @@ def separate_coronary(coronary: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         return region_0, region_1
     else:
         return region_1, region_0
+
+
+def _get_backgound_gaussian_from_xyz(xyz: Float32[Tensor, "n_gaussians 3"]) -> Float32[Tensor, "n_gaussians 3"]:
+    """
+    sample points from sphere around coronary's xyz.
+    """
+    center = xyz.mean(dim=0, keepdim=True)
+    d = torch.norm(xyz - center, dim=1)
+    radius = d.max() * 1.2
+    N = xyz.shape[0]
+    device = xyz.device
+    dirs = torch.randn(N, 3, device=device)
+    dirs = dirs / torch.norm(dirs, dim=1, keepdim=True)
+
+    # p ∝ V ∝ r**3 therefor r ∝ p**{1/3}
+    p = torch.rand(N, 1, device=device)
+    r = radius * (p ** (1/3))
+    
+    return center + dirs * r

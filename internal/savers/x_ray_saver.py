@@ -7,6 +7,10 @@ from gsplat.exporter import export_splats
 import nibabel as nib
 from nibabel import loadsave as nib_io
 from nibabel.nifti1 import Nifti1Image
+from xray_gaussian_rasterization_voxelization import (
+    GaussianVoxelizationSettings,
+    GaussianVoxelizer,
+)
 
 from . import Saver, SaverModule
 from ..gaussian_splatting import GaussianSplatting
@@ -50,7 +54,7 @@ def gaussians_to_volume_by_batch(
     density: torch.Tensor,
     shape: tuple[int, int, int],
     gaussian_batch: int = 8,
-    small_filter_threshold: None|float = 0.002      # mu = 0.0002 is mu of water
+    small_filter_threshold: None|float = 0.002
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """ 
     Convert the density Gaussian point cloud to 3D voxels. 
@@ -157,7 +161,7 @@ def gaussians_to_volume(
     rotation: torch.Tensor,
     density: torch.Tensor,
     shape: tuple[int, int, int],
-    small_filter_threshold: None|float = 0.002
+    small_filter_threshold: None|float = 0.0015
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """ 
     Convert the density Gaussian point cloud to 3D voxels. 
@@ -172,7 +176,7 @@ def gaussians_to_volume(
         density: (N, 1)
         shape: (3,) 
             It can be adjusted according to the GPU memory.
-        small_filter_threshold: None|float = 0.002, density threshold to filter small density gaussian.
+        small_filter_threshold: None|float = 0.0015, density threshold to filter small density gaussian.
     Returns: 
         volume: (shape[0], shape[1], shape[2]) 
         affine: (4, 4) 
@@ -273,9 +277,72 @@ def gaussians_to_volume(
 
         return volume.cpu().numpy(), affine.cpu().numpy(), size.cpu().numpy()
 
+@torch.no_grad()
+def gaussians_to_volume_by_Rasterizer(
+    means3D: torch.Tensor,
+    scales: torch.Tensor,
+    rotation: torch.Tensor,
+    density: torch.Tensor,
+    shape: tuple[int, int, int],
+    affine: np.ndarray
+) -> np.ndarray:
+    A = affine[:3, :3]
+    spacing = np.linalg.norm(A, axis=0)    # make sure the spacing is positive
+    sVoxel = spacing * np.array(shape)  # sVoxel = size of whole volume (length of XYZ, not the voxel size)
+    center = affine[:3, 3] + 0.5 * A @ shape   # center of the volume in world coordinates
+    voxel_settings = GaussianVoxelizationSettings(
+        scale_modifier=1,
+        nVoxel_x=int(shape[0]),
+        nVoxel_y=int(shape[1]),
+        nVoxel_z=int(shape[2]),
+        sVoxel_x=float(sVoxel[0]),
+        sVoxel_y=float(sVoxel[1]),
+        sVoxel_z=float(sVoxel[2]),
+        center_x=float(center[0]),
+        center_y=float(center[1]),
+        center_z=float(center[2]),
+        prefiltered=False,
+        debug=False,
+    )
+    voxelizer = GaussianVoxelizer(voxel_settings)
+    vol_pred, radii = voxelizer(
+        means3D,
+        density,
+        scales,
+        rotation,
+    )
+    
+    vol_pred = vol_pred.cpu().squeeze().numpy()
+    torch.cuda.empty_cache()  # avoid CUDA OOM
+    
+    D = A / spacing
+
+    # check if D is close to a pure permutation and flip of axes
+    perm = np.argmax(np.abs(D), axis=0)   # shape (3,)
+
+    if len(np.unique(perm)) != 3:
+        raise ValueError("Affine includes oblique rotation/shear; transpose+flip is insufficient")
+
+    aligned_score = np.abs(D[perm, np.arange(3)])
+    if not np.allclose(aligned_score, 1.0, atol=1e-3):
+        raise ValueError("Affine includes arbitrary rotation; need interpolation-based resampling")
+
+    # permute the volume to align with the affine
+    vol = np.transpose(vol_pred, axes=tuple(perm))
+
+    # flip axes if the affine includes a flip
+    signs = np.sign(D[perm, np.arange(3)])
+    flip_axes = tuple(np.where(signs < 0)[0].tolist())
+    if len(flip_axes) > 0:
+        vol = np.flip(vol, axis=flip_axes)
+    
+    return vol
 
 @dataclass
 class XRaySaver(Saver):
+    save_ckpt: bool = True
+    save_ply: bool = True
+    save_nii: bool = True
     def instantiate(self, *args, **kwargs) -> "XRaySaverModule":
         return XRaySaverModule(self)
 
@@ -297,9 +364,10 @@ class XRaySaverModule(SaverModule):
         ckpt_dir.mkdir(exist_ok=True)
         
         ckpt_suffix = f"-rank={pl_module.global_rank}" if is_mp_strategy else ""
-        ckpt_path = ckpt_dir / f"epoch={epoch}-step={step}{ckpt_suffix}.ckpt"
-        
-        pl_module.trainer.save_checkpoint(ckpt_path)
+        if self.config.save_ckpt:
+            ckpt_path = ckpt_dir / f"epoch={epoch}-step={step}{ckpt_suffix}.ckpt"
+            
+            pl_module.trainer.save_checkpoint(ckpt_path)
         
         assert isinstance(pl_module.gaussian_model, XrayCoronaryGaussianModel)
         pc = pl_module.gaussian_model
@@ -321,25 +389,29 @@ class XRaySaverModule(SaverModule):
             means3D, rotation, scales, d_xyz, d_rotation, d_scaling
         )
         
-        ply_path = ckpt_dir / f"epoch={epoch}-step={step}{ckpt_suffix}.ply"
+        if self.config.save_ply:
+            ply_path = ckpt_dir / f"epoch={epoch}-step={step}{ckpt_suffix}.ply"
 
-        gray = torch.exp( - density)
-        sh0 = gray[..., None].repeat(1, 1, 3)
-        export_splats(
-            means=means3D,
-            scales=pc.scale_inverse_activation(scales),
-            quats=pc.scale_inverse_activation(rotation),
-            opacities=gray.squeeze(),
-            sh0=sh0,
-            shN=torch.zeros(gray.shape[0], 0, 3).to(sh0),
-            save_to=str(ply_path)
-        )
+            gray = torch.exp( - density)
+            sh0 = gray[..., None].repeat(1, 1, 3)
+            export_splats(
+                means=means3D,
+                scales=pc.scale_inverse_activation(scales),
+                quats=pc.scale_inverse_activation(rotation),
+                opacities=gray.squeeze(),
+                sh0=sh0,
+                shN=torch.zeros(gray.shape[0], 0, 3).to(sh0),
+                save_to=str(ply_path)
+            )
         
-        volume, affine, size = gaussians_to_volume(
-            means3D, scales, rotation, density, (256, 256, 256)
-        )
-        torch.cuda.empty_cache()  # avoid CUDA OOM
-        
-        nii_path = ckpt_dir / f"volume__epoch={epoch}-step={step}{ckpt_suffix}.nii.gz"
-        nib_io.save(Nifti1Image(volume, affine), str(nii_path))
+        if self.config.save_nii:
+            volume_shape = pl_module.trainer.datamodule.dataparser.volume_shape     # type: ignore
+            coronary_affine = pl_module.trainer.datamodule.dataparser.coronary_affine   # type: ignore
+            volume = gaussians_to_volume_by_Rasterizer(
+                means3D, scales, rotation, density, volume_shape, coronary_affine
+            )
+            torch.cuda.empty_cache()  # avoid CUDA OOM
+            
+            nii_path = ckpt_dir / f"volume__epoch={epoch}-step={step}{ckpt_suffix}.nii.gz"
+            nib_io.save(Nifti1Image(volume, coronary_affine), str(nii_path))
         

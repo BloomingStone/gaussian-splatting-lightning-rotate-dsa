@@ -28,6 +28,8 @@ class DeformableRendererOptimizationConfig:
     eps: float = 1e-8
     warm_up: int = 0
     enable_ast: bool = True
+    log_gradients: bool = True
+    grad_log_interval: int = 100
 
 
 @dataclass
@@ -85,6 +87,77 @@ class CoronaryDeformableXrayRenderer(Renderer):
         super().__init__()
         self.deform_network_config = deform_network
         self.optimization_config = optimization
+        self._grad_hook_registered = False
+
+    @staticmethod
+    def _grad_stats(parameters: list[Tensor]|list[torch.nn.Parameter]) -> dict[str, float]:
+        total_sq_norm = 0.0
+        max_abs = 0.0
+        nan_count = 0.0
+        inf_count = 0.0
+        grad_param_count = 0.0
+        grad_elem_count = 0.0
+
+        for p in parameters:
+            g = p.grad
+            if g is None:
+                continue
+            grad_param_count += 1.0
+            grad_elem_count += float(g.numel())
+            g32 = g.detach().float()
+            nan_count += float(torch.isnan(g32).sum().item())
+            inf_count += float(torch.isinf(g32).sum().item())
+            total_sq_norm += float(torch.square(g32).sum().item())
+            max_abs = max(max_abs, float(g32.abs().max().item()))
+
+        return {
+            "l2": total_sq_norm ** 0.5,
+            "max_abs": max_abs,
+            "nan_count": nan_count,
+            "inf_count": inf_count,
+            "grad_param_count": grad_param_count,
+            "grad_elem_count": grad_elem_count,
+        }
+
+    def _register_grad_hook(self, lightning_module: LightningModule):
+        if self._grad_hook_registered:
+            return
+
+        def _log_gradients(outputs, batch, gaussian_model: XrayCoronaryGaussianModel, global_step: int, pl_module: LightningModule):
+            if self.optimization_config.log_gradients is False:
+                return
+            if self.optimization_config.grad_log_interval <= 0:
+                return
+            if global_step % self.optimization_config.grad_log_interval != 0:
+                return
+            if pl_module.global_rank != 0:
+                return
+            if pl_module.logger is None:
+                return
+
+            embed_params = list(self.deform_model.embed_fn.parameters())
+            gaussian_params = [gaussian_model.gaussians[k] for k in gaussian_model.gaussians.keys()]
+
+            embed_stats = self._grad_stats(embed_params)
+            gaussian_stats = self._grad_stats(gaussian_params)
+            metrics_to_log = {
+                "grad/model/embed_fn/l2": embed_stats["l2"],
+                "grad/model/embed_fn/max_abs": embed_stats["max_abs"],
+                "grad/model/embed_fn/nan_count": embed_stats["nan_count"],
+                "grad/model/embed_fn/inf_count": embed_stats["inf_count"],
+                "grad/model/embed_fn/param_count": embed_stats["grad_param_count"],
+                "grad/model/embed_fn/elem_count": embed_stats["grad_elem_count"],
+                "grad/model/gaussian_renderer/l2": gaussian_stats["l2"],
+                "grad/model/gaussian_renderer/max_abs": gaussian_stats["max_abs"],
+                "grad/model/gaussian_renderer/nan_count": gaussian_stats["nan_count"],
+                "grad/model/gaussian_renderer/inf_count": gaussian_stats["inf_count"],
+                "grad/model/gaussian_renderer/param_count": gaussian_stats["grad_param_count"],
+                "grad/model/gaussian_renderer/elem_count": gaussian_stats["grad_elem_count"],
+            }
+            pl_module.logger.log_metrics(metrics_to_log, step=pl_module.trainer.global_step)
+
+        lightning_module.on_after_backward_hooks.append(_log_gradients)
+        self._grad_hook_registered = True
     
     def forward(
         self,
@@ -233,6 +306,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
             self.train_set_length = len(lightning_module.trainer.datamodule.dataparser_outputs.train_set)
         
         self.deform_model = DeformModel(self.deform_network_config)
+        self._register_grad_hook(lightning_module)
         
         self.smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=20000)
     

@@ -7,16 +7,10 @@ trainer:
   precision: 16-mixed
 
 save_iterations:
-  - 1000
   - 2000
-  - 4000
-  - 6000
-  - 8000
+  - 5000
   - 10000
-  - 12000
-  - 14000
-  - 16000
-  - 18000
+  - 15000
   - 20000
 
 
@@ -28,21 +22,28 @@ data:
   parser: 
     class_path: internal.dataparsers.rotated_xray_dataparser.RotatedXRay
     init_args:
-      mode: reconstruction
+      mode: render-new-views
       init_point_cloud_mode: random
+      init_point_cloud_num: 100_000
 model:
-  max_save_val_output: 2
+  # max_save_val_output: 2
   renderer:
     class_path: internal.renderers.deformabel_xray_renderer.CoronaryDeformableXrayRenderer
     init_args:
       optimization:
         enable_ast: true
+        log_gradients: true
+        grad_log_interval: 50
   metric:
     class_path: internal.metrics.rotate_xray_metrics.RotateXrayMetrics
     init_args:
       fused_ssim: true
   gaussian:
     class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
+    init_args:
+      optimization:
+        log_gradients: true
+        grad_log_interval: 50
   density:
     class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
   renderer_output_types: 
@@ -50,3 +51,7 @@ model:
     - gray_coronary
   saver:
     class_path: internal.savers.x_ray_saver.XRaySaver
+    init_args:
+      save_ckpt: false
+      save_ply: false
+      save_nii: true

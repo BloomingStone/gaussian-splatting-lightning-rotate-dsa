@@ -46,6 +46,9 @@ class OptimizationConfig:
 
     rotations_lr: float = 0.001
 
+    log_gradients: bool = False
+    grad_log_interval: int = 100
+
     optimizer: OptimizerConfig = field(default_factory=Adam)
     
     def get_lr(self, key: str) -> float:
@@ -146,6 +149,75 @@ class XrayCoronaryGaussianModel(
         self.rotation_inverse_activation = _identity_act
         
         self.ema_lambda = 0.95
+        self._grad_hook_registered = False
+
+    @staticmethod
+    def _grad_stats(parameters: list[torch.Tensor]) -> dict[str, float]:
+        total_sq_norm = 0.0
+        max_abs = 0.0
+        nan_count = 0.0
+        inf_count = 0.0
+        grad_param_count = 0.0
+        grad_elem_count = 0.0
+
+        for p in parameters:
+            g = p.grad
+            if g is None:
+                continue
+            grad_param_count += 1.0
+            grad_elem_count += float(g.numel())
+            g32 = g.detach().float()
+            nan_count += float(torch.isnan(g32).sum().item())
+            inf_count += float(torch.isinf(g32).sum().item())
+            total_sq_norm += float(torch.square(g32).sum().item())
+            max_abs = max(max_abs, float(g32.abs().max().item()))
+
+        return {
+            "l2": total_sq_norm ** 0.5,
+            "max_abs": max_abs,
+            "nan_count": nan_count,
+            "inf_count": inf_count,
+            "grad_param_count": grad_param_count,
+            "grad_elem_count": grad_elem_count,
+        }
+
+    def _register_grad_monitor_hook(self, module: LightningModule):
+        if self._grad_hook_registered:
+            return
+
+        def _log_gradients(outputs, batch, gaussian_model, global_step: int, pl_module: LightningModule):
+            optimization_config = self.config.optimization
+            if optimization_config.log_gradients is False:
+                return
+            if optimization_config.grad_log_interval <= 0:
+                return
+            if global_step % optimization_config.grad_log_interval != 0:
+                return
+            if pl_module.global_rank != 0:
+                return
+            if pl_module.logger is None:
+                return
+
+            metrics_to_log: dict[str, float] = {}
+            for key in self._keys:
+                stats = self._grad_stats([self.gaussians[key]])
+                metrics_to_log[f"grad/model/gaussian_model/{key}/l2"] = stats["l2"]
+                metrics_to_log[f"grad/model/gaussian_model/{key}/max_abs"] = stats["max_abs"]
+                metrics_to_log[f"grad/model/gaussian_model/{key}/nan_count"] = stats["nan_count"]
+                metrics_to_log[f"grad/model/gaussian_model/{key}/inf_count"] = stats["inf_count"]
+                metrics_to_log[f"grad/model/gaussian_model/{key}/elem_count"] = stats["grad_elem_count"]
+
+            all_stats = self._grad_stats([self.gaussians[k] for k in self._keys])
+            metrics_to_log["grad/model/gaussian_model/all/l2"] = all_stats["l2"]
+            metrics_to_log["grad/model/gaussian_model/all/max_abs"] = all_stats["max_abs"]
+            metrics_to_log["grad/model/gaussian_model/all/nan_count"] = all_stats["nan_count"]
+            metrics_to_log["grad/model/gaussian_model/all/inf_count"] = all_stats["inf_count"]
+            metrics_to_log["grad/model/gaussian_model/all/param_count"] = all_stats["grad_param_count"]
+            metrics_to_log["grad/model/gaussian_model/all/elem_count"] = all_stats["grad_elem_count"]
+            pl_module.logger.log_metrics(metrics_to_log, step=pl_module.trainer.global_step)
+
+        module.on_after_backward_hooks.append(_log_gradients)
+        self._grad_hook_registered = True
 
     @property
     def n_gaussians(self) -> int:
@@ -270,25 +342,6 @@ class XrayCoronaryGaussianModel(
         for name in properties:
             self.gaussians[name] = properties[name]
 
-    @staticmethod
-    def _get_backgound_gaussian_from_xyz(xyz: Float32[Tensor, "n_gaussians 3"]) -> Float32[Tensor, "n_gaussians 3"]:
-        """
-        sample points from sphere around coronary's xyz.
-        """
-        center = xyz.mean(dim=0, keepdim=True)
-        d = torch.norm(xyz - center, dim=1)
-        radius = d.max() * 1.2
-        N = xyz.shape[0]
-        device = xyz.device
-        dirs = torch.randn(N, 3, device=device)
-        dirs = dirs / torch.norm(dirs, dim=1, keepdim=True)
-
-        # p ∝ V ∝ r**3 therefor r ∝ p**{1/3}
-        p = torch.rand(N, 1, device=device)
-        r = radius * (p ** (1/3))
-        
-        return center + dirs * r
-
     @override
     def setup_from_tensors(self, tensors: dict[str, torch.Tensor], active_sh_degree: int = -1, *args, **kwargs):
         raise NotImplementedError()
@@ -298,6 +351,8 @@ class XrayCoronaryGaussianModel(
         list[torch.optim.Optimizer] | torch.optim.Optimizer | None,
         list[torch.optim.lr_scheduler.LRScheduler] | torch.optim.lr_scheduler.LRScheduler | None
     ]:
+        self._register_grad_monitor_hook(module)
+
         # ---- adaptively scaled according to the camera distribution radius
         spatial_lr_scale = self.config.optimization.spatial_lr_scale
         if spatial_lr_scale <= 0:

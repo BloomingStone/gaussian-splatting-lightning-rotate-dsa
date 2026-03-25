@@ -117,9 +117,9 @@ class RotateXrayMetricsImpl(MetricImpl):
             self.config.w_ssim_loss_whole * ssim_loss_whole
         )
         
-        window = min(pl_module.global_step / self.config.iter_aware_window_length, 1.0)
-        if outputs.time.detach() > window:
-            loss = loss * 0.01
+        # window = min(pl_module.global_step / self.config.iter_aware_window_length, 1.0)
+        # if outputs.time.detach() > window:
+        #     loss = loss * 0.01
         
         assert not torch.isnan(loss), "Loss is NaN!"
         

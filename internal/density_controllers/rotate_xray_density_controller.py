@@ -10,7 +10,7 @@ from ..models.xray_coronary_gaussian import GaussianInits
 
 @dataclass
 class RotateXrayDensityController(DensityController):
-    percent_dense: float = 0.002  # in C-arm X-ray, the scene extent = SOD > 1500 mm. so here we set percent_dense to 0.002, means the maximum size of a Gaussian is 1500 * 0.002 = 3 mm.
+    percent_dense: float = 0.001  # in C-arm X-ray, the scene extent = SOD > 1500 mm. so here we set percent_dense to 0.001, means the maximum size of a Gaussian is 1500 * 0.001 = 1.5 mm.
 
     densification_interval: int = 300
 
@@ -20,9 +20,9 @@ class RotateXrayDensityController(DensityController):
 
     densify_until_iter: int = 15_000
 
-    densify_grad_threshold: float = 0.5
+    densify_grad_threshold: float = 0.2
 
-    cull_density_threshold: float = 1e-3
+    cull_density_threshold: float = 2e-3
 
     camera_extent_factor: float = 1.
 
