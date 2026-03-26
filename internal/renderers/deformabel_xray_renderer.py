@@ -164,17 +164,10 @@ class CoronaryDeformableXrayRenderer(Renderer):
         
         time = viewpoint_camera.time.unsqueeze(0).expand(means3D.shape[0], -1)
         
-        if torch.allclose(time, torch.zeros_like(time)):
-            # for time(phase) == 0 or in warm_up, we don't deform
-            d_xyz, d_scaling, d_rotation = self.deform_model(
-                means3D.detach(), 
-                time.detach()
-            )
-        else:
-            d_xyz, d_scaling, d_rotation = self.deform_model(means3D.detach(), time.detach())
-            means3D, rotation, scales = DeformModel.deform(
-                means3D, rotation, scales, d_xyz, d_rotation, d_scaling
-            )
+        d_xyz, d_scaling, d_rotation = self.deform_model(means3D.detach(), time.detach())
+        means3D, rotation, scales = DeformModel.deform(
+            means3D, rotation, scales, d_xyz, d_rotation, d_scaling
+        )
         
         d_motion_mean = pc.get_motion_mean().detach()
         d_motion_var = pc.get_motion_var().detach()
@@ -223,24 +216,18 @@ class CoronaryDeformableXrayRenderer(Renderer):
         N = means3D.shape[0]
         time = viewpoint_camera.time.unsqueeze(0).expand(N, -1)
         
-        if (torch.allclose(time, torch.zeros_like(time)) or step <= self.optimization_config.warm_up):
-            # for time(phase) == 0 or in warm_up, we don't deform
-            d_xyz, d_scaling, d_rotation = self.deform_model(means3D.detach(), time.detach())
-            d_motion_mean = pc.get_motion_mean().detach()
-            d_motion_var = pc.get_motion_var().detach()
-        else:
-            if self.optimization_config.enable_ast:     # add AST noise
-                time_interval = 1 / ((step % self.train_set_length) + 1)
-                ast_noise = torch.randn(1, 1, device=means3D.device).expand(N, -1) * time_interval * self.smooth_term(step)
-                time = time + ast_noise
+        if self.optimization_config.enable_ast:     # add AST noise
+            time_interval = 1 / ((step % self.train_set_length) + 1)
+            ast_noise = torch.randn(1, 1, device=means3D.device).expand(N, -1) * time_interval * self.smooth_term(step)
+            time = time + ast_noise
 
-            # update means3D, rotation, scales
-            d_xyz, d_scaling, d_rotation= self.deform_model(means3D.detach(), time.detach())
-            
-            means3D, rotation, scales = DeformModel.deform(
-                means3D, rotation, scales, d_xyz, d_rotation, d_scaling
-            )
-            d_motion_mean, d_motion_var = pc.update_motions(d_xyz, d_scaling, d_rotation)
+        # update means3D, rotation, scales
+        d_xyz, d_scaling, d_rotation= self.deform_model(means3D.detach(), time.detach())
+        
+        means3D, rotation, scales = DeformModel.deform(
+            means3D, rotation, scales, d_xyz, d_rotation, d_scaling
+        )
+        d_motion_mean, d_motion_var = pc.update_motions(d_xyz, d_scaling, d_rotation)
 
         gray_image, meta_whole = self._render(viewpoint_camera, means3D, rotation, scales, density)
 

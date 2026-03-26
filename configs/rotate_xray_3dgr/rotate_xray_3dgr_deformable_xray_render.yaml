@@ -6,9 +6,6 @@ trainer:
   precision: 16-mixed
 
 save_iterations:
-  - 5000
-  - 10000
-  - 15000
   - 20000
 
 
