@@ -178,7 +178,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         radii = meta_whole["radii"]
         visibility_filter = radii > 0
         
-        mask = (density > torch.quantile(density, 0.80)).squeeze()
+        mask = (density > torch.quantile(density, 0.90)).squeeze()
         if not torch.any(mask):
             mask = torch.ones_like(mask, dtype=torch.bool)
         
@@ -217,7 +217,6 @@ class CoronaryDeformableXrayRenderer(Renderer):
         
         if self.optimization_config.enable_ast:     # add AST noise
             time_interval = 1 / ((step % self.train_set_length) + 1)
-            # phase interval = 0.03
             ast_noise = torch.randn(1, 1, device=means3D.device).expand(N, -1) * time_interval * self.smooth_term(step)
             time = time + ast_noise
 
@@ -298,7 +297,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         self.deform_model = DeformModel(self.deform_network_config)
         self._register_grad_hook(lightning_module)
         
-        total_steps = lightning_module.trainer.max_epochs * self.train_set_length
+        total_steps = lightning_module.trainer.max_steps
         self.smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=total_steps*0.8)
     
     def training_setup(self, module) -> Tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LRScheduler]]:

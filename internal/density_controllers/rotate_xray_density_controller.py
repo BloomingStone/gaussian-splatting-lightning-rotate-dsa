@@ -25,13 +25,14 @@ class RotateXrayDensityController(DensityController):
     
     densify_until_iter: int = 16_000
 
-    densify_grad_percentile: float = 0.95
+    densify_grad_percentile: float = 0.98
     
-    max_guassian_num: int = 50_000
+    max_guassian_num: int = 100_000
     
     percentile_end_step: int = 11_000
 
     cull_density_threshold: float = 0.8e-3
+    
 
     camera_extent_factor: float = 1.
 
