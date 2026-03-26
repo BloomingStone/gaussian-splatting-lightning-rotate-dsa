@@ -18,7 +18,7 @@ from typing import List
 
 
 DEFAULT_DATA_ROOT = "/media/data3/sj/Data/gen4d_outputs/ASOCA"
-DEFUALT_OUTPUT_ROOT = "/media/data3/sj/Data/gen4d_outputs/ASOCA_recon"
+DEFUALT_OUTPUT_ROOT = "/media/data3/sj/Data/gen4d_outputs/ASOCA_recon_1"
 DEFAULT_CONFIG = "configs/rotate_xray_3dgr/rotate_xray_3dgr_deformable_xray_render.yaml"
 DEFAULT_GPUS = "2,3"
 DEFAULT_RUNNER = "pixi run python"
