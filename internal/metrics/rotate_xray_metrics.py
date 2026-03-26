@@ -17,7 +17,7 @@ class RotateXrayMetrics(Metric):
     w_gray_loss_whole: float = 1.0
     w_ssim_loss_whole: float = 1.0
     
-    w_phase_aware_loss: float = 0.05
+    w_phase_aware_loss: float = 0.0
 
     rgb_diff_loss: Literal["l1", "l2"] = "l1"
 

@@ -23,7 +23,7 @@ class RotateXrayDensityController(DensityController):
 
     densify_until_iter: int = 15_000
 
-    densify_grad_threshold: float = 3.0
+    densify_grad_threshold: float = 5.0
 
     cull_density_threshold: float = 2e-3
 
