@@ -17,3 +17,7 @@ segments
 
 data/
 data
+
+build/
+
+scripts/logs/

@@ -8,8 +8,6 @@ environments:
     - url: https://conda.anaconda.org/pytorch/
     indexes:
     - https://pypi.org/simple
-    options:
-      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-7_kmp_llvm.conda
@@ -460,8 +458,6 @@ environments:
     - url: https://conda.anaconda.org/pytorch/
     indexes:
     - https://pypi.org/simple
-    options:
-      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-7_kmp_llvm.conda
@@ -910,8 +906,6 @@ environments:
     - url: https://conda.anaconda.org/pytorch/
     indexes:
     - https://pypi.org/simple
-    options:
-      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-7_kmp_llvm.conda
@@ -2453,8 +2447,9 @@ packages:
 - pypi: ./
   name: gaussian-splatting-lightning
   version: 0.0.0
-  sha256: bc0a2356ff42940b8a841ac660761450df9db431503a30851c6ff353c07e6265
+  sha256: 3a7f459129ded9d4be758dd6ee43b9bcbc2bace6d12490adfdc839645f2c9582
   requires_python: '>=3.10'
+  editable: true
 - conda: https://conda.anaconda.org/conda-forge/linux-64/giflib-5.2.2-hd590300_0.conda
   sha256: aac402a8298f0c0cc528664249170372ef6b37ac39fdc92b40601a6aed1e32ff
   md5: 3bf7b9fd5a7136126e0234db4b87c8b6

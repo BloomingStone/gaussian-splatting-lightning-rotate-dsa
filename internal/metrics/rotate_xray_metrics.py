@@ -17,17 +17,7 @@ class RotateXrayMetrics(Metric):
     w_gray_loss_whole: float = 1.0
     w_ssim_loss_whole: float = 1.0
     
-    w_motion_var_loss: float = 0.
-    w_motion_mean_loss: float = 0.005
-    
-    structure_loss_start_step: int = 2000
-    w_coronary_props: float = 0.005
-    w_coronary_props_entropy: float = 0.005
-    props_entropy_k = 1.0
-    w_motion_corr_loss: float = 1.
-    w_density_corr_loss: float = 1.
-    
-    iter_aware_window_length = 1000
+    w_phase_aware_loss: float = 0.05
 
     rgb_diff_loss: Literal["l1", "l2"] = "l1"
 
@@ -111,29 +101,41 @@ class RotateXrayMetricsImpl(MetricImpl):
         ssim_metric_whole = self.ssim(outputs.gray_image, gt_image)
         ssim_loss_whole = 1.0 - ssim_metric_whole
 
+        # phase 0 or 1 -> 1, phase 0.5 -> 0
+        # phase 0: no motion, phase 0.5: most motion, phase 1: no motion
+        d_xyz = outputs.d_means3D.norm(dim=-1).mean()   # (N, 3) -> (N,) -> scalar
+        l_phase_aware_loss = (2*(outputs.time - 0.5)) ** 4 * d_xyz  
+        l_phase_aware_loss = l_phase_aware_loss.mean()
+
         loss = (
             # image loss
             self.config.w_gray_loss_whole * gray_loss_whole +
-            self.config.w_ssim_loss_whole * ssim_loss_whole
+            self.config.w_ssim_loss_whole * ssim_loss_whole +
+            self.config.w_phase_aware_loss * l_phase_aware_loss
         )
-        
-        # window = min(pl_module.global_step / self.config.iter_aware_window_length, 1.0)
-        # if outputs.time.detach() > window:
-        #     loss = loss * 0.01
         
         assert not torch.isnan(loss), "Loss is NaN!"
         
-        return {
+        metrics = {
             "loss": loss,
-            
             "gray_loss_whole": gray_loss_whole,
             "ssim_loss_whole": ssim_loss_whole,
-        }, {
+            "phase_aware_loss": l_phase_aware_loss
+        }
+        
+        prog_bar = {
             "loss": True,
             
             "gray_loss_whole": True,
             "ssim_loss_whole": True,
+            "phase_aware_loss": True,
         }
+        
+        if outputs.time < 0.1:
+            metrics["small_phase_d_xyz_mean"] = d_xyz
+            prog_bar["small_phase_d_xyz_mean"] = False
+        
+        return metrics, prog_bar
     
     def get_train_metrics(self, pl_module, gaussian_model, step: int, batch, outputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:
         return self._get_basic_metrics(

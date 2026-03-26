@@ -136,10 +136,8 @@ class CoronaryDeformableXrayRenderer(Renderer):
                 return
 
             embed_params = list(self.deform_model.embed_fn.parameters())
-            gaussian_params = [gaussian_model.gaussians[k] for k in gaussian_model.gaussians.keys()]
 
             embed_stats = self._grad_stats(embed_params)
-            gaussian_stats = self._grad_stats(gaussian_params)
             metrics_to_log = {
                 "grad/model/embed_fn/l2": embed_stats["l2"],
                 "grad/model/embed_fn/max_abs": embed_stats["max_abs"],
@@ -147,12 +145,6 @@ class CoronaryDeformableXrayRenderer(Renderer):
                 "grad/model/embed_fn/inf_count": embed_stats["inf_count"],
                 "grad/model/embed_fn/param_count": embed_stats["grad_param_count"],
                 "grad/model/embed_fn/elem_count": embed_stats["grad_elem_count"],
-                "grad/model/gaussian_renderer/l2": gaussian_stats["l2"],
-                "grad/model/gaussian_renderer/max_abs": gaussian_stats["max_abs"],
-                "grad/model/gaussian_renderer/nan_count": gaussian_stats["nan_count"],
-                "grad/model/gaussian_renderer/inf_count": gaussian_stats["inf_count"],
-                "grad/model/gaussian_renderer/param_count": gaussian_stats["grad_param_count"],
-                "grad/model/gaussian_renderer/elem_count": gaussian_stats["grad_elem_count"],
             }
             pl_module.logger.log_metrics(metrics_to_log, step=pl_module.trainer.global_step)
 
@@ -172,12 +164,17 @@ class CoronaryDeformableXrayRenderer(Renderer):
         
         time = viewpoint_camera.time.unsqueeze(0).expand(means3D.shape[0], -1)
         
-
-        d_xyz, d_scaling, d_rotation = self.deform_model(means3D.detach(), time)
-        torch.cuda.empty_cache()  # avoid CUDA OOM
-        means3D, rotation, scales = DeformModel.deform(
-            means3D, rotation, scales, d_xyz, d_rotation, d_scaling
-        )
+        if torch.allclose(time, torch.zeros_like(time)):
+            # for time(phase) == 0 or in warm_up, we don't deform
+            d_xyz, d_scaling, d_rotation = self.deform_model(
+                means3D.detach(), 
+                time.detach()
+            )
+        else:
+            d_xyz, d_scaling, d_rotation = self.deform_model(means3D.detach(), time.detach())
+            means3D, rotation, scales = DeformModel.deform(
+                means3D, rotation, scales, d_xyz, d_rotation, d_scaling
+            )
         
         d_motion_mean = pc.get_motion_mean().detach()
         d_motion_var = pc.get_motion_var().detach()
@@ -226,18 +223,24 @@ class CoronaryDeformableXrayRenderer(Renderer):
         N = means3D.shape[0]
         time = viewpoint_camera.time.unsqueeze(0).expand(N, -1)
         
-        if self.optimization_config.enable_ast:     # add AST noise
-            time_interval = 1 / ((step % self.train_set_length) + 1)
-            ast_noise = torch.randn(1, 1, device=means3D.device).expand(N, -1) * time_interval * self.smooth_term(step)
-            time = time + ast_noise
+        if (torch.allclose(time, torch.zeros_like(time)) or step <= self.optimization_config.warm_up):
+            # for time(phase) == 0 or in warm_up, we don't deform
+            d_xyz, d_scaling, d_rotation = self.deform_model(means3D.detach(), time.detach())
+            d_motion_mean = pc.get_motion_mean().detach()
+            d_motion_var = pc.get_motion_var().detach()
+        else:
+            if self.optimization_config.enable_ast:     # add AST noise
+                time_interval = 1 / ((step % self.train_set_length) + 1)
+                ast_noise = torch.randn(1, 1, device=means3D.device).expand(N, -1) * time_interval * self.smooth_term(step)
+                time = time + ast_noise
 
-        # update means3D, rotation, scales
-        d_xyz, d_scaling, d_rotation = self.deform_model(means3D.detach(), time.detach())
-        torch.cuda.empty_cache()  # avoid CUDA OOM
-        means3D, rotation, scales = DeformModel.deform(
-            means3D, rotation, scales, d_xyz, d_rotation, d_scaling
-        )
-        d_motion_mean, d_motion_var = pc.update_motions(d_xyz, d_scaling, d_rotation)   #EMA of motion
+            # update means3D, rotation, scales
+            d_xyz, d_scaling, d_rotation= self.deform_model(means3D.detach(), time.detach())
+            
+            means3D, rotation, scales = DeformModel.deform(
+                means3D, rotation, scales, d_xyz, d_rotation, d_scaling
+            )
+            d_motion_mean, d_motion_var = pc.update_motions(d_xyz, d_scaling, d_rotation)
 
         gray_image, meta_whole = self._render(viewpoint_camera, means3D, rotation, scales, density)
 

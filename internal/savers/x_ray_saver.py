@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+from concurrent.futures import Future, ThreadPoolExecutor
 
 import numpy as np
 import torch
@@ -46,236 +47,44 @@ def quaternion_to_matrix(q: torch.Tensor) -> torch.Tensor:
 
     return R
 
-
-def gaussians_to_volume_by_batch(
-    means3D: torch.Tensor,
-    scales: torch.Tensor,
-    rotation: torch.Tensor,
-    density: torch.Tensor,
+@torch.no_grad()
+def deform_field_to_volume(
+    deform_model: DeformModel,
     shape: tuple[int, int, int],
-    gaussian_batch: int = 8,
-    small_filter_threshold: None|float = 0.002
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """ 
-    Convert the density Gaussian point cloud to 3D voxels. 
-    First, the affine transformation matrix of volume will be calculated based on 
-    the spatial distribution of the Goth points. The value of each grid point is 
-    the accumulation of the densities of all Gauss at this point
+    affine: np.ndarray,
+    zoomed_shape: tuple[int, int, int],
+    batch_size: int = 512*512*40,
+) -> tuple[np.ndarray, np.ndarray]:
+    device = next(deform_model.parameters()).device
+    orgin = affine[:3, 3]
+    A = affine[:3, :3]
+    shape_in_world = A @ np.array(shape)
     
-    Args: 
-        means3D: (N, 3)
-        scales: (N, 3)
-        rotation: (N, 4)
-        density: (N, 1)
-        shape: (3,)
-        gaussian_batch: int = 512, the number of Gaussians to be processed in a batch. 
-            It can be adjusted according to the GPU memory.
-        small_filter_threshold: None|float = 0.002, density threshold to filter small density gaussian.
-    Returns: 
-        volume: (shape[0], shape[1], shape[2]) 
-        affine: (4, 4) 
-        size: (3, 3): size of the bounding box 
-    """
-    device = means3D.device
-    D, H, W = shape
+    # new_A @ zoomed_shape = A @ shape  => new_A = A @ shape / zoomed_shape
+    new_A = A @ np.diag(np.array(shape) / np.array(zoomed_shape))
+    new_affine = np.eye(4)
+    new_affine[:3, :3] = new_A
+    new_affine[:3, 3] = orgin
     
-    with torch.no_grad():
-        # ---------- felter small density gaussian ----------
-        if small_filter_threshold is not None:
-            mask = (density > small_filter_threshold).squeeze()
-            means3D = means3D[mask]
-            scales = scales[mask]
-            rotation = rotation[mask]
-            density = density[mask]
-
-        # ---------- bounding box ----------
-        extent = 3.0 * scales.max(dim=1)[0].unsqueeze(1)
-        mins = (means3D - extent).min(dim=0)[0]
-        maxs = (means3D + extent).max(dim=0)[0]
-
-        size = maxs - mins
-        spacing = size / torch.tensor([D, H, W], device=device)
-
-        # ---------- affine ----------
-        affine = torch.eye(4, device=device)
-        affine[0,0] = spacing[0]
-        affine[1,1] = spacing[1]
-        affine[2,2] = spacing[2]
-        affine[:3,3] = mins
-
-        # ---------- build world grid ----------
-        xs = torch.arange(D, device=device)
-        ys = torch.arange(H, device=device)
-        zs = torch.arange(W, device=device)
-
-        grid = torch.stack(
-            torch.meshgrid(xs, ys, zs, indexing="ij"),
-            dim=-1
-        ).reshape(-1,3).float()
-
-        world = (grid * spacing + mins).half()   # (V,3)
-        V = world.shape[0]
-
-        volume = torch.zeros(V, device=device)
-
-        # ---------- precompute Σ^-1 ----------
-        R = quaternion_to_matrix(rotation)
-        Sigma_inv = torch.inverse(
-            (R @ torch.diag_embed(scales**2) @ R.transpose(1,2)).float()
-        ).half()  # (N,3,3)
-
-        N = means3D.shape[0]
-
-        # ---------- sum gaussian by batch ----------
-        # \pho(x) = \sum_i \pho_i exp(-0.5 (x - \mu_i)^T \Sigma_i^{-1} (x - \mu_i))
-        for start in range(0, N, gaussian_batch):
-            end = min(start + gaussian_batch, N)
-
-            mu = means3D[start:end]        # (B,3)
-            inv = Sigma_inv[start:end]     # (B,3,3)  \Sigma_i^{-1}
-            rho = density[start:end]       # (B,1)
-
-            # (V,1,3) - (1,B,3)
-            diff = (world.unsqueeze(1) - mu.unsqueeze(0))   # (V,B,3)  (x - \mu_i)
-
-            # quadratic form
-            exponent = -0.5 * torch.einsum(
-                "vbi,bij,vbj->vb",
-                diff,
-                inv,
-                diff
-            )
-
-            val = rho.squeeze(1).float() * torch.exp(exponent)  # (V,B)
-
-            volume += val.sum(dim=1) # (V,)
-
-        volume = volume.reshape(D, H, W)
-
-        return volume.cpu().numpy(), affine.cpu().numpy(), size.cpu().numpy()
-
-
-def gaussians_to_volume(
-    means3D: torch.Tensor,
-    scales: torch.Tensor,
-    rotation: torch.Tensor,
-    density: torch.Tensor,
-    shape: tuple[int, int, int],
-    small_filter_threshold: None|float = 0.0015
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """ 
-    Convert the density Gaussian point cloud to 3D voxels. 
-    First, the affine transformation matrix of volume will be calculated based on 
-    the spatial distribution of the Goth points. The value of each grid point is 
-    the accumulation of the densities of all Gauss at this point
+    x = torch.linspace(orgin[0], shape_in_world[0]+orgin[0], zoomed_shape[0])
+    y = torch.linspace(orgin[1], shape_in_world[1]+orgin[1], zoomed_shape[1])
+    z = torch.linspace(orgin[2], shape_in_world[2]+orgin[2], zoomed_shape[2])
+    xyz = torch.stack(torch.meshgrid(x, y, z), dim=-1)
+    xyz = xyz.reshape(-1, 3)
     
-    Args: 
-        means3D: (N, 3)
-        scales: (N, 3)
-        rotation: (N, 4)
-        density: (N, 1)
-        shape: (3,) 
-            It can be adjusted according to the GPU memory.
-        small_filter_threshold: None|float = 0.0015, density threshold to filter small density gaussian.
-    Returns: 
-        volume: (shape[0], shape[1], shape[2]) 
-        affine: (4, 4) 
-        size: (3, 3): size of the bounding box 
-    """
-    device = means3D.device
-    D, H, W = shape
-    
-    # ---------- felter small density gaussian ----------
-    with torch.autocast(device_type="cuda", enabled=False), torch.no_grad():
-        if small_filter_threshold is not None:
-            mask = (density > small_filter_threshold).squeeze()
-            means3D = means3D[mask]
-            scales = scales[mask]
-            rotation = rotation[mask]
-            density = density[mask]
-        
-        means3D = means3D.detach().float()
-        scales = scales.detach().float()
-        rotation = rotation.detach().float()
-        density = density.detach().float()
+    xyz = xyz.to(device)
+    dxyz_chunks: list[torch.Tensor] = []
 
-        # ---------- bounding box ----------
-        mins = means3D.min(dim=0).values
-        maxs = means3D.max(dim=0).values
-        
-        bounding_min = torch.quantile(mins, 0.01)
-        bounding_max = torch.quantile(maxs, 0.99)
+    for start in range(0, xyz.shape[0], batch_size):
+        end = min(start + batch_size, xyz.shape[0])
+        xyz_batch = xyz[start:end]
+        t_batch = torch.zeros((xyz_batch.shape[0], 1), device=device) * 0.5  # input phase is 0.5
+        d_xyz, _, _ = deform_model(xyz_batch, t_batch)
+        dxyz_chunks.append(d_xyz.cpu().float())
 
-        size = bounding_max - bounding_min
-        spacing = size / torch.tensor([D, H, W], device=device)
+    dxyz_volume = torch.cat(dxyz_chunks, dim=0).reshape(zoomed_shape + (3,))
+    return dxyz_volume.numpy(), new_affine
 
-        # ---------- affine & volume ----------
-        affine = torch.eye(4, device=device)
-        affine[0,0] = spacing[0]
-        affine[1,1] = spacing[1]
-        affine[2,2] = spacing[2]
-        affine[:3,3] = mins
-
-        volume = torch.zeros(shape, device=device)
-
-        # ---------- precompute Σ^-1 ----------
-        R = quaternion_to_matrix(rotation).float()
-        Sigma_inv = torch.inverse(
-            (R @ torch.diag_embed(scales**2).float() @ R.transpose(1,2)).float()
-        )  # (N,3,3)
-
-        # ---------- sum gaussian by batch ----------
-        # \pho(x) = \sum_i \pho_i exp(-0.5 (x - \mu_i)^T \Sigma_i^{-1} (x - \mu_i))
-        for i in range(means3D.shape[0]):
-
-            mu = means3D[i]
-            sigma = scales[i]
-            rho = density[i, 0]
-            inv = Sigma_inv[i]
-            
-            # 只在 3σ bounding box 内计算
-            sigma_max = torch.abs(sigma).max()
-            local_min = mu - 3 * sigma_max
-            local_max = mu + 3 * sigma_max
-            
-            # 转为 voxel index
-            vmin = ((local_min - mins) / spacing).long()
-            vmax = ((local_max - mins) / spacing).long()
-
-            lower = torch.zeros(3, device=device)
-            upper = torch.tensor([D-1, H-1, W-1], device=device)
-
-            vmin = torch.clamp(vmin, min=lower, max=upper).tolist()
-            vmax = torch.clamp(vmax, min=lower, max=upper).tolist()
-
-            xs = torch.arange(vmin[0], vmax[0]+1, device=device)
-            ys = torch.arange(vmin[1], vmax[1]+1, device=device)
-            zs = torch.arange(vmin[2], vmax[2]+1, device=device)
-
-            grid = torch.stack(torch.meshgrid(xs, ys, zs, indexing="ij"), dim=-1)
-            grid = grid.reshape(-1, 3).float()
-
-            # 转为 world 坐标
-            world = grid * spacing + mins
-
-            diff = world - mu
-            exponent = -0.5 * torch.sum(diff @ inv * diff, dim=1)
-
-            val = rho * torch.exp(exponent)
-
-            volume[
-                grid[:, 0].long(),
-                grid[:, 1].long(),
-                grid[:, 2].long()
-            ] += val
-            
-            if not torch.isfinite(volume).all():
-                raise FloatingPointError(f"val contains inf or nan")
-            
-
-        volume = volume.reshape(D, H, W)
-
-        return volume.cpu().numpy(), affine.cpu().numpy(), size.cpu().numpy()
 
 @torch.no_grad()
 def gaussians_to_volume_by_Rasterizer(
@@ -313,7 +122,6 @@ def gaussians_to_volume_by_Rasterizer(
     )
     
     vol_pred = vol_pred.cpu().squeeze().numpy()
-    torch.cuda.empty_cache()  # avoid CUDA OOM
     
     D = A / spacing
 
@@ -346,10 +154,72 @@ class XRaySaver(Saver):
     def instantiate(self, *args, **kwargs) -> "XRaySaverModule":
         return XRaySaverModule(self)
 
+
+@dataclass
+class PlySavePayload:
+    path: Path
+    means: torch.Tensor
+    scales: torch.Tensor
+    quats: torch.Tensor
+    opacities: torch.Tensor
+    sh0: torch.Tensor
+
+
+@dataclass
+class NiftiSavePayload:
+    volume_path: Path
+    dxyz_volume_path: Path
+    volume: np.ndarray
+    dxyz_volume: np.ndarray
+    volume_affine: np.ndarray
+    dxyz_affine: np.ndarray
+
+
+@dataclass
+class SaveOutputsPayload:
+    ply: PlySavePayload | None = None
+    nifti: NiftiSavePayload | None = None
+
 class XRaySaverModule(SaverModule):
     def __init__(self, config: XRaySaver):
         super().__init__()
         self.config = config
+        self._save_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="xray-save")
+        self._pending_save: Future | None = None
+
+    @staticmethod
+    def _save_outputs(
+        payload: SaveOutputsPayload,
+    ) -> None:
+        if payload.ply is not None:
+            export_splats(
+                means=payload.ply.means,
+                scales=payload.ply.scales,
+                quats=payload.ply.quats,
+                opacities=payload.ply.opacities.squeeze(),
+                sh0=payload.ply.sh0,
+                shN=torch.zeros(
+                    payload.ply.opacities.shape[0],
+                    0,
+                    3,
+                    dtype=payload.ply.sh0.dtype,
+                    device=payload.ply.sh0.device,
+                ),
+                save_to=str(payload.ply.path),
+            )
+
+        if payload.nifti is not None:
+            nib_io.save(
+                Nifti1Image(payload.nifti.volume, payload.nifti.volume_affine),
+                str(payload.nifti.volume_path),
+            )
+            nib_io.save(
+                Nifti1Image(payload.nifti.dxyz_volume, payload.nifti.dxyz_affine),
+                str(payload.nifti.dxyz_volume_path),
+            )
+
+    def __del__(self):
+        self._save_executor.shutdown(wait=False)
     
     def save(self, pl_module: GaussianSplatting):
         is_mp_strategy = isinstance(pl_module.trainer.strategy, MPStrategy)
@@ -382,36 +252,54 @@ class XRaySaverModule(SaverModule):
         
         d_xyz, d_scaling, d_rotation = deform_model(
             means3D.detach(), 
-            torch.zeros(means3D.shape[0], 1).to(means3D.device)
+            torch.zeros(means3D.shape[0], 1).to(means3D.device) * 0.5,   # input phase is 0.5
         )
         
         means3D, rotation, scales = DeformModel.deform(
             means3D, rotation, scales, d_xyz, d_rotation, d_scaling
         )
         
+        ply_payload: PlySavePayload | None = None
+
         if self.config.save_ply:
             ply_path = ckpt_dir / f"epoch={epoch}-step={step}{ckpt_suffix}.ply"
-
-            gray = torch.exp( - density)
+            gray = torch.exp(-density)
             sh0 = gray[..., None].repeat(1, 1, 3)
-            export_splats(
-                means=means3D,
-                scales=pc.scale_inverse_activation(scales),
-                quats=pc.scale_inverse_activation(rotation),
-                opacities=gray.squeeze(),
-                sh0=sh0,
-                shN=torch.zeros(gray.shape[0], 0, 3).to(sh0),
-                save_to=str(ply_path)
+            ply_payload = PlySavePayload(
+                path=ply_path,
+                means=means3D.detach().cpu(),
+                scales=pc.scale_inverse_activation(scales).detach().cpu(),
+                quats=pc.scale_inverse_activation(rotation).detach().cpu(),
+                opacities=gray.detach().cpu(),
+                sh0=sh0.detach().cpu(),
             )
-        
+
+        nifti_payload: NiftiSavePayload | None = None
+
         if self.config.save_nii:
             volume_shape = pl_module.trainer.datamodule.dataparser.volume_shape     # type: ignore
             coronary_affine = pl_module.trainer.datamodule.dataparser.coronary_affine   # type: ignore
             volume = gaussians_to_volume_by_Rasterizer(
                 means3D, scales, rotation, density, volume_shape, coronary_affine
             )
+            dxyz_volume, zoomed_affine = deform_field_to_volume(deform_model, volume_shape, coronary_affine, zoomed_shape=(128, 128, 128))
+            coronary_affine_save = np.array(coronary_affine, copy=True)
             torch.cuda.empty_cache()  # avoid CUDA OOM
             
-            nii_path = ckpt_dir / f"volume__epoch={epoch}-step={step}{ckpt_suffix}.nii.gz"
-            nib_io.save(Nifti1Image(volume, coronary_affine), str(nii_path))
+            volume_nii_path = ckpt_dir / f"volume__epoch={epoch}-step={step}{ckpt_suffix}.nii.gz"
+            dxyz_volume_nii_path = ckpt_dir / f"dxyz_volume__epoch={epoch}-step={step}{ckpt_suffix}.nii.gz"
+            nifti_payload = NiftiSavePayload(
+                volume_path=volume_nii_path,
+                dxyz_volume_path=dxyz_volume_nii_path,
+                volume=volume,
+                dxyz_volume=dxyz_volume,
+                volume_affine=coronary_affine_save,
+                dxyz_affine=zoomed_affine,
+            )
+
+        if self._pending_save is not None and not self._pending_save.done():
+            self._pending_save.result()
+
+        payload = SaveOutputsPayload(ply=ply_payload, nifti=nifti_payload)
+        self._pending_save = self._save_executor.submit(self._save_outputs, payload)
         

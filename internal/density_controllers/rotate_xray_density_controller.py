@@ -9,9 +9,12 @@ from ..gaussian_splatting import GaussianSplatting
 from ..models.xray_coronary_gaussian import GaussianInits
 
 @dataclass
-class RotateXrayDensityController(DensityController):
-    percent_dense: float = 0.001  # in C-arm X-ray, the scene extent = SOD > 1500 mm. so here we set percent_dense to 0.001, means the maximum size of a Gaussian is 1500 * 0.001 = 1.5 mm.
-
+class RotateXrayDensityController(DensityController):    
+    # in C-arm X-ray, the scene extent = SOD > 1500 mm. so here we set percent_dense to 0.0005, 
+    # which means the maximum scaling of a Gaussian is 1500 * 0.0005 = 0.75 mm.
+    # the diameter of a coronary artery is around 2-3 mm, so 3*sigma = 2.25 probably covers the artery, which is a reasonable setting.
+    percent_dense: float = 0.0005
+    
     densification_interval: int = 300
 
     density_reset_interval: int = 3000
@@ -20,7 +23,7 @@ class RotateXrayDensityController(DensityController):
 
     densify_until_iter: int = 15_000
 
-    densify_grad_threshold: float = 0.2
+    densify_grad_threshold: float = 5
 
     cull_density_threshold: float = 2e-3
 
