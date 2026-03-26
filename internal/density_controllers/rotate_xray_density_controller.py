@@ -17,15 +17,21 @@ class RotateXrayDensityController(DensityController):
     
     densification_interval: int = 300
 
-    density_reset_interval: int = 3000
+    density_reset_interval: int = 2000
 
     densify_from_iter: int = 500
 
-    densify_until_iter: int = 15_000
-
     densify_grad_threshold: float = 5.0
+    
+    densify_until_iter: int = 16_000
 
-    cull_density_threshold: float = 2e-3
+    densify_grad_percentile: float = 0.95
+    
+    max_guassian_num: int = 50_000
+    
+    percentile_end_step: int = 11_000
+
+    cull_density_threshold: float = 0.8e-3
 
     camera_extent_factor: float = 1.
 
@@ -58,6 +64,8 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
             self._init_state(pl_module.gaussian_model.n_gaussians, pl_module.device)
 
         self.density_reset_at = -32768
+        self._grad_threshold: float|None = None
+        self._do_percentile_update: bool = True
     
         
     @override
@@ -72,6 +80,15 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
     def after_backward(self, outputs: dict, batch, gaussian_model: XrayCoronaryGaussianModel, optimizers: list, global_step: int, pl_module: GaussianSplatting) -> None:
         if global_step >= self.config.densify_until_iter:
             return
+        
+        n_gaussians = gaussian_model.n_gaussians
+        if global_step > max(self.config.density_reset_interval, self.config.densify_from_iter)\
+            and (
+                n_gaussians > self.config.max_guassian_num\
+                or global_step > self.config.percentile_end_step
+            ):
+            # only update percentile in the early stage, to avoid inaccurate percentile caused by unstable training in the later stage
+            self._do_percentile_update = False  
 
         with torch.no_grad():
             self.update_states(outputs)
@@ -118,15 +135,26 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
 
         torch.cuda.empty_cache()
 
-    
+
     @override
     def _densify_and_clone(self, grads, gaussian_model: XrayCoronaryGaussianModel, optimizers: list):
-        grad_threshold = self.config.densify_grad_threshold
         percent_dense = self.config.percent_dense
         scene_extent = self.cameras_extent
 
-        # Extract points that satisfy the gradient condition
-        selected_pts_mask = grads.norm(dim=-1) >= grad_threshold
+        grad_norm = grads.norm(dim=-1)
+        
+        # use percentile to determine the gradient threshold, which is more robust in early training stage when 
+        # the gradient distribution is unstable. and switch to a fixed threshold in later stage to avoid inaccurate 
+        # percentile caused by unstable training.
+        if self._do_percentile_update:
+            percentile = self.config.densify_grad_percentile
+            grad_threshold = torch.quantile(grad_norm, percentile).item()
+        else:
+            if self._grad_threshold is None:
+                self._grad_threshold = max(torch.quantile(grad_norm, 0.99).item(), self.config.densify_grad_threshold)
+            grad_threshold = self._grad_threshold
+
+        selected_pts_mask = grad_norm >= grad_threshold
         # Exclude big Gaussians
         selected_pts_mask = torch.logical_and(
             selected_pts_mask,
@@ -144,7 +172,6 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
 
     @override
     def _densify_and_split(self, grads, gaussian_model: XrayCoronaryGaussianModel, optimizers: list, N: int = 2):
-        grad_threshold = self.config.densify_grad_threshold
         percent_dense = self.config.percent_dense
         scene_extent = self.cameras_extent
 
@@ -155,9 +182,17 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         # The number of Gaussians and `grads` is different after cloning, so padding is required
         padded_grad = torch.zeros((n_init_points,), device=device)
         padded_grad[:grads.shape[0]] = grads.squeeze()
-
+        
+        if self._do_percentile_update:
+            percentile = self.config.densify_grad_percentile
+            grad_threshold = torch.quantile(padded_grad, percentile).item()
+        else:
+            if self._grad_threshold is None:
+                self._grad_threshold = max(torch.quantile(padded_grad, 0.99).item(), self.config.densify_grad_threshold)
+            grad_threshold = self._grad_threshold
+        
         # Extract points that satisfy the gradient condition
-        selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
+        selected_pts_mask = (padded_grad >= grad_threshold)
         # Exclude small Gaussians
         selected_pts_mask = torch.logical_and(
             selected_pts_mask,

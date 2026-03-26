@@ -178,8 +178,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         radii = meta_whole["radii"]
         visibility_filter = radii > 0
         
-        density_90_percentile = torch.quantile(density, 0.90)
-        mask = (density > density_90_percentile).squeeze()
+        mask = (density > torch.quantile(density, 0.80)).squeeze()
         if not torch.any(mask):
             mask = torch.ones_like(mask, dtype=torch.bool)
         
@@ -219,7 +218,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         if self.optimization_config.enable_ast:     # add AST noise
             time_interval = 1 / ((step % self.train_set_length) + 1)
             # phase interval = 0.03
-            ast_noise = 0.03 * torch.randn(1, 1, device=means3D.device).expand(N, -1) * time_interval * self.smooth_term(step)
+            ast_noise = torch.randn(1, 1, device=means3D.device).expand(N, -1) * time_interval * self.smooth_term(step)
             time = time + ast_noise
 
         # update means3D, rotation, scales
