@@ -77,7 +77,9 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
             self.update_states(outputs)
 
             # densify and pruning
-            if global_step > self.config.densify_from_iter and global_step % self.config.densification_interval == 0:
+            if global_step > self.config.densify_from_iter\
+                and global_step % self.config.densification_interval == 0\
+                and global_step % self.config.density_reset_interval >= self.config.densification_interval: # avoid densifying right after density reset
                 size_threshold = 20 if global_step > self.config.density_reset_interval else None
                 self._densify_and_prune(
                     max_screen_size=size_threshold,
