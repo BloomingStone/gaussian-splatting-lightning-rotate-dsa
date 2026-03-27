@@ -86,15 +86,15 @@ class RotatedXRay(DataParserConfig):
         DL: use deep learning to init point cloud.
     init_point_cloud_num: number of points to init point cloud, only used when init_point_cloud_mode is uniform or random.
     coronary_type: only used when init_point_cloud_mode is label, specify which coronary to reconstruct
+    train_ratio: ratio of images to use for training, only used when mode is render-new-views
+    seed: random seed for data splitting and point cloud initialization
     """
     base_name: str = "rotate_dsa"
     mode: Literal["reconstruction", "render-new-views"] = "reconstruction"
     init_point_cloud_mode: Literal["uniform", "random", "random-ball", "FBP", "DL", "label", "central-line"] = "uniform"
     init_point_cloud_num: int = 100_000
     coronary_type: Literal["LCA", "RCA"]|None = None
-    
-    # use_angles: bool = True    # if use angles to init cameras, will use angles to init cameras, otherwise will use R_w2c and T_w2c to init cameras
-    
+    train_ratio: float = 0.8
     seed: int = 0
     
     def instantiate(self, path: str, output_path: str, global_rank: int) -> DataParser:
@@ -228,7 +228,7 @@ class RotatedXRayDataParser(DataParser):
         indices = np.arange(n_images)
         np.random.seed(self.params.seed)
         np.random.shuffle(indices)
-        len_train = int(n_images * 0.8)
+        len_train = int(n_images * self.params.train_ratio)  # TODO: make it configurable
         train_indices = indices[:len_train].tolist()
         valid_indices = indices[len_train:].tolist()
         return train_indices, valid_indices
