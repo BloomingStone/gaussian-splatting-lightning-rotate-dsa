@@ -20,6 +20,7 @@ data:
       mode: render-new-views
       init_point_cloud_mode: random
       init_point_cloud_num: 50_000
+      train_ratio: 0.2
 model:
   max_save_val_output: 2
   renderer:

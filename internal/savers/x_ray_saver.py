@@ -78,7 +78,7 @@ def deform_field_to_volume(
     for start in range(0, xyz.shape[0], batch_size):
         end = min(start + batch_size, xyz.shape[0])
         xyz_batch = xyz[start:end]
-        t_batch = torch.zeros((xyz_batch.shape[0], 1), device=device) * 0.5  # input phase is 0.5
+        t_batch = torch.zeros((xyz_batch.shape[0], 1), device=device)  # input phase is 0.
         d_xyz, _, _ = deform_model(xyz_batch, t_batch)
         dxyz_chunks.append(d_xyz.cpu().float())
 
@@ -252,7 +252,7 @@ class XRaySaverModule(SaverModule):
         
         d_xyz, d_scaling, d_rotation = deform_model(
             means3D.detach(), 
-            torch.zeros(means3D.shape[0], 1).to(means3D.device) * 0.5,   # input phase is 0.5
+            torch.zeros(means3D.shape[0], 1).to(means3D.device),   # input phase is 0
         )
         
         means3D, rotation, scales = DeformModel.deform(
