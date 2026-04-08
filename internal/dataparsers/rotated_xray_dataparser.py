@@ -2,6 +2,7 @@ from typing import Literal
 import json
 from dataclasses import dataclass
 from pathlib import Path
+import hashlib
 
 import numpy as np
 import torch
@@ -96,6 +97,7 @@ class RotatedXRay(DataParserConfig):
     coronary_type: Literal["LCA", "RCA"]|None = None
     train_ratio: float = 0.8
     seed: int = 0
+    random_loader_mode: Literal["random-shuffle", "random-start", "no-random"] = "random-shuffle"
     
     def instantiate(self, path: str, output_path: str, global_rank: int) -> DataParser:
         return RotatedXRayDataParser(path=path, output_path=output_path, global_rank=global_rank, params=self)
@@ -226,9 +228,22 @@ class RotatedXRayDataParser(DataParser):
     
     def _random_split(self, n_images: int) -> tuple[list[int], list[int]]:
         indices = np.arange(n_images)
-        np.random.seed(self.params.seed)
-        np.random.shuffle(indices)
-        len_train = int(n_images * self.params.train_ratio)  # TODO: make it configurable
+        len_train = int(n_images * self.params.train_ratio)
+        
+        seed = int.from_bytes(hashlib.sha256(str(self.path).encode()).digest(), byteorder='big') % 2**32 + self.params.seed
+        np.random.seed(seed)
+        
+        match self.params.random_loader_mode:
+            case "random-shuffle":
+                np.random.shuffle(indices)
+            case "random-start":
+                start = np.random.randint(0, n_images-len_train)
+                indices = np.roll(indices, -start)
+            case "no-random":
+                pass
+            case _:
+                raise ValueError(f"Unknown random_loader_mode: {self.params.random_loader_mode}")
+        
         train_indices = indices[:len_train].tolist()
         valid_indices = indices[len_train:].tolist()
         return train_indices, valid_indices
