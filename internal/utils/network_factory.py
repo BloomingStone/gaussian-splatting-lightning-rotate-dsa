@@ -30,15 +30,13 @@ class PyTorchHashGridEncoding(nn.Module):
         self.max_resolution = max_resolution
         
         # Calculate growth factor
+        # Uniform in log space to ensure smooth transition between levels
+        # \log r_l = \log r_{base} + l \cdot \frac{ \log r_{max} - \log r_{base} }{ L_n - 1 }
+        # r_l = r_{base} \exp(\frac{ \log r_{max} - \log r_{base} }{ L_n - 1 }) ^ l
         if n_levels > 1:
             self.growth_factor = np.exp((np.log(max_resolution) - np.log(base_resolution)) / (n_levels - 1))
         else:
             self.growth_factor = 1.0
-        
-        # Scene bounds: -128 to 128
-        self.scene_min = -128.0
-        self.scene_max = 128.0
-        self.scene_range = self.scene_max - self.scene_min
         
         # Create hash tables for each level
         self.hash_tables = nn.ModuleList()
@@ -113,13 +111,11 @@ class PyTorchHashGridEncoding(nn.Module):
         return result
     
     def forward(self, x):
-        # Normalize coordinates from [-128, 128] to [0, 1]
-        x_norm = (x - self.scene_min) / self.scene_range
-        
+        assert x.min() >= 0 and x.max() <= 1, "Input coordinates should be normalized to [0, 1]"
         # Encode at each level and concatenate
         encodings = []
         for level in range(self.n_levels):
-            level_encoding = self.trilinear_interpolation(x_norm, self.resolutions[level], self.hash_tables[level])
+            level_encoding = self.trilinear_interpolation(x, self.resolutions[level], self.hash_tables[level])
             encodings.append(level_encoding)
         
         return torch.cat(encodings, dim=-1)
@@ -144,7 +140,7 @@ class HashGridEncoding(nn.Module):
         else:
             self.growth_factor = 1.0
         
-        # Scene bounds: -128 to 128
+        # Scene bounds: -150 to 150
         self.scene_min = -150.0
         self.scene_max = 150.0
         self.scene_range = self.scene_max - self.scene_min
