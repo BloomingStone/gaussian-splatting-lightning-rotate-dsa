@@ -18,7 +18,7 @@ from ..gaussian_splatting import GaussianSplatting
 from ..mp_strategy import MPStrategy
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from ..renderers.deformabel_xray_renderer import CoronaryDeformableXrayRenderer
-from ..models.coronary_deform_model import DeformModel
+from ..deform_models import DeformModel
 
 
 def quaternion_to_matrix(q: torch.Tensor) -> torch.Tensor:

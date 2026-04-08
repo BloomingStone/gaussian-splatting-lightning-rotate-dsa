@@ -432,7 +432,6 @@ environments:
       - pypi: git+https://github.com/BloomingStone/diff-gaussian-rasterization.git?branch=main#a829cd8b5a90aa1751b0116e4ceb0c79467b32cc
       - pypi: https://files.pythonhosted.org/packages/d5/1f/5f4a3cd9e4440e9d9bc78ad0a91a1c8d46b4d429d5239ebe6793c9fe5c41/fsspec-2026.3.0-py3-none-any.whl
       - pypi: git+https://github.com/rahul-goel/fused-ssim.git?branch=main#a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38
-      - pypi: git+https://github.com/BloomingStone/generate_4d_heart.git?branch=main#7d296113d6f41ff210ac8a8a3c5eddd332ba2e02
       - pypi: git+https://github.com/nerfstudio-project/gsplat.git?tag=v1.5.3#937e29912570c372bed6747a5c9bf85fed877bae
       - pypi: https://files.pythonhosted.org/packages/c6/50/e0edd38dcd63fb26a8547f13d28f7a008bc4a3fd4eb4ff030673f22ad41a/hydra_core-1.3.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/94/05/3e39d416fb92b2738a76e8265e6bfc5d10542f90a7c32ad1eb831eea3fa3/jaxtyping-0.3.9-py3-none-any.whl
@@ -884,7 +883,6 @@ environments:
       - pypi: git+https://github.com/BloomingStone/diff-gaussian-rasterization.git?branch=main#a829cd8b5a90aa1751b0116e4ceb0c79467b32cc
       - pypi: https://files.pythonhosted.org/packages/d5/1f/5f4a3cd9e4440e9d9bc78ad0a91a1c8d46b4d429d5239ebe6793c9fe5c41/fsspec-2026.3.0-py3-none-any.whl
       - pypi: git+https://github.com/rahul-goel/fused-ssim.git?branch=main#a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38
-      - pypi: git+https://github.com/BloomingStone/generate_4d_heart.git?branch=main#7d296113d6f41ff210ac8a8a3c5eddd332ba2e02
       - pypi: git+https://github.com/yzslab/gsplat.git#3f73948b28f9ff1271c29738be923073019cf751
       - pypi: https://files.pythonhosted.org/packages/c6/50/e0edd38dcd63fb26a8547f13d28f7a008bc4a3fd4eb4ff030673f22ad41a/hydra_core-1.3.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/94/05/3e39d416fb92b2738a76e8265e6bfc5d10542f90a7c32ad1eb831eea3fa3/jaxtyping-0.3.9-py3-none-any.whl
@@ -1334,7 +1332,6 @@ environments:
       - pypi: git+https://github.com/BloomingStone/diff-gaussian-rasterization.git?branch=X-Gaussian#adfab90d8b889c2d7d7d3e24d5d96b46cb2ce6c6
       - pypi: https://files.pythonhosted.org/packages/d5/1f/5f4a3cd9e4440e9d9bc78ad0a91a1c8d46b4d429d5239ebe6793c9fe5c41/fsspec-2026.3.0-py3-none-any.whl
       - pypi: git+https://github.com/rahul-goel/fused-ssim.git?branch=main#a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38
-      - pypi: git+https://github.com/BloomingStone/generate_4d_heart.git?branch=main#7d296113d6f41ff210ac8a8a3c5eddd332ba2e02
       - pypi: git+https://github.com/nerfstudio-project/gsplat.git?tag=v1.5.3#937e29912570c372bed6747a5c9bf85fed877bae
       - pypi: https://files.pythonhosted.org/packages/c6/50/e0edd38dcd63fb26a8547f13d28f7a008bc4a3fd4eb4ff030673f22ad41a/hydra_core-1.3.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/94/05/3e39d416fb92b2738a76e8265e6bfc5d10542f90a7c32ad1eb831eea3fa3/jaxtyping-0.3.9-py3-none-any.whl
@@ -2440,12 +2437,8 @@ packages:
 - pypi: ./
   name: gaussian-splatting-lightning
   version: 0.0.0
-  sha256: 46c7c4f5dfe27bbb46caa49bc487913293edc85ca36e62f5fb8c25f3da44e4f2
+  sha256: 1391a73ac484810b34414a473a8c02b0a10fa79d7b6acc66d8c7464e2b28de69
   requires_python: '>=3.10'
-- pypi: git+https://github.com/BloomingStone/generate_4d_heart.git?branch=main#7d296113d6f41ff210ac8a8a3c5eddd332ba2e02
-  name: generate-4d-heart
-  version: 0.0.0
-  requires_python: '>=3.12'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/giflib-5.2.2-hd590300_0.conda
   sha256: aac402a8298f0c0cc528664249170372ef6b37ac39fdc92b40601a6aed1e32ff
   md5: 3bf7b9fd5a7136126e0234db4b87c8b6

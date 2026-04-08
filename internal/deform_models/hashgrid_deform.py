@@ -2,20 +2,22 @@
 Copied from https://github.com/ingra14m/Deformable-3D-Gaussians/blob/main/utils/time_utils.py
 """
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from .deform_model import DeformModel, DefromModelConfig
 from ..utils.network_factory import NetworkFactory
 from ..utils.gaussian_utils import GaussianTransformUtils
-from ..encodings.vector_positional_encoding import VectorPositionalEncoding
+from ..encodings.xray_phase_encoding import PhaseEncoding
 
 
 def get_phase_embedder(
     multires: int, 
     input_ch: int
 ) -> tuple[nn.Module, int]:
-    phase_encoder = VectorPositionalEncoding(input_channels=input_ch, n_frequencies=multires)
+    phase_encoder = PhaseEncoding(input_channels=input_ch, n_frequencies=multires)
     return phase_encoder, phase_encoder.get_output_n_channels()
 
 
@@ -52,9 +54,15 @@ class MLP(nn.Module):
             h = torch.cat([x, h], dim=-1)
         return self.out_layer(h)
         
+class Scale(nn.Module):
+    def __init__(self, s):
+        super().__init__()
+        self.s = s
+    def forward(self, x):
+        return x * self.s
 
 @dataclass
-class DeformModelConfig:
+class HashGridDeformConfig(DefromModelConfig):
     D: int = 2  # deepth for each layer of MLP
     
     t_multires: int = 6
@@ -64,25 +72,22 @@ class DeformModelConfig:
     
     tcnn: bool = True
     
-    x_multires: int = 13
+    x_multires: int = 7
     n_features_per_level: int = 4
-    log2_hashmap_size: int = 19
+    log2_hashmap_size: int = 7
     base_resolution: int = 16
-    max_resolution: int = 2048
+    max_resolution: int = 128
+    
+    def instantiate(self, *args, **kwargs) -> Any:
+        return HashGridDefromModel(self)
 
-class Scale(nn.Module):
-    def __init__(self, s):
-        super().__init__()
-        self.s = s
-    def forward(self, x):
-        return x * self.s
 
-class DeformModel(nn.Module):
+class HashGridDefromModel(DeformModel):
     def __init__(
             self,
-            cfg: DeformModelConfig = DeformModelConfig(),
+            cfg: HashGridDeformConfig = HashGridDeformConfig(),
     ):
-        super().__init__()
+        super().__init__(cfg)
         self.network_factory = NetworkFactory(tcnn=cfg.tcnn)
         self.cfg = cfg
 
@@ -167,18 +172,3 @@ class DeformModel(nn.Module):
         d_rotation = torch.nn.functional.normalize(d_rotation)
         
         return d_xyz, d_scaling, d_rotation
-    
-    @staticmethod
-    def deform(
-        xyz: torch.Tensor,
-        rotation: torch.Tensor,
-        scaling: torch.Tensor,
-        d_xyz: torch.Tensor,
-        d_rotation: torch.Tensor,
-        d_scaling: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        xyz = xyz + d_xyz
-        scaling = scaling * ( 1 + d_scaling )
-        rotation = GaussianTransformUtils.quat_multiply(rotation, d_rotation)
-        
-        return xyz, rotation, scaling

@@ -14,7 +14,7 @@ from .renderer import Renderer, RendererOutputInfo, RendererOutputTypes
 from ..cameras import Camera
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from ..cameras import Camera
-from ..models.coronary_deform_model import DeformModel, DeformModelConfig
+from ..deform_models import DeformModel, DefromModelConfig
 from ..utils.network_factory import NetworkFactory
 from ..utils.general_utils import get_linear_noise_func
 from ..utils.gaussian_utils import GaussianTransformUtils
@@ -79,78 +79,38 @@ class RenderRes:
             return defualt_value
 
 class CoronaryDeformableXrayRenderer(Renderer):
+    deform_model: DeformModel
+    
     def __init__(
             self,
-            optimization: DeformableRendererOptimizationConfig,
-            deform_network: DeformModelConfig
+            optimization_config: DeformableRendererOptimizationConfig,
+            deform_model_config: DefromModelConfig
     ) -> None:
         super().__init__()
-        self.deform_network_config = deform_network
-        self.optimization_config = optimization
+        self.deform_model_config = deform_model_config
+        self.optimization_config = optimization_config
         self._grad_hook_registered = False
 
     @staticmethod
-    def _grad_stats(parameters: list[Tensor]|list[torch.nn.Parameter]) -> dict[str, float]:
-        total_sq_norm = 0.0
-        max_abs = 0.0
-        nan_count = 0.0
-        inf_count = 0.0
-        grad_param_count = 0.0
-        grad_elem_count = 0.0
-
-        for p in parameters:
-            g = p.grad
-            if g is None:
-                continue
-            grad_param_count += 1.0
-            grad_elem_count += float(g.numel())
-            g32 = g.detach().float()
-            nan_count += float(torch.isnan(g32).sum().item())
-            inf_count += float(torch.isinf(g32).sum().item())
-            total_sq_norm += float(torch.square(g32).sum().item())
-            max_abs = max(max_abs, float(g32.abs().max().item()))
-
-        return {
-            "l2": total_sq_norm ** 0.5,
-            "max_abs": max_abs,
-            "nan_count": nan_count,
-            "inf_count": inf_count,
-            "grad_param_count": grad_param_count,
-            "grad_elem_count": grad_elem_count,
-        }
-
-    def _register_grad_hook(self, lightning_module: LightningModule):
-        if self._grad_hook_registered:
+    def _ensure_finite(name: str, tensor: Tensor, step: int | None = None) -> None:
+        if torch.isfinite(tensor).all():
             return
 
-        def _log_gradients(outputs, batch, gaussian_model: XrayCoronaryGaussianModel, global_step: int, pl_module: LightningModule):
-            if self.optimization_config.log_gradients is False:
-                return
-            if self.optimization_config.grad_log_interval <= 0:
-                return
-            if global_step % self.optimization_config.grad_log_interval != 0:
-                return
-            if pl_module.global_rank != 0:
-                return
-            if pl_module.logger is None:
-                return
+        finite_mask = torch.isfinite(tensor)
+        finite_vals = tensor[finite_mask]
+        if finite_vals.numel() > 0:
+            min_v = float(finite_vals.min().item())
+            max_v = float(finite_vals.max().item())
+        else:
+            min_v = float("nan")
+            max_v = float("nan")
 
-            embed_params = list(self.deform_model.embed_fn.parameters())
+        step_msg = f" at step={step}" if step is not None else ""
+        raise RuntimeError(
+            f"Non-finite tensor detected for '{name}'{step_msg}. "
+            f"shape={tuple(tensor.shape)}, finite_min={min_v}, finite_max={max_v}"
+        )
 
-            embed_stats = self._grad_stats(embed_params)
-            metrics_to_log = {
-                "grad/model/embed_fn/l2": embed_stats["l2"],
-                "grad/model/embed_fn/max_abs": embed_stats["max_abs"],
-                "grad/model/embed_fn/nan_count": embed_stats["nan_count"],
-                "grad/model/embed_fn/inf_count": embed_stats["inf_count"],
-                "grad/model/embed_fn/param_count": embed_stats["grad_param_count"],
-                "grad/model/embed_fn/elem_count": embed_stats["grad_elem_count"],
-            }
-            pl_module.logger.log_metrics(metrics_to_log, step=pl_module.trainer.global_step)
-
-        lightning_module.on_after_backward_hooks.append(_log_gradients)
-        self._grad_hook_registered = True
-    
     def forward(
         self,
         viewpoint_camera: Camera,
@@ -165,9 +125,15 @@ class CoronaryDeformableXrayRenderer(Renderer):
         time = viewpoint_camera.time.unsqueeze(0).expand(means3D.shape[0], -1)
         
         d_xyz, d_scaling, d_rotation = self.deform_model(means3D.detach(), time.detach())
-        means3D, rotation, scales = DeformModel.deform(
+        self._ensure_finite("d_xyz", d_xyz)
+        self._ensure_finite("d_scaling", d_scaling)
+        self._ensure_finite("d_rotation", d_rotation)
+        means3D, rotation, scales = self.deform_model.deform(
             means3D, rotation, scales, d_xyz, d_rotation, d_scaling
         )
+        self._ensure_finite("means3D", means3D)
+        self._ensure_finite("rotation", rotation)
+        self._ensure_finite("scales", scales)
         
         d_motion_mean = pc.get_motion_mean().detach()
         d_motion_var = pc.get_motion_var().detach()
@@ -220,12 +186,21 @@ class CoronaryDeformableXrayRenderer(Renderer):
             ast_noise = torch.randn(1, 1, device=means3D.device).expand(N, -1) * time_interval * self.smooth_term(step)
             time = time + ast_noise
 
+        if module.global_step == 144:
+            pass
+        
         # update means3D, rotation, scales
         d_xyz, d_scaling, d_rotation= self.deform_model(means3D.detach(), time.detach())
+        self._ensure_finite("d_xyz", d_xyz, step=step)
+        self._ensure_finite("d_scaling", d_scaling, step=step)
+        self._ensure_finite("d_rotation", d_rotation, step=step)
         
-        means3D, rotation, scales = DeformModel.deform(
+        means3D, rotation, scales = self.deform_model.deform(
             means3D, rotation, scales, d_xyz, d_rotation, d_scaling
         )
+        self._ensure_finite("means3D", means3D, step=step)
+        self._ensure_finite("rotation", rotation, step=step)
+        self._ensure_finite("scales", scales, step=step)
         d_motion_mean, d_motion_var = pc.update_motions(d_xyz, d_scaling, d_rotation)
 
         gray_image, meta_whole = self._render(viewpoint_camera, means3D, rotation, scales, density)
@@ -294,8 +269,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         if stage == "fit":
             self.train_set_length = len(lightning_module.trainer.datamodule.dataparser_outputs.train_set)
         
-        self.deform_model = DeformModel(self.deform_network_config)
-        self._register_grad_hook(lightning_module)
+        self.deform_model = self.deform_model_config.instantiate()
         
         total_steps = lightning_module.trainer.max_steps
         self.smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=total_steps*0.8)

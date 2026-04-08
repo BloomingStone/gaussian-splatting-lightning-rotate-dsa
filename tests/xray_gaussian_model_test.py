@@ -12,16 +12,17 @@ from internal.models.xray_coronary_gaussian import (
     XrayCoronaryGaussian,
 )
 from internal.renderers.deformabel_xray_renderer import (
-    DeformableRendererOptimizationConfig, DeformModelConfig, CoronaryDeformableXrayRenderer,
+    DeformableRendererOptimizationConfig, CoronaryDeformableXrayRenderer,
 )
+from internal.deform_models import HashGridDeformConfig
 
-from internal.dataparsers.rotated_xray_dataparser import RotatedXRayParserParam
+from internal.dataparsers.rotated_xray_dataparser import RotatedXRay
 from internal.dataset import Dataset
 from internal.savers.x_ray_saver import XRaySaver
 
 class TestDeformableXrayRenderAndSaver(unittest.TestCase):
     def setUp(self):
-        parser = RotatedXRayParserParam(
+        parser = RotatedXRay(
             init_point_cloud_mode="random"
         ).instantiate(
             path="data/volume_dvf_reader_multipli_contrast_LCA",
@@ -55,8 +56,8 @@ class TestDeformableXrayRenderAndSaver(unittest.TestCase):
         gs_model = gs_model.to(self.device)
         
         render = CoronaryDeformableXrayRenderer(
-            optimization=DeformableRendererOptimizationConfig(),
-            deform_network=DeformModelConfig(),
+            optimization_config=DeformableRendererOptimizationConfig(),
+            deform_model_config=HashGridDeformConfig(),
         )
         render.setup("fit", lightning_module)
         render.to('cuda')

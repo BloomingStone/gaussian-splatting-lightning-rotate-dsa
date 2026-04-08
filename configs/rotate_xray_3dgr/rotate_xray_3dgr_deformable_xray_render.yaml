@@ -2,11 +2,10 @@ max_steps: 20000
 save_val: true
 cache_all_images: true
 trainer:
-  check_val_every_n_epoch: 5
+  check_val_every_n_epoch: 7
   precision: 16-mixed
 
-save_iterations:
-  - 20000
+save_iterations: [5000, 10000, 20000]
 
 
 data:
@@ -19,21 +18,28 @@ data:
     init_args:
       mode: render-new-views
       init_point_cloud_mode: random
-      init_point_cloud_num: 50_000
-      train_ratio: 0.2
+      init_point_cloud_num: 100_000
+      train_ratio: 0.5
+      random_loader_mode: random-start
 model:
   max_save_val_output: 2
   renderer:
     class_path: internal.renderers.deformabel_xray_renderer.CoronaryDeformableXrayRenderer
     init_args:
-      optimization:
+      optimization_config:
         enable_ast: true
         log_gradients: true
         grad_log_interval: 50
+      deform_model_config:
+        class_path: internal.deform_models.MLPDefromConfig
+        init_args:
+          x_multires: 3
+          phase_n_frequencies: 3
   metric:
     class_path: internal.metrics.rotate_xray_metrics.RotateXrayMetrics
     init_args:
       fused_ssim: true
+      w_phase_aware_loss: 0.1
   gaussian:
     class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
     init_args:
@@ -51,3 +57,4 @@ model:
       save_ckpt: false
       save_ply: false
       save_nii: true
+      save_phase: 0.5
