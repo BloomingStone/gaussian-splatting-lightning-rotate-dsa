@@ -23,7 +23,7 @@ class RotateXrayDensityController(DensityController):
 
     densify_grad_threshold: float = 5.0
     
-    densify_until_iter: int = 16_000
+    densify_until_frac: float = 0.8
 
 
     cull_density_threshold: float = 0.8e-3
@@ -74,7 +74,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
     
     @override
     def after_backward(self, outputs: dict, batch, gaussian_model: XrayCoronaryGaussianModel, optimizers: list, global_step: int, pl_module: GaussianSplatting) -> None:
-        if global_step >= self.config.densify_until_iter:
+        if global_step >= self.config.densify_until_frac*pl_module.trainer.max_steps:
             return
 
         with torch.no_grad():
