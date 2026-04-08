@@ -30,6 +30,14 @@ class RotateXrayMetrics(Metric):
     frangi_black_ridges: bool = False
     frangi_eps: float = 1e-6
 
+    enable_deform_tv_loss: bool = False
+    w_deform_tv_loss: float = 0.0
+    deform_tv_num_patches: int = 1
+    deform_tv_patch_grid_size: int = 8
+    deform_tv_patch_extent_ratio: float = 0.2
+    deform_tv_norm: Literal["l1", "l2"] = "l1"
+    deform_tv_eps: float = 1e-6
+
     rgb_diff_loss: Literal["l1", "l2"] = "l1"
 
     lpips_net_type: Literal["vgg", "alex", "squeeze"] = "alex"
@@ -181,6 +189,81 @@ class RotateXrayMetricsImpl(MetricImpl):
             vesselness_max = torch.maximum(vesselness_max, vesselness)
 
         return self._from_nchw(vesselness_max, image)
+
+    @staticmethod
+    def _get_gaussian_xyz(gaussian_model: XrayCoronaryGaussianModel) -> torch.Tensor:
+        xyz = gaussian_model.get_xyz
+        if callable(xyz):
+            xyz = xyz()
+        return xyz
+
+    def _deform_field_tv_loss(
+        self,
+        pl_module: GaussianSplatting,
+        gaussian_model: XrayCoronaryGaussianModel,
+        outputs: RenderRes,
+    ) -> torch.Tensor:
+        ref = outputs.gray_image
+        zero = ref.new_zeros(())
+
+        renderer = getattr(pl_module, "renderer", None)
+        if renderer is None or not hasattr(renderer, "deform_model"):
+            return zero
+
+        xyz = self._get_gaussian_xyz(gaussian_model)
+        if xyz is None or xyz.numel() == 0:
+            return zero
+
+        xyz_detached = xyz.detach()
+        xyz_min = xyz_detached.min(dim=0).values
+        xyz_max = xyz_detached.max(dim=0).values
+        bbox = (xyz_max - xyz_min).clamp_min(self.config.deform_tv_eps)
+
+        ratio = float(self.config.deform_tv_patch_extent_ratio)
+        ratio = max(min(ratio, 1.0), self.config.deform_tv_eps)
+        patch_extent = bbox * ratio
+        patch_half = 0.5 * patch_extent
+
+        center_low = xyz_min + patch_half
+        center_high = xyz_max - patch_half
+        center_span = (center_high - center_low).clamp_min(0.0)
+
+        grid_size = max(int(self.config.deform_tv_patch_grid_size), 2)
+        num_patches = max(int(self.config.deform_tv_num_patches), 1)
+
+        coord = torch.linspace(-1.0, 1.0, grid_size, device=xyz.device, dtype=xyz.dtype)
+        gz, gy, gx = torch.meshgrid(coord, coord, coord, indexing="ij")
+        base_grid = torch.stack((gx, gy, gz), dim=-1).reshape(-1, 3)
+
+        tv_losses = []
+        for _ in range(num_patches):
+            rand = torch.rand(3, device=xyz.device, dtype=xyz.dtype)
+            center = center_low + rand * center_span
+            sample_xyz = center.unsqueeze(0) + base_grid * patch_half.unsqueeze(0)
+
+            sample_time = outputs.time.to(device=sample_xyz.device, dtype=sample_xyz.dtype).reshape(1, 1)
+            sample_time = sample_time.expand(sample_xyz.shape[0], 1)
+
+            d_xyz, _, _ = renderer.deform_model(sample_xyz, sample_time)
+            d_xyz = d_xyz.reshape(grid_size, grid_size, grid_size, 3)
+
+            dx = d_xyz[1:, :, :, :] - d_xyz[:-1, :, :, :]
+            dy = d_xyz[:, 1:, :, :] - d_xyz[:, :-1, :, :]
+            dz = d_xyz[:, :, 1:, :] - d_xyz[:, :, :-1, :]
+
+            if self.config.deform_tv_norm == "l2":
+                eps = self.config.deform_tv_eps
+                tv_x = torch.sqrt((dx * dx).sum(dim=-1) + eps).mean()
+                tv_y = torch.sqrt((dy * dy).sum(dim=-1) + eps).mean()
+                tv_z = torch.sqrt((dz * dz).sum(dim=-1) + eps).mean()
+            else:
+                tv_x = dx.abs().mean()
+                tv_y = dy.abs().mean()
+                tv_z = dz.abs().mean()
+
+            tv_losses.append(tv_x + tv_y + tv_z)
+
+        return torch.stack(tv_losses).mean() if len(tv_losses) > 0 else zero
     
     def _get_basic_metrics(
         self, 
@@ -189,6 +272,7 @@ class RotateXrayMetricsImpl(MetricImpl):
         batch, 
         outputs: RenderRes,
         include_frangi_in_loss: bool = False,
+        include_deform_tv_in_loss: bool = False,
     ):
         image_info: Tuple[str, torch.Tensor, torch.Tensor]
         _, image_info, _ = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
@@ -222,6 +306,13 @@ class RotateXrayMetricsImpl(MetricImpl):
             frangi_loss = self.rgb_diff_loss_fn(pred_frangi, gt_frangi)
             frangi_loss_weighted = self.config.w_frangi_loss * frangi_loss
             loss = loss + frangi_loss_weighted
+
+        deform_tv_loss = torch.zeros_like(loss)
+        deform_tv_loss_weighted = torch.zeros_like(loss)
+        if include_deform_tv_in_loss and self.config.enable_deform_tv_loss and self.config.w_deform_tv_loss > 0:
+            deform_tv_loss = self._deform_field_tv_loss(pl_module, gaussian_model, outputs)
+            deform_tv_loss_weighted = self.config.w_deform_tv_loss * deform_tv_loss
+            loss = loss + deform_tv_loss_weighted
         
         assert not torch.isnan(loss), "Loss is NaN!"
         
@@ -236,6 +327,9 @@ class RotateXrayMetricsImpl(MetricImpl):
         if include_frangi_in_loss:
             metrics["frangi_loss"] = frangi_loss
             metrics["frangi_loss_weighted"] = frangi_loss_weighted
+        if include_deform_tv_in_loss:
+            metrics["deform_tv_loss"] = deform_tv_loss
+            metrics["deform_tv_loss_weighted"] = deform_tv_loss_weighted
         
         prog_bar = {
             "loss": True,
@@ -248,6 +342,9 @@ class RotateXrayMetricsImpl(MetricImpl):
         if include_frangi_in_loss:
             prog_bar["frangi_loss"] = True
             prog_bar["frangi_loss_weighted"] = True
+        if include_deform_tv_in_loss:
+            prog_bar["deform_tv_loss"] = True
+            prog_bar["deform_tv_loss_weighted"] = True
         
         if outputs.time < 0.1:
             metrics["small_phase_d_xyz_mean"] = d_xyz
@@ -262,6 +359,7 @@ class RotateXrayMetricsImpl(MetricImpl):
             batch=batch,
             outputs=outputs,
             include_frangi_in_loss=True,
+            include_deform_tv_in_loss=True,
         )
     
     def get_validate_metrics(self, pl_module, gaussian_model, batch, outputs: RenderRes) -> Tuple[Dict[str, Any], Dict[str, bool]]:
@@ -271,6 +369,7 @@ class RotateXrayMetricsImpl(MetricImpl):
             batch,
             outputs,
             include_frangi_in_loss=False,
+            include_deform_tv_in_loss=False,
         )
 
         image_info: Tuple[str, torch.Tensor, torch.Tensor]

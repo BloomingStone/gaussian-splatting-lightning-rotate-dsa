@@ -44,6 +44,13 @@ model:
       w_base_train_loss: 1.0
       enable_frangi_loss: false
       w_frangi_loss: 0.0
+      enable_deform_tv_loss: false
+      w_deform_tv_loss: 0.0
+      deform_tv_num_patches: 1
+      deform_tv_patch_grid_size: 8
+      deform_tv_patch_extent_ratio: 0.2
+      deform_tv_norm: l1
+      deform_tv_eps: 1.0e-6
   gaussian:
     class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
     init_args:
