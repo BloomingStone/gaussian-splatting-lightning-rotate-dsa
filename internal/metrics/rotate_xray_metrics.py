@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Tuple, Dict, Literal, Any
 
 import torch
+import torch.nn.functional as F
 from torchmetrics.image import PeakSignalNoiseRatio
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from monai.losses.dice import DiceCELoss
@@ -16,8 +17,18 @@ from ..gaussian_splatting import GaussianSplatting
 class RotateXrayMetrics(Metric):
     w_gray_loss_whole: float = 1.0
     w_ssim_loss_whole: float = 1.0
-    
+
     w_phase_aware_loss: float = 0.0
+
+    # Weight for the original train loss branch (gray + ssim + phase aware).
+    w_base_train_loss: float = 1.0
+    enable_frangi_loss: bool = False
+    w_frangi_loss: float = 0.0
+    frangi_sigmas: Tuple[float, ...] = (1.0, 2.0, 3.0)
+    frangi_beta: float = 0.5
+    frangi_gamma: float = 15.0
+    frangi_black_ridges: bool = False
+    frangi_eps: float = 1e-6
 
     rgb_diff_loss: Literal["l1", "l2"] = "l1"
 
@@ -81,15 +92,103 @@ class RotateXrayMetricsImpl(MetricImpl):
         if self.config.fused_ssim:
             print("Fused SSIM enabled")
             self.ssim = self._create_fused_ssim_adapter()
-        
+
         self.dice_loss_fn = DiceCELoss()
+        self._build_frangi_kernels(dtype=torch.float32)
+
+    def _build_frangi_kernels(self, dtype: torch.dtype = torch.float32):
+        self.frangi_kernels = []
+        for sigma in self.config.frangi_sigmas:
+            if sigma <= 0:
+                continue
+            radius = max(1, int(round(3.0 * sigma)))
+            ksize = 2 * radius + 1
+            coords = torch.arange(-radius, radius + 1, dtype=dtype)
+            yy, xx = torch.meshgrid(coords, coords, indexing="ij")
+
+            sigma2 = sigma * sigma
+            gaussian = torch.exp(-(xx * xx + yy * yy) / (2.0 * sigma2)) / (2.0 * torch.pi * sigma2)
+
+            dxx = ((xx * xx - sigma2) / (sigma2 * sigma2)) * gaussian
+            dyy = ((yy * yy - sigma2) / (sigma2 * sigma2)) * gaussian
+            dxy = ((xx * yy) / (sigma2 * sigma2 * sigma2)) * gaussian
+
+            # Scale normalization for Hessian at current sigma.
+            dxx = (sigma2 * dxx).unsqueeze(0).unsqueeze(0)
+            dyy = (sigma2 * dyy).unsqueeze(0).unsqueeze(0)
+            dxy = (sigma2 * dxy).unsqueeze(0).unsqueeze(0)
+
+            self.frangi_kernels.append((dxx, dyy, dxy))
+
+    @staticmethod
+    def _to_nchw(image: torch.Tensor) -> torch.Tensor:
+        if image.dim() == 2:
+            return image.unsqueeze(0).unsqueeze(0)
+        if image.dim() == 3:
+            return image.unsqueeze(0)
+        if image.dim() == 4:
+            return image
+        raise ValueError(f"Unsupported image dim for Frangi: {image.dim()}")
+
+    @staticmethod
+    def _from_nchw(filtered: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
+        if ref.dim() == 2:
+            return filtered[0, 0]
+        if ref.dim() == 3:
+            return filtered[0]
+        return filtered
+
+    @staticmethod
+    def _conv2d_depthwise(image_nchw: torch.Tensor, kernel_1x1khkw: torch.Tensor) -> torch.Tensor:
+        channels = image_nchw.shape[1]
+        k = kernel_1x1khkw.shape[-1]
+        weight = kernel_1x1khkw.to(device=image_nchw.device, dtype=image_nchw.dtype).expand(channels, 1, k, k)
+        return F.conv2d(image_nchw, weight, padding=k // 2, groups=channels)
+
+    def _frangi_filter(self, image: torch.Tensor) -> torch.Tensor:
+        image_nchw = self._to_nchw(image)
+        if len(self.frangi_kernels) == 0:
+            return image
+
+        eps = self.config.frangi_eps
+        beta2 = max(self.config.frangi_beta * self.config.frangi_beta, eps)
+        gamma2 = max(self.config.frangi_gamma * self.config.frangi_gamma, eps)
+
+        vesselness_max = torch.zeros_like(image_nchw)
+        for dxx_kernel, dyy_kernel, dxy_kernel in self.frangi_kernels:
+            dxx = self._conv2d_depthwise(image_nchw, dxx_kernel)
+            dyy = self._conv2d_depthwise(image_nchw, dyy_kernel)
+            dxy = self._conv2d_depthwise(image_nchw, dxy_kernel)
+
+            trace = dxx + dyy
+            det_term = torch.sqrt((dxx - dyy) * (dxx - dyy) + 4.0 * dxy * dxy + eps)
+            lambda1 = 0.5 * (trace + det_term)
+            lambda2 = 0.5 * (trace - det_term)
+
+            swap_mask = lambda1.abs() > lambda2.abs()
+            lambda1_sorted = torch.where(swap_mask, lambda2, lambda1)
+            lambda2_sorted = torch.where(swap_mask, lambda1, lambda2)
+
+            rb = lambda1_sorted.abs() / (lambda2_sorted.abs() + eps)
+            s2 = lambda1_sorted * lambda1_sorted + lambda2_sorted * lambda2_sorted
+            vesselness = torch.exp(-(rb * rb) / (2.0 * beta2)) * (1.0 - torch.exp(-s2 / (2.0 * gamma2)))
+
+            if self.config.frangi_black_ridges:
+                vesselness = torch.where(lambda2_sorted < 0, torch.zeros_like(vesselness), vesselness)
+            else:
+                vesselness = torch.where(lambda2_sorted > 0, torch.zeros_like(vesselness), vesselness)
+
+            vesselness_max = torch.maximum(vesselness_max, vesselness)
+
+        return self._from_nchw(vesselness_max, image)
     
     def _get_basic_metrics(
         self, 
         pl_module: GaussianSplatting, 
         gaussian_model: XrayCoronaryGaussianModel, 
         batch, 
-        outputs: RenderRes
+        outputs: RenderRes,
+        include_frangi_in_loss: bool = False,
     ):
         image_info: Tuple[str, torch.Tensor, torch.Tensor]
         _, image_info, _ = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
@@ -107,29 +206,48 @@ class RotateXrayMetricsImpl(MetricImpl):
         l_phase_aware_loss = (2*(outputs.time - 0.5)) ** 4 * d_xyz  
         l_phase_aware_loss = l_phase_aware_loss.mean()
 
-        loss = (
+        base_loss = (
             # image loss
             self.config.w_gray_loss_whole * gray_loss_whole +
             self.config.w_ssim_loss_whole * ssim_loss_whole +
             self.config.w_phase_aware_loss * l_phase_aware_loss
         )
+
+        loss = self.config.w_base_train_loss * base_loss
+        frangi_loss = torch.zeros_like(loss)
+        frangi_loss_weighted = torch.zeros_like(loss)
+        if include_frangi_in_loss and self.config.enable_frangi_loss and self.config.w_frangi_loss > 0:
+            pred_frangi = self._frangi_filter(outputs.gray_image)
+            gt_frangi = self._frangi_filter(gt_image)
+            frangi_loss = self.rgb_diff_loss_fn(pred_frangi, gt_frangi)
+            frangi_loss_weighted = self.config.w_frangi_loss * frangi_loss
+            loss = loss + frangi_loss_weighted
         
         assert not torch.isnan(loss), "Loss is NaN!"
         
         metrics = {
             "loss": loss,
+            "base_train_loss": base_loss,
             "gray_loss_whole": gray_loss_whole,
             "ssim_loss_whole": ssim_loss_whole,
-            "phase_aware_loss": l_phase_aware_loss
+            "phase_aware_loss": l_phase_aware_loss,
         }
+
+        if include_frangi_in_loss:
+            metrics["frangi_loss"] = frangi_loss
+            metrics["frangi_loss_weighted"] = frangi_loss_weighted
         
         prog_bar = {
             "loss": True,
-            
+            "base_train_loss": True,
             "gray_loss_whole": True,
             "ssim_loss_whole": True,
             "phase_aware_loss": True,
         }
+
+        if include_frangi_in_loss:
+            prog_bar["frangi_loss"] = True
+            prog_bar["frangi_loss_weighted"] = True
         
         if outputs.time < 0.1:
             metrics["small_phase_d_xyz_mean"] = d_xyz
@@ -143,10 +261,17 @@ class RotateXrayMetricsImpl(MetricImpl):
             gaussian_model=gaussian_model,
             batch=batch,
             outputs=outputs,
+            include_frangi_in_loss=True,
         )
     
     def get_validate_metrics(self, pl_module, gaussian_model, batch, outputs: RenderRes) -> Tuple[Dict[str, Any], Dict[str, bool]]:
-        metrics, prog_bar = self._get_basic_metrics(pl_module, gaussian_model, batch, outputs)
+        metrics, prog_bar = self._get_basic_metrics(
+            pl_module,
+            gaussian_model,
+            batch,
+            outputs,
+            include_frangi_in_loss=False,
+        )
 
         image_info: Tuple[str, torch.Tensor, torch.Tensor]
         _, image_info, _ = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
