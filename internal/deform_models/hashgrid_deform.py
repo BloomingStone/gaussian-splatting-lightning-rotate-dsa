@@ -6,19 +6,10 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
 from .deform_model import DeformModel, DefromModelConfig
 from ..utils.network_factory import NetworkFactory
-from ..utils.gaussian_utils import GaussianTransformUtils
-from ..encodings.xray_phase_encoding import PhaseEncoding
+from ..encodings.vector_positional_encoding import VectorPositionalEncoding
 
-
-def get_phase_embedder(
-    multires: int, 
-    input_ch: int
-) -> tuple[nn.Module, int]:
-    phase_encoder = PhaseEncoding(input_channels=input_ch, n_frequencies=multires)
-    return phase_encoder, phase_encoder.get_output_n_channels()
 
 
 class MLP(nn.Module):
@@ -100,7 +91,11 @@ class HashGridDefromModel(DeformModel):
         )
         emb_x_ch = self.embed_fn.get_output_n_channels()
         
-        self.embed_phase_fn, emb_t_ch = get_phase_embedder(self.cfg.t_multires, input_ch=1)
+        self.embed_phase_fn = VectorPositionalEncoding(
+            input_channels=1,
+            n_frequencies=self.cfg.t_multires,
+        )
+        emb_t_ch = self.embed_phase_fn.get_output_n_channels()
         
         def _mlp(W: int, layers: int, input_ch: int):
             return MLP(

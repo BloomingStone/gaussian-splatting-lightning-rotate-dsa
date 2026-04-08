@@ -31,10 +31,11 @@ model:
         log_gradients: true
         grad_log_interval: 50
       deform_model_config:
-        class_path: internal.deform_models.MLPDefromConfig
+        class_path: internal.deform_models.HashGridDeformConfig
         init_args:
-          x_multires: 3
-          phase_n_frequencies: 3
+          x_multires: 13
+          log2_hashmap_size: 19
+          max_resolution: 2048
   metric:
     class_path: internal.metrics.rotate_xray_metrics.RotateXrayMetrics
     init_args:

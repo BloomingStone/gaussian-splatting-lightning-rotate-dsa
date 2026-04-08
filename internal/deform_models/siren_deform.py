@@ -6,7 +6,6 @@ from torch import nn
 
 from .deform_model import DeformModel, DefromModelConfig
 from ..encodings.vector_positional_encoding import VectorPositionalEncoding
-from ..encodings.xray_phase_encoding import PhaseEncoding
 
 
 class SineLayer(nn.Module):
@@ -71,7 +70,6 @@ class SirenDeformConfig(DefromModelConfig):
 	hidden_omega_0: float = 30.0
 
 	x_n_frequencies: int = 7
-	phase_period: float = 1.0
 	phase_n_frequencies: int = 1
 
 	def instantiate(self, *args, **kwargs) -> Any:
@@ -87,9 +85,8 @@ class SirenDeformModel(DeformModel):
 			input_channels=3,
 			n_frequencies=self.cfg.x_n_frequencies,
 		)
-		self.embed_phase_fn = PhaseEncoding(
+		self.embed_phase_fn = VectorPositionalEncoding(
 			input_channels=1,
-			T=self.cfg.phase_period,
 			n_frequencies=self.cfg.phase_n_frequencies,
 		)
 

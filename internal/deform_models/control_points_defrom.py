@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 from .deform_model import DeformModel, DefromModelConfig
-from ..encodings.xray_phase_encoding import PhaseEncoding
+from ..encodings.vector_positional_encoding import VectorPositionalEncoding
 from internal.utils.gaussian_utils import GaussianTransformUtils
 
 
@@ -19,7 +19,6 @@ class SafeExponential(nn.Module):
 @dataclass
 class ControlPointDeformConfig(DefromModelConfig):
     grid_resolution: tuple[int, int, int] = (10, 10, 10)
-    phase_period: float = 1.
     phase_n_frequencies: int = 1
     interpolation_method: str = "bspline"
     bounds_padding_ratio: float = 0.05
@@ -36,9 +35,8 @@ class ControlPointDeformModel(DeformModel):
         super().__init__(cfg)
         self.cfg = cfg
 
-        self.embed_phase_fn = PhaseEncoding(
+        self.embed_phase_fn = VectorPositionalEncoding(
             input_channels=1,
-            T=cfg.phase_period,
             n_frequencies=cfg.phase_n_frequencies,
         )
         self.n_phase_basis = self.embed_phase_fn.get_output_n_channels()

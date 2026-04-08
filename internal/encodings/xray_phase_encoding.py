@@ -11,6 +11,7 @@ class PhaseEncoding(nn.Module):
         input_channels: int = 1, 
         T: float = 1.,
         n_frequencies: int = 1,
+        include_input: bool = False,
     ):
         r"""
         Defines a function that embeds periodic t with Period T to (sin(2\pi f / T t), cos(2\pi f / T t), ...), 
@@ -34,6 +35,10 @@ class PhaseEncoding(nn.Module):
         
         self.register_buffer("freq_bands", freq_bands)
         
+        self.include_input = include_input
+        if self.include_input:
+            self.output_channels += input_channels
+        
     
     def forward(self, t: torch.Tensor):
         r"""
@@ -52,7 +57,10 @@ class PhaseEncoding(nn.Module):
         cos_res = torch.cos(angles)
         sincos_res = torch.stack([sin_res, cos_res], dim=-1) # (B, C, n_frequencies, 2)
         sincos_res = einops.rearrange(sincos_res, 'B C F D -> B (C F D)')
-        return sincos_res
+        if self.include_input:
+            return torch.cat([t, sincos_res], dim=-1)
+        else:
+            return sincos_res
     
     def get_output_n_channels(self) -> int:
         return self.output_channels
