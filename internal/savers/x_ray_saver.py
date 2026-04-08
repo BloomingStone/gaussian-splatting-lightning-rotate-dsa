@@ -53,7 +53,8 @@ def deform_field_to_volume(
     shape: tuple[int, int, int],
     affine: np.ndarray,
     zoomed_shape: tuple[int, int, int],
-    batch_size: int = 512*512*40,
+    batch_size: int = 256*256,
+    save_phase: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     device = next(deform_model.parameters()).device
     orgin = affine[:3, 3]
@@ -78,7 +79,7 @@ def deform_field_to_volume(
     for start in range(0, xyz.shape[0], batch_size):
         end = min(start + batch_size, xyz.shape[0])
         xyz_batch = xyz[start:end]
-        t_batch = torch.zeros((xyz_batch.shape[0], 1), device=device)  # input phase is 0.
+        t_batch = torch.full((xyz_batch.shape[0], 1), save_phase, device=device)  # input phase is save_phase
         d_xyz, _, _ = deform_model(xyz_batch, t_batch)
         dxyz_chunks.append(d_xyz.cpu().float())
 
@@ -151,6 +152,7 @@ class XRaySaver(Saver):
     save_ckpt: bool = True
     save_ply: bool = True
     save_nii: bool = True
+    save_phase: float = 0.0
     def instantiate(self, *args, **kwargs) -> "XRaySaverModule":
         return XRaySaverModule(self)
 
@@ -252,7 +254,7 @@ class XRaySaverModule(SaverModule):
         
         d_xyz, d_scaling, d_rotation = deform_model(
             means3D.detach(), 
-            torch.zeros(means3D.shape[0], 1).to(means3D.device),   # input phase is 0
+            torch.full((means3D.shape[0], 1), self.config.save_phase, device=means3D.device),   # input phase is save_phase
         )
         
         means3D, rotation, scales = DeformModel.deform(
