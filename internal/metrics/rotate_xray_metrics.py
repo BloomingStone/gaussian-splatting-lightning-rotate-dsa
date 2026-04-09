@@ -5,7 +5,6 @@ import torch
 import torch.nn.functional as F
 from torchmetrics.image import PeakSignalNoiseRatio
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from monai.losses.dice import DiceCELoss
 
 from ..utils.ssim import ssim
 from .metric import Metric, MetricImpl
@@ -15,13 +14,14 @@ from ..gaussian_splatting import GaussianSplatting
 
 @dataclass
 class RotateXrayMetrics(Metric):
-    w_gray_loss_whole: float = 1.0
-    w_ssim_loss_whole: float = 1.0
+    w_gray_loss: float = 1.0
+    w_ssim_loss: float = 1.0
 
     w_phase_aware_loss: float = 0.0
 
     # Weight for the original train loss branch (gray + ssim + phase aware).
     w_base_train_loss: float = 1.0
+    
     enable_frangi_loss: bool = False
     w_frangi_loss: float = 0.0
     frangi_sigmas: Tuple[float, ...] = (1.0, 2.0, 3.0)
@@ -101,7 +101,6 @@ class RotateXrayMetricsImpl(MetricImpl):
             print("Fused SSIM enabled")
             self.ssim = self._create_fused_ssim_adapter()
 
-        self.dice_loss_fn = DiceCELoss()
         self._build_frangi_kernels(dtype=torch.float32)
 
     def _build_frangi_kernels(self, dtype: torch.dtype = torch.float32):
@@ -279,10 +278,10 @@ class RotateXrayMetricsImpl(MetricImpl):
         _, gt_image, _ = image_info
         gt_image = gt_image[0:1]
         
-        gray_loss_whole = self.rgb_diff_loss_fn(outputs.gray_image, gt_image)
+        gray_loss = self.rgb_diff_loss_fn(outputs.gray_image, gt_image)
         
-        ssim_metric_whole = self.ssim(outputs.gray_image, gt_image)
-        ssim_loss_whole = 1.0 - ssim_metric_whole
+        ssim_metric = self.ssim(outputs.gray_image, gt_image)
+        ssim_loss = 1.0 - ssim_metric
 
         # phase 0 or 1 -> 1, phase 0.5 -> 0
         # phase 0: no motion, phase 0.5: most motion, phase 1: no motion
@@ -292,8 +291,8 @@ class RotateXrayMetricsImpl(MetricImpl):
 
         base_loss = (
             # image loss
-            self.config.w_gray_loss_whole * gray_loss_whole +
-            self.config.w_ssim_loss_whole * ssim_loss_whole +
+            self.config.w_gray_loss * gray_loss +
+            self.config.w_ssim_loss * ssim_loss +
             self.config.w_phase_aware_loss * l_phase_aware_loss
         )
 
@@ -319,8 +318,8 @@ class RotateXrayMetricsImpl(MetricImpl):
         metrics = {
             "loss": loss,
             "base_train_loss": base_loss,
-            "gray_loss_whole": gray_loss_whole,
-            "ssim_loss_whole": ssim_loss_whole,
+            "gray_loss": gray_loss,
+            "ssim_loss": ssim_loss,
             "phase_aware_loss": l_phase_aware_loss,
         }
 
@@ -334,8 +333,8 @@ class RotateXrayMetricsImpl(MetricImpl):
         prog_bar = {
             "loss": True,
             "base_train_loss": True,
-            "gray_loss_whole": True,
-            "ssim_loss_whole": True,
+            "gray_loss": True,
+            "ssim_loss": True,
             "phase_aware_loss": True,
         }
 
@@ -345,10 +344,6 @@ class RotateXrayMetricsImpl(MetricImpl):
         if include_deform_tv_in_loss:
             prog_bar["deform_tv_loss"] = True
             prog_bar["deform_tv_loss_weighted"] = True
-        
-        if outputs.time < 0.1:
-            metrics["small_phase_d_xyz_mean"] = d_xyz
-            prog_bar["small_phase_d_xyz_mean"] = False
         
         return metrics, prog_bar
     
@@ -377,13 +372,13 @@ class RotateXrayMetricsImpl(MetricImpl):
         _, gt_image, masked_pixels = image_info
         gt_image = gt_image[0:1]
 
-        metrics["psnr_whole"] = self.psnr(outputs.gray_image, gt_image)
-        prog_bar["psnr_whole"] = True
+        metrics["psnr"] = self.psnr(outputs.gray_image, gt_image)
+        prog_bar["psnr"] = True
         
-        gray2rgb_whole = outputs.gray_image.clamp(0., 1.)[None].repeat(1, 3, 1, 1)    # [1, 3, H, W]
-        gray2rgb_gt_whole = gt_image.clamp(0., 1.)[None].repeat(1, 3, 1, 1)
-        metrics["lpips_whole"] = self.no_state_dict_models["lpips"](gray2rgb_whole, gray2rgb_gt_whole)
-        prog_bar["lpips_whole"] = True
+        gray2rgb = outputs.gray_image.clamp(0., 1.)[None].repeat(1, 3, 1, 1)    # [1, 3, H, W]
+        gray2rgb_gt = gt_image.clamp(0., 1.)[None].repeat(1, 3, 1, 1)
+        metrics["lpips"] = self.no_state_dict_models["lpips"](gray2rgb, gray2rgb_gt)
+        prog_bar["lpips"] = True
 
         return metrics, prog_bar
     

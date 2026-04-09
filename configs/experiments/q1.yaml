@@ -1,0 +1,33 @@
+defaults:
+  - base
+  - _self_
+
+study_name: Q1
+
+train:
+  dry_run: false
+
+sweeps:
+  - name: q1_hashgrid
+    mode: single-variable
+    fixed:
+      model.renderer.init_args.deform_model_config.class_path: internal.deform_models.HashGridDeformConfig
+      model.renderer.init_args.deform_model_config.init_args.t_multires: 6
+      model.renderer.init_args.deform_model_config.init_args.x_multires: 8
+      model.renderer.init_args.deform_model_config.init_args.max_resolution: 512
+    grid:
+      model.renderer.init_args.deform_model_config.init_args.t_multires: [2, 6, 10]
+      model.renderer.init_args.deform_model_config.init_args.x_multires: [4, 8, 12]
+      model.renderer.init_args.deform_model_config.init_args.max_resolution: [128, 512, 2048]
+
+  - name: q1_mlp
+    mode: single-variable
+    fixed:
+      model.renderer.init_args.deform_model_config.class_path: internal.deform_models.MLPDefromConfig
+      model.renderer.init_args.deform_model_config.init_args.phase_n_frequencies: 6
+      model.renderer.init_args.deform_model_config.init_args.x_multires: 8
+      model.renderer.init_args.deform_model_config.init_args.D: 8
+    grid:
+      model.renderer.init_args.deform_model_config.init_args.phase_n_frequencies: [2, 6, 10]
+      model.renderer.init_args.deform_model_config.init_args.x_multires: [4, 8, 12]
+      model.renderer.init_args.deform_model_config.init_args.D: [4, 8, 12]

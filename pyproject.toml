@@ -24,15 +24,17 @@ segany-predict = "internal.entrypoints.seganygs:cli_predict"
 gs-viewer = "internal.entrypoints.viewer:cli"
 
 [tool.pixi.workspace]
-channels = ["nvidia/label/cuda-12.4.0", "nvidia", "conda-forge", "pytorch"]
+channels = ["conda-forge"]
 platforms = ["linux-64"]
+
+[tool.pixi.system-requirements]
+cuda = "12.0"
 
 [tool.pixi.activation.env]
 
 [tool.pixi.dependencies]
-pytorch = { version = "2.5.1.*", channel = "pytorch" }
-pytorch-cuda = { version = "12.4.*", channel = "pytorch" }
-torchvision = { version = "0.20.1.*", channel = "pytorch" }
+pytorch-gpu = ">=2.5.1,<2.6"
+torchvision = "*"
 wandb = ">=0.21.1,<0.22"
 viser = ">=0.2.23,<0.3"
 matplotlib = ">=3.9.1,<4"
@@ -46,9 +48,9 @@ nibabel = ">=5.3.2,<6"
 pyvista = ">=0.46.3,<0.47"
 monai = ">=1.5.1,<2"
 setuptools = "<82"
-cupy = ">=13.6.0,<14"
 pytest = ">=9.0.3,<10"
 cyclopts = ">=4.10.1,<5"
+cupy = ">=13.0.0"
 
 [tool.pixi.pypi-options]
 no-build-isolation = [

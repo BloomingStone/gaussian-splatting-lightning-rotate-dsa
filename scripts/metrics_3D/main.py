@@ -100,6 +100,12 @@ def val_once(
     save_pred_labels: bool = False,
     config: EvaluationConfig = EvaluationConfig(),
 ):
+    """
+    结果有两种计算路径: pipeline_a和pipeline_b, 前者是基于pred经过一系列处理 (如闭运算， 到中心距离加权加权, 提取最大连通域,等) 后的结果
+    与gt计算, 后者使用 gt 得到范围框后再进行阈值化处理后，与gt计算指标，理论上结果应当接近。两者的结果都输出，并且在aggregate中分别统计。
+    
+    需要注意gt和pred相位应相同
+    """
     load_res = NiiLoader._load_both_cp(pred_nii_path, gt_nii_path)
     metric, pred_gt_free, pred_oracal = run_evaluation(load_res.pred, load_res.gt, load_res.spacing, config)
     print(metric)

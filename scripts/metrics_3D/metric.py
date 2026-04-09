@@ -19,12 +19,14 @@ if TYPE_CHECKING:
         def sum(self) -> int: ...
         def astype(self, dtype) -> Array3D: ...
         def get(self) -> np.ndarray: ...
+        def max(self) -> float: ...
         def __array__(self, dtype=None):...
         def __and__(self, other): ...
         def __gt__(self, other): ...
         def __eq__(self, Array3D) -> Any: ...
         def __invert__(self) -> Array3D: ...
         def __getitem__(self, key) -> Array3D: ...
+        def __add__(self, other) -> Array3D: ...
 else:
     Array3D = cp.ndarray
 
@@ -56,11 +58,11 @@ class EvaluationConfig:
     - `connectivity` in {1, 2, 3} for 3D connected components.
     """
 
-    threshold: float = 0.0
+    threshold: float = 0.0344
     connectivity: int = 1
     closing_radius_vox: int = 1
     oracle_gt_dilation_radius_mm: float = 2.0
-    min_component_size_vox: int = 0
+    min_component_size_vox: int = 10*10*10
     visualize: bool = False
     use_fragi_filter: bool = False  # TODO: too slow for now, consider optimizing or removing
     fragi_params: FragiParams = field(default_factory=FragiParams)
@@ -130,6 +132,17 @@ def _largest_component(mask: Array3D, connectivity: int = 1) -> Array3D:
     best = int(cp.argmax(sizes))
     return labeled == best
 
+def _central_weight_map(shape: tuple[int, ...], max_value: float) -> Array3D:
+    zz, yy, xx = cp.meshgrid(                       # type: ignore
+        cp.arange(shape[0], dtype=cp.float32) - shape[0] / 2,
+        cp.arange(shape[1], dtype=cp.float32) - shape[1] / 2,
+        cp.arange(shape[2], dtype=cp.float32) - shape[2] / 2,
+        indexing="ij",
+    )
+    dist_sq = zz**2 + yy**2 + xx**2
+    max_dist_sq = (cp.array(shape, dtype=cp.float32) / 2).dot(cp.array(shape, dtype=cp.float32) / 2)
+    weight_map = (1.0 - (dist_sq / max_dist_sq)) * max_value
+    return weight_map
 
 def _score_components_by_density_sum(
     labeled: Array3D,
@@ -142,13 +155,14 @@ def _score_components_by_density_sum(
         return scores
 
     labels = labeled.ravel()
-    vals = volume.ravel()
+    vals = volume.ravel() + _central_weight_map(volume.shape, volume.max()).ravel()
+    
     counts = cp.bincount(labels, minlength=n_comp + 1)
     sums = cp.bincount(labels, weights=vals, minlength=n_comp + 1)
 
     for idx in range(1, n_comp + 1):
         if counts[idx] >= min_component_size_vox:
-            scores[idx] = float(sums[idx])
+            scores[idx] = float(sums[idx]/counts[idx])
     return scores
 
 

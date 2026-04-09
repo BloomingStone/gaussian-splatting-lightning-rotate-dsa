@@ -23,3 +23,5 @@ build/
 scripts/logs/
 
 scripts/metrics_3D/output
+
+*.log

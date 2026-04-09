@@ -1,0 +1,68 @@
+defaults:
+  - _self_
+
+study_name: BASE
+
+train:
+  data_root: /media/data3/sj/Data/gen4d_outputs/ASOCA_samples
+  base_config: configs/rotate_xray_3dgr/rotate_xray_3dgr_deformable_xray_render.yaml
+  results_root: outputs/experiments_asoca
+  runner: pixi run python
+  # 单进程模式：每次只跑一个case，避免并发导致显存峰值叠加。
+  gpu: "0"
+  # serial: 全部case串行（默认）
+  # multi_gpu: 按gpus列表并行分发，每张卡同一时刻只跑一个case
+  parallel_mode: multi_gpu
+  gpus: ["0", "1", "2", "3"]
+
+  seed: 0
+  # DEBUG | INFO | WARN | ERROR
+  log_level: INFO
+  run_test: true
+  run_3d_eval: true
+  eval3d:
+    threshold: 0.0344
+    connectivity: 1
+    closing_radius_vox: 1
+    oracle_gt_dilation_radius_mm: 2.0
+    min_component_size_vox: 0
+    visualize: false
+    use_fragi_filter: false
+  retries: 0
+  dry_run: false
+  # true: 若已有checkpoint，则跳过所有fit，仅对有checkpoint的case重跑test和指标计算。
+  eval_only: false
+  # true: 若已有checkpoint，则整案跳过（不重训、不重测、不重算指标）。
+  skip_existing: true
+  extra_args: []
+
+  case_filter:
+    include_pattern: ""
+    exclude_pattern: ""
+
+  # 这些是对所有run生效的固定覆盖。
+  static_overrides:
+    data.parser.init_args.mode: render-new-views
+    model.metric.init_args.enable_deform_tv_loss: false
+    model.metric.init_args.w_deform_tv_loss: 0.0
+    model.metric.init_args.enable_frangi_loss: false
+    model.metric.init_args.w_frangi_loss: 0.0
+
+    model.saver.init_args.save_phase: 0.5
+    model.saver.init_args.save_ckpt: true
+    pbar_rate: 50
+
+
+# 通用扫描描述：
+# - name: 扫描名称
+# - mode: grid | single-variable
+# - fixed: 锚点参数（键为main.py可接收的覆写路径）
+# - grid: 需要扫描的参数列表
+sweeps: []
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  job:
+    chdir: false
