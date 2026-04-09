@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from statistics import mean, pstdev
@@ -52,6 +52,25 @@ class CaseResult:
     metrics_3d: dict[str, Any] | None = None
     metrics_2d_file: str | None = None
     metrics_3d_file: str | None = None
+
+
+@dataclass(frozen=True)
+class ScheduledTask:
+    run_name: str
+    run_root: Path
+    case_task: CaseTask
+
+
+@dataclass
+class RunState:
+    run_spec: RunSpec
+    run_root: Path
+    total_cases: int
+    completed_cases: int = 0
+    results: list[CaseResult] = field(default_factory=list)
+    summary_written: bool = False
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    done_event: threading.Event = field(default_factory=threading.Event)
 
 
 class Logger:
@@ -559,6 +578,7 @@ def _run_single_case(
     case_name = task.case_path.name
     case_output_dir = run_root / "cases" / case_name
     case_output_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Start case={case_name} for {task.run_spec.name} in gpu={gpu_id}")
 
     run_log = case_output_dir / "manager_run.log"
 
@@ -943,6 +963,169 @@ def _execute_one_run(cfg: DictConfig, run_spec: RunSpec, cases: list[Path], resu
     return results
 
 
+def _execute_all_runs_multi_gpu(
+    cfg: DictConfig,
+    run_specs: list[RunSpec],
+    cases: list[Path],
+    results_root: Path,
+    repo_root: Path,
+    logger: Logger,
+) -> list[CaseResult]:
+    gpu_id = str(_to_plain(cfg.train.get("gpu", "0")))
+    raw_gpus = _to_plain(cfg.train.get("gpus", []))
+    gpus = [str(x) for x in raw_gpus] if isinstance(raw_gpus, list) else []
+    if not gpu_id and gpus:
+        gpu_id = gpus[0]
+    if not gpu_id:
+        gpu_id = "0"
+    worker_gpus = gpus if len(gpus) > 0 else [gpu_id]
+
+    stop_requested = threading.Event()
+    registry = ProcessRegistry()
+    skip_existing_enabled = bool(cfg.train.skip_existing) and not bool(cfg.train.get("eval_only", False))
+
+    run_states: dict[str, RunState] = {}
+    task_queue: "queue.Queue[ScheduledTask | None]" = queue.Queue()
+    worker_threads: list[threading.Thread] = []
+    signal_state = {"count": 0}
+    interrupted = False
+
+    for run_spec in run_specs:
+        run_root = results_root / str(cfg.study_name) / run_spec.name
+        run_root.mkdir(parents=True, exist_ok=True)
+        _write_json(run_root / "run_spec.json", {"name": run_spec.name, "params": run_spec.params})
+
+        run_states[run_spec.name] = RunState(
+            run_spec=run_spec,
+            run_root=run_root,
+            total_cases=len(cases),
+        )
+
+        for case in cases:
+            task_queue.put(
+                ScheduledTask(
+                    run_name=run_spec.name,
+                    run_root=run_root,
+                    case_task=CaseTask(run_spec=run_spec, case_path=case),
+                )
+            )
+
+    for _ in worker_gpus:
+        task_queue.put(None)
+
+    def finalize_run_state(state: RunState) -> None:
+        should_write = False
+        snapshot: list[CaseResult] = []
+        with state.lock:
+            if state.completed_cases >= state.total_cases:
+                state.done_event.set()
+            if state.done_event.is_set() and not state.summary_written:
+                state.summary_written = True
+                should_write = True
+                snapshot = list(state.results)
+        if should_write:
+            _write_run_summary(state.run_root, state.run_spec, snapshot, logger)
+
+    def on_signal(signum: int, _frame: object) -> None:
+        signal_state["count"] += 1
+        stop_requested.set()
+        if signal_state["count"] == 1:
+            registry.terminate_all(logger, f"signal_{signum}", force=False)
+        else:
+            registry.terminate_all(logger, f"signal_{signum}_force", force=True)
+        raise KeyboardInterrupt
+
+    def submit_result(run_name: str, result: CaseResult) -> None:
+        state = run_states[run_name]
+        with state.lock:
+            state.results.append(result)
+            state.completed_cases += 1
+        finalize_run_state(state)
+
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
+
+    logger.info(f"Multi-GPU global queue mode enabled. Worker GPUs={worker_gpus}")
+
+    def worker(gid: str) -> None:
+        while True:
+            if stop_requested.is_set():
+                break
+            try:
+                task = task_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            if task is None:
+                task_queue.task_done()
+                break
+
+            if stop_requested.is_set():
+                task_queue.task_done()
+                continue
+
+            if skip_existing_enabled:
+                out = task.run_root / "cases" / task.case_task.case_path.name
+                if _is_reconstruction_ready(out):
+                    logger.info(
+                        f"Skip existing case={task.case_task.case_path.name} run={task.run_name} since checkpoint exists and skip_existing=true"
+                    )
+                    result = _restore_existing_case_result(
+                        task.case_task.run_spec,
+                        task.case_task.case_path,
+                        gid,
+                        out,
+                    )
+                    submit_result(task.run_name, result)
+                    task_queue.task_done()
+                    continue
+
+            result = _run_single_case(
+                task=task.case_task,
+                cfg=cfg,
+                gpu_id=gid,
+                repo_root=repo_root,
+                run_root=task.run_root,
+                logger=logger,
+                stop_requested=stop_requested,
+                proc_registry=registry,
+            )
+            submit_result(task.run_name, result)
+            task_queue.task_done()
+
+    try:
+        worker_threads = [threading.Thread(target=worker, args=(gid,), daemon=False) for gid in worker_gpus]
+        for thread in worker_threads:
+            thread.start()
+
+        while any(thread.is_alive() for thread in worker_threads):
+            for thread in worker_threads:
+                thread.join(timeout=0.5)
+    except KeyboardInterrupt:
+        interrupted = True
+        stop_requested.set()
+        registry.terminate_all(logger, "keyboard_interrupt", force=True)
+        for thread in worker_threads:
+            thread.join(timeout=1.0)
+        logger.warn("Interrupted by Ctrl+C, global queue run stopped.")
+    finally:
+        for state in run_states.values():
+            with state.lock:
+                if state.completed_cases >= state.total_cases:
+                    state.done_event.set()
+            finalize_run_state(state)
+
+    if interrupted:
+        raise KeyboardInterrupt
+
+    all_results: list[CaseResult] = []
+    for run_spec in run_specs:
+        state = run_states[run_spec.name]
+        with state.lock:
+            all_results.extend(list(state.results))
+    return all_results
+
+
 @hydra.main(version_base=None, config_path=str(Path(__file__).parent.parent / "configs" / "experiments"), config_name="q1")
 def main(cfg: DictConfig) -> None:
     repo_root = Path(__file__).resolve().parent.parent
@@ -970,12 +1153,21 @@ def main(cfg: DictConfig) -> None:
     run_specs = _expand_sweeps(cfg)
     logger.info(f"Study={cfg.study_name}, runs={len(run_specs)}, cases={len(cases)}")
 
+    parallel_mode = str(_to_plain(cfg.train.get("parallel_mode", "serial"))).strip().lower()
+    if parallel_mode not in ("serial", "multi_gpu"):
+        logger.warn(f"Unknown parallel_mode={parallel_mode}, fallback to serial")
+        parallel_mode = "serial"
+
     all_results: list[CaseResult] = []
     try:
-        for idx, run_spec in enumerate(run_specs, start=1):
-            logger.info(f"Run {idx}/{len(run_specs)}: {run_spec.name}")
-            rs = _execute_one_run(cfg, run_spec, cases, results_root, repo_root, logger)
-            all_results.extend(rs)
+        if parallel_mode == "multi_gpu":
+            logger.info("Use global queue scheduler for multi_gpu mode")
+            all_results = _execute_all_runs_multi_gpu(cfg, run_specs, cases, results_root, repo_root, logger)
+        else:
+            for idx, run_spec in enumerate(run_specs, start=1):
+                logger.info(f"Run {idx}/{len(run_specs)}: {run_spec.name}")
+                rs = _execute_one_run(cfg, run_spec, cases, results_root, repo_root, logger)
+                all_results.extend(rs)
     except KeyboardInterrupt:
         logger.warn("Interrupted by Ctrl+C, stop the whole experiment manager.")
         _write_json(
