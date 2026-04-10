@@ -16,9 +16,9 @@ sweeps:
       model.renderer.init_args.deform_model_config.init_args.x_multires: 8
       model.renderer.init_args.deform_model_config.init_args.max_resolution: 512
     grid:
-      model.renderer.init_args.deform_model_config.init_args.t_multires: [2, 6, 10]
-      model.renderer.init_args.deform_model_config.init_args.x_multires: [4, 8, 12]
-      model.renderer.init_args.deform_model_config.init_args.max_resolution: [128, 512, 2048]
+      model.renderer.init_args.deform_model_config.init_args.t_multires: [2, 4, 6, 8, 10]
+      model.renderer.init_args.deform_model_config.init_args.x_multires: [4, 6, 8, 10, 12]
+      model.renderer.init_args.deform_model_config.init_args.max_resolution: [32, 64, 128, 256, 512, 1024, 2048]
 
   - name: q1_mlp
     mode: single-variable
@@ -28,6 +28,6 @@ sweeps:
       model.renderer.init_args.deform_model_config.init_args.x_multires: 8
       model.renderer.init_args.deform_model_config.init_args.D: 8
     grid:
-      model.renderer.init_args.deform_model_config.init_args.phase_n_frequencies: [2, 6, 10]
-      model.renderer.init_args.deform_model_config.init_args.x_multires: [4, 8, 12]
-      model.renderer.init_args.deform_model_config.init_args.D: [4, 8, 12]
+      model.renderer.init_args.deform_model_config.init_args.phase_n_frequencies: [2, 4, 6, 8, 10]
+      model.renderer.init_args.deform_model_config.init_args.x_multires: [4, 6, 8, 10, 12]
+      model.renderer.init_args.deform_model_config.init_args.D: [4, 6, 8, 10, 12]

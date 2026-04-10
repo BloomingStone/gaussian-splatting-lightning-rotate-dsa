@@ -222,7 +222,6 @@ def _expand_sweeps(cfg: DictConfig) -> list[RunSpec]:
         mode = str(sweep.get("mode", "grid"))
         fixed = dict(sweep.get("fixed", {}))
         grid: dict[str, list[Any]] = {k: list(v) for k, v in dict(sweep.get("grid", {})).items()}
-        run_counter = 0
 
         if mode == "grid":
             keys = sorted(grid.keys())
@@ -239,8 +238,7 @@ def _expand_sweeps(cfg: DictConfig) -> list[RunSpec]:
             for row in combinations:
                 params = {**fixed, **row}
                 token = _hash_params(params)
-                run_counter += 1
-                run_specs.append(RunSpec(name=f"{_sanitize(sweep_name)}__r{run_counter:03d}__{token}", params=params))
+                run_specs.append(RunSpec(name=f"{_sanitize(sweep_name)}__{token}", params=params))
             continue
 
         if mode == "single-variable":
@@ -249,16 +247,25 @@ def _expand_sweeps(cfg: DictConfig) -> list[RunSpec]:
                     params = dict(fixed)
                     params[k] = v
                     token = _hash_params(params)
-                    run_counter += 1
                     run_specs.append(
                         RunSpec(
-                            name=f"{_sanitize(sweep_name)}__sv-{_sanitize(k)}-{_sanitize(str(v))}__r{run_counter:03d}__{token}",
+                            name=f"{_sanitize(sweep_name)}__sv-{_sanitize(k)}-{_sanitize(str(v))}__{token}",
                             params=params,
                         )
                     )
             continue
 
         raise ValueError(f"Unknown sweep mode: {mode}")
+
+    seen: set[str] = set()
+    dup_names: set[str] = set()
+    for spec in run_specs:
+        if spec.name in seen:
+            dup_names.add(spec.name)
+        seen.add(spec.name)
+    if dup_names:
+        dups = ", ".join(sorted(dup_names))
+        raise ValueError(f"Duplicate run_name detected in sweeps: {dups}")
 
     return run_specs
 
@@ -563,6 +570,40 @@ def _write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def _discover_summary_run_names(study_root: Path) -> set[str]:
+    run_summary_files = sorted(study_root.glob("*/run_summary.json"))
+    return {p.parent.name for p in run_summary_files}
+
+
+def _is_summary_sweep_match_exact(
+    run_specs: list[RunSpec],
+    results_root: Path,
+    study_name: str,
+    logger: Logger,
+) -> bool:
+    expected = {spec.name for spec in run_specs}
+    study_root = results_root / study_name
+    actual = _discover_summary_run_names(study_root)
+
+    missing = sorted(expected - actual)
+    extra = sorted(actual - expected)
+
+    if not missing and not extra:
+        logger.info("Summary strict-match passed: sweep config and result folders are exactly matched")
+        return True
+
+    logger.warn("Summary strict-match failed: skip summary due to mismatch between sweep config and result folders")
+    if missing:
+        preview = ", ".join(missing[:10])
+        tail = " ..." if len(missing) > 10 else ""
+        logger.warn(f"Missing run_summary.json for expected runs ({len(missing)}): {preview}{tail}")
+    if extra:
+        preview = ", ".join(extra[:10])
+        tail = " ..." if len(extra) > 10 else ""
+        logger.warn(f"Extra result runs not in sweep config ({len(extra)}): {preview}{tail}")
+    return False
 
 
 def _run_single_case(
@@ -1195,6 +1236,57 @@ def main(cfg: DictConfig) -> None:
         "num_failed": sum(1 for x in all_results if not x.success),
     }
     _write_json(results_root / str(cfg.study_name) / "study_summary.json", summary)
+
+    summarize_script = repo_root / "scripts" / "summarize_experiments.py"
+    strict_match = bool(cfg.train.get("summary_require_exact_sweep_match", False))
+    should_run_summary = True
+    if strict_match:
+        should_run_summary = _is_summary_sweep_match_exact(run_specs, results_root, str(cfg.study_name), logger)
+
+    if summarize_script.exists() and should_run_summary:
+        summarize_cmd = [
+            sys.executable,
+            str(summarize_script),
+            "--results-root",
+            str(results_root),
+            "--study",
+            str(cfg.study_name),
+        ]
+        user_plot_metrics = _to_plain(cfg.train.get("summary_plot_metrics", []))
+        if isinstance(user_plot_metrics, list) and len(user_plot_metrics) > 0:
+            summarize_cmd.extend(["--plot-metrics", *[str(x) for x in user_plot_metrics]])
+
+        user_zero_as_missing = _to_plain(cfg.train.get("summary_zero_as_missing_metrics", []))
+        if isinstance(user_zero_as_missing, list) and len(user_zero_as_missing) > 0:
+            summarize_cmd.extend(["--zero-as-missing-metrics", *[str(x) for x in user_zero_as_missing]])
+
+        max_outliers = _to_plain(cfg.train.get("summary_max_outliers_per_run", 2))
+        summarize_cmd.extend(["--max-outliers-per-run", str(int(max_outliers))])
+
+        logger.info(f"Run summarize script: {' '.join(summarize_cmd)}")
+        try:
+            proc = subprocess.run(  # noqa: S603
+                summarize_cmd,
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.stdout:
+                for line in proc.stdout.splitlines():
+                    logger.info(f"[summarize] {line}")
+            if proc.stderr:
+                for line in proc.stderr.splitlines():
+                    logger.warn(f"[summarize] {line}")
+            if proc.returncode != 0:
+                logger.warn(f"Summarize script finished with non-zero code: {proc.returncode}")
+        except Exception as e:  # noqa: BLE001
+            logger.warn(f"Summarize script failed to execute: {e}")
+    elif summarize_script.exists() and not should_run_summary:
+        logger.warn("Skip summarize script due to summary_require_exact_sweep_match=true and mismatch detected")
+    else:
+        logger.warn(f"Summarize script not found: {summarize_script}")
+
     logger.info(f"Done: {summary}")
 
 
