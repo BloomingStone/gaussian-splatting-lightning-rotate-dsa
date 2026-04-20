@@ -11,7 +11,7 @@ train:
 
 sweeps:
   - name: smoke_hashgrid_one
-    mode: grid
+    mode: single-variable
     fixed:
       model.renderer.init_args.deform_model_config.class_path: internal.deform_models.HashGridDeformConfig
       model.renderer.init_args.deform_model_config.init_args.t_multires: 6
@@ -19,4 +19,6 @@ sweeps:
       model.renderer.init_args.deform_model_config.init_args.max_resolution: 512
       data.parser.init_args.random_loader_mode: random-shuffle
       data.parser.init_args.train_ratio: 0.8
-    grid: {}
+    grid:
+      model.renderer.init_args.deform_model_config.init_args.t_multires: [6, 8]
+      model.renderer.init_args.deform_model_config.init_args.x_multires: [6, 8]

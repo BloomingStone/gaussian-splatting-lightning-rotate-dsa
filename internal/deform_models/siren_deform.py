@@ -69,8 +69,8 @@ class SirenDeformConfig(DefromModelConfig):
 	first_omega_0: float = 30.0
 	hidden_omega_0: float = 30.0
 
-	x_n_frequencies: int = 7
-	phase_n_frequencies: int = 1
+	x_multires: int = 7
+	t_multires: int = 1
 
 	def instantiate(self, *args, **kwargs) -> Any:
 		return SirenDeformModel(self)
@@ -83,11 +83,11 @@ class SirenDeformModel(DeformModel):
 
 		self.embed_xyz_fn = VectorPositionalEncoding(
 			input_channels=3,
-			n_frequencies=self.cfg.x_n_frequencies,
+			n_frequencies=self.cfg.x_multires,
 		)
 		self.embed_phase_fn = VectorPositionalEncoding(
 			input_channels=1,
-			n_frequencies=self.cfg.phase_n_frequencies,
+			n_frequencies=self.cfg.t_multires,
 		)
 
 		emb_x_ch = self.embed_xyz_fn.get_output_n_channels()

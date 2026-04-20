@@ -10,22 +10,22 @@ from ..utils.rigid_utils import exp_se3
 
 
 @dataclass
-class MLPDefromConfig(DefromModelConfig):
+class MLPDeformConfig(DefromModelConfig):
     D: int = 8
     W: int = 256
 
     x_multires: int = 10
-    phase_n_frequencies: int = 1
+    t_multires: int = 1
 
     is_6dof: bool = False
     chunk: int = -1
 
     def instantiate(self, *args, **kwargs) -> Any:
-        return MLPDefromModel(self)
+        return MLPDeformModel(self)
 
 
-class MLPDefromModel(DeformModel):
-    def __init__(self, cfg: MLPDefromConfig = MLPDefromConfig()):
+class MLPDeformModel(DeformModel):
+    def __init__(self, cfg: MLPDeformConfig = MLPDeformConfig()):
         super().__init__(cfg)
         self.cfg = cfg
 
@@ -39,7 +39,7 @@ class MLPDefromModel(DeformModel):
         )
         self.embed_phase_fn = VectorPositionalEncoding(
             input_channels=1,
-            n_frequencies=self.cfg.phase_n_frequencies,
+            n_frequencies=self.cfg.t_multires,
         )
 
         xyz_ch = self.embed_xyz_fn.get_output_n_channels()
