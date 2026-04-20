@@ -126,6 +126,8 @@ class Visualizers:
                 visualizers[name] = cls.create_as_visualizer(cls.normal_map_colormap)
             elif info.type == RendererOutputTypes.FEATURE_MAP:
                 visualizers[name] = cls.create_as_visualizer(cls.pca_colormap)
+            elif info.type == RendererOutputTypes.RAW:
+                visualizers[name] = cls.create_as_visualizer(cls.no_processing)
             else:
                 raise RuntimeError("Unsupported type of output {}".format(name))
 

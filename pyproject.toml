@@ -51,6 +51,7 @@ setuptools = "<82"
 pytest = ">=9.0.3,<10"
 cyclopts = ">=4.10.1,<5"
 cupy = ">=13.0.0"
+tifffile = ">=2026.3.3,<2027"
 
 [tool.pixi.pypi-options]
 no-build-isolation = [
@@ -70,7 +71,6 @@ fused_ssim = { git = "https://github.com/rahul-goel/fused-ssim.git", branch = "m
 opencv-python-headless = ">=4.11.0.86,<5"
 pytorch-lightning = ">=2.5.5,<3"
 lightning = { version = ">=2.5.5,<3", extras = ["pytorch-extra"] }
-jaxtyping = "*"
 
 [tool.pixi.feature.vanilla-gs-rasterization.pypi-dependencies]
 diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gaussian-rasterization.git", branch = "main" }

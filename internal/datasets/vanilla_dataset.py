@@ -16,9 +16,9 @@ import torch.utils.data
 from lightning import LightningDataModule
 from lightning.pytorch.utilities.types import EVAL_DATALOADERS, TRAIN_DATALOADERS
 
-from .cameras import CameraType, Camera
-from .dataparsers import DataParserConfig, ImageSet
-from .utils.graphics_utils import store_ply, BasicPointCloud
+from ..cameras import CameraType, Camera
+from ..dataparsers import DataParserConfig, ImageSet
+from ..utils.graphics_utils import store_ply, BasicPointCloud
 
 from tqdm import tqdm
 
@@ -521,16 +521,31 @@ class DataModule(LightningDataModule):
             self.dataparser_outputs.point_cloud.xyz = np.concatenate([self.dataparser_outputs.point_cloud.xyz, extra_pcd.points], axis=0)
             self.dataparser_outputs.point_cloud.rgb = np.concatenate([self.dataparser_outputs.point_cloud.rgb, extra_pcd.colors], axis=0)
 
-    def train_dataloader(self) -> TRAIN_DATALOADERS:
-        return CacheDataLoader(
-            Dataset(
-                self.dataparser_outputs.train_set,
-                undistort_image=self.hparams["undistort_image"],
+    def _use_tiff_dataset(self) -> bool:
+        parser_name = self.hparams["parser"].__class__.__name__.lower()
+        return parser_name == "tiffdata"
+
+    def _build_dataset(self, image_set: ImageSet):
+        if self._use_tiff_dataset():
+            from .tiff_dataset import Dataset as TiffDataset
+            return TiffDataset(
+                image_set,
                 camera_device=self.camera_device,
                 image_device=self.image_device,
-                image_uint8=self.hparams["image_uint8"],
-                allow_mask_interpolation=self.hparams["allow_mask_interpolation"],
-            ),
+            )
+
+        return Dataset(
+            image_set,
+            undistort_image=self.hparams["undistort_image"],
+            camera_device=self.camera_device,
+            image_device=self.image_device,
+            image_uint8=self.hparams["image_uint8"],
+            allow_mask_interpolation=self.hparams["allow_mask_interpolation"],
+        )
+
+    def train_dataloader(self) -> TRAIN_DATALOADERS:
+        return CacheDataLoader(
+            self._build_dataset(self.dataparser_outputs.train_set),
             max_cache_num=self.hparams["train_max_num_images_to_cache"],
             shuffle=True,
             seed=torch.initial_seed() + self.global_rank,  # seed with global rank
@@ -547,14 +562,7 @@ class DataModule(LightningDataModule):
         else:
             image_set = self.dataparser_outputs.test_set
         return CacheDataLoader(
-            Dataset(
-                image_set,
-                undistort_image=self.hparams["undistort_image"],
-                camera_device=self.camera_device,
-                image_device=self.image_device,
-                image_uint8=self.hparams["image_uint8"],
-                allow_mask_interpolation=self.hparams["allow_mask_interpolation"],
-            ),
+            self._build_dataset(image_set),
             max_cache_num=self.hparams["test_max_num_images_to_cache"],
             shuffle=False,
             num_workers=self.hparams["num_workers"],
@@ -566,14 +574,7 @@ class DataModule(LightningDataModule):
         else:
             image_set = self.dataparser_outputs.val_set
         return CacheDataLoader(
-            Dataset(
-                image_set,
-                undistort_image=self.hparams["undistort_image"],
-                camera_device=self.camera_device,
-                image_device=self.image_device,
-                image_uint8=self.hparams["image_uint8"],
-                allow_mask_interpolation=self.hparams["allow_mask_interpolation"],
-            ),
+            self._build_dataset(image_set),
             max_cache_num=self.hparams["val_max_num_images_to_cache"],
             shuffle=False,
             num_workers=self.hparams["num_workers"],

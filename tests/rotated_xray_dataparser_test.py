@@ -1,13 +1,13 @@
 from pathlib import Path
 
 import unittest
-from internal.dataparsers.rotated_xray_dataparser import RotatedXRayParser, RotatedXRayParserParam
-from internal.dataset import Dataset
+from internal.dataparsers.rotated_xray_dataparser import RotatedXRay 
+from internal.datasets.vanilla_dataset import Dataset
 
 class RotatedXRayDataparserTestCase(unittest.TestCase):
     @property
     def parser(self):
-        return RotatedXRayParserParam(
+        return RotatedXRay(
             init_point_cloud_mode="central-line"
         ).instantiate(
             path="data/volume_dvf_reader_multipli_contrast_LCA",

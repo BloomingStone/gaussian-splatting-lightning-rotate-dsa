@@ -2799,7 +2799,7 @@ packages:
 - pypi: ./
   name: gaussian-splatting-lightning
   version: 0.0.0
-  sha256: b4655857422b216898732aad2c4440945897ac2da82b9340cd9c1695c5cfe4bf
+  sha256: 0e067112ec114b264ba310a94627557221d1c134297bc31e5342607bd000b1f6
   requires_python: '>=3.10'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/gdk-pixbuf-2.44.4-h2b0a6b4_0.conda
   sha256: f47222f58839bcc77c15f11a8814c1d8cb8080c5ca6ba83398a12b640fd3c85c

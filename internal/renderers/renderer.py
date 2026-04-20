@@ -12,6 +12,7 @@ class RendererOutputTypes:
     GRAY: int = 2
     NORMAL_MAP: int = 3
     FEATURE_MAP: int = 4
+    RAW: int = 5
     OTHER: int = 65535  # must provide a visualizer
 
 

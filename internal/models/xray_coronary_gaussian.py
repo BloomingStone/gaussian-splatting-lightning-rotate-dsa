@@ -7,7 +7,6 @@ import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 from lightning import LightningModule
-from jaxtyping import Float32
 
 from .gaussian import (
     Gaussian, 
@@ -57,10 +56,10 @@ class OptimizationConfig:
 @dataclass
 class GaussianInits:
     n_gs       :int
-    means      :Float32[Tensor, "n_gs 3"]           = field(init=False)
-    density       :Float32[Tensor, "n_gs 1"]        = field(init=False)
-    scales     :Float32[Tensor, "n_gs 3"]           = field(init=False)
-    rotations  :Float32[Tensor, "n_gs 4"]           = field(init=False)
+    means      :Tensor           = field(init=False)
+    density       :Tensor        = field(init=False)
+    scales     :Tensor           = field(init=False)
+    rotations  :Tensor           = field(init=False)
     
     def __post_init__(self):
         self.scales = torch.zeros(self.n_gs, 3, dtype=torch.float32)
@@ -292,7 +291,7 @@ class XrayCoronaryGaussianModel(
     # --- Part2: Set up gaussians' parameters, optimizers and schedulers.
     @override
     def setup_from_pcd(
-            self, xyz: Float32[Tensor|np.ndarray, "n_gaussians 3"], 
+            self, xyz: Tensor|np.ndarray, 
             rgb: Any, 
             *args, 
             **kwargs 
@@ -302,6 +301,8 @@ class XrayCoronaryGaussianModel(
         """
         if isinstance(xyz, np.ndarray):
             xyz_coronary = torch.tensor(xyz, dtype=torch.float)
+        else:
+            xyz_coronary = xyz.float()
         
         fused_point_cloud = xyz_coronary
 

@@ -1,5 +1,6 @@
 import sys
 from internal.cli import CLI
+from internal.datasets.tiff_dataset import TiffDataModule
 from internal.datasets.vanilla_dataset import DataModule
 from jsonargparse import lazy_instance
 from lightning.pytorch.cli import ArgsType
@@ -11,7 +12,7 @@ from internal.callbacks import SaveGaussian, KeepRunningIfWebViewerEnabled, Stop
 def cli(args: ArgsType = None):
     CLI(
         GaussianSplatting,
-        DataModule,
+        TiffDataModule,
         seed_everything_default=42,
         auto_configure_optimizers=False,
         trainer_defaults={

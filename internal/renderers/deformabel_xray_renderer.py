@@ -1,18 +1,17 @@
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, cast
 from dataclasses import dataclass
 
 import torch
 from torch import Tensor
 from lightning import LightningModule
-from jaxtyping import Float32
 from xray_gaussian_rasterization_voxelization import (
     GaussianRasterizationSettings,
     GaussianRasterizer,
 )
+from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 
 from .renderer import Renderer, RendererOutputInfo, RendererOutputTypes
 from ..cameras import Camera
-from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from ..cameras import Camera
 from ..deform_models import DeformModel, DefromModelConfig
 from ..utils.network_factory import NetworkFactory
@@ -26,7 +25,7 @@ class DeformableRendererOptimizationConfig:
     max_steps: int = 40_000
     lr_final_factor: float = 0.002
     eps: float = 1e-8
-    warm_up: int = 0
+    warm_up: int = -1
     enable_ast: bool = True
     log_gradients: bool = True
     grad_log_interval: int = 100
@@ -34,11 +33,11 @@ class DeformableRendererOptimizationConfig:
 
 @dataclass
 class RenderRes:
-    gray_image: Float32[Tensor, "1 h w"]
-    gray_coronary: Float32[Tensor, "1 h w"] | None
-    viewspace_points: Float32[Tensor, "n 2"]
-    visibility_filter: Float32[Tensor, "n"]
-    radii: Float32[Tensor, "n"]
+    gray_image: Tensor
+    gray_coronary: Tensor | None
+    viewspace_points: Tensor
+    visibility_filter: Tensor
+    radii: Tensor
     
     d_motion_mean: Tensor
     d_motion_var: Tensor
@@ -114,7 +113,10 @@ class CoronaryDeformableXrayRenderer(Renderer):
     def forward(
         self,
         viewpoint_camera: Camera,
-        pc: XrayCoronaryGaussianModel,
+        pc,
+        bg_color: torch.Tensor,
+        scaling_modifier=1.0,
+        render_types: list|None = None,
         **kwargs,
     ) -> RenderRes:
         means3D = pc.get_means().detach()
@@ -169,9 +171,12 @@ class CoronaryDeformableXrayRenderer(Renderer):
         step: int, 
         module: LightningModule, 
         viewpoint_camera: Camera, 
-        pc: XrayCoronaryGaussianModel,
+        pc,
+        bg_color: torch.Tensor,
+        render_types: list|None = None,
         **kwargs
     )-> RenderRes:
+        cast(XrayCoronaryGaussianModel, pc)
         # clone properties
         means3D = pc.get_means()
         density = pc.get_density()
@@ -189,19 +194,24 @@ class CoronaryDeformableXrayRenderer(Renderer):
         if module.global_step == 144:
             pass
         
-        # update means3D, rotation, scales
-        d_xyz, d_scaling, d_rotation= self.deform_model(means3D.detach(), time.detach())
-        self._ensure_finite("d_xyz", d_xyz, step=step)
-        self._ensure_finite("d_scaling", d_scaling, step=step)
-        self._ensure_finite("d_rotation", d_rotation, step=step)
-        
-        means3D, rotation, scales = self.deform_model.deform(
-            means3D, rotation, scales, d_xyz, d_rotation, d_scaling
-        )
-        self._ensure_finite("means3D", means3D, step=step)
-        self._ensure_finite("rotation", rotation, step=step)
-        self._ensure_finite("scales", scales, step=step)
-        d_motion_mean, d_motion_var = pc.update_motions(d_xyz, d_scaling, d_rotation)
+        if step > self.optimization_config.warm_up:
+            # update means3D, rotation, scales
+            d_xyz, d_scaling, d_rotation= self.deform_model(means3D.detach(), time.detach())
+            self._ensure_finite("d_xyz", d_xyz, step=step)
+            self._ensure_finite("d_scaling", d_scaling, step=step)
+            self._ensure_finite("d_rotation", d_rotation, step=step)
+            
+            means3D, rotation, scales = self.deform_model.deform(
+                means3D, rotation, scales, d_xyz, d_rotation, d_scaling
+            )
+            self._ensure_finite("means3D", means3D, step=step)
+            self._ensure_finite("rotation", rotation, step=step)
+            self._ensure_finite("scales", scales, step=step)
+            d_motion_mean, d_motion_var = pc.update_motions(d_xyz, d_scaling, d_rotation)
+        else:
+            d_xyz, d_scaling, d_rotation= self.deform_model(means3D.detach(), time.detach())
+            d_motion_mean = pc.get_motion_mean().detach()
+            d_motion_var = pc.get_motion_var().detach()
 
         gray_image, meta_whole = self._render(viewpoint_camera, means3D, rotation, scales, density)
 
@@ -226,7 +236,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         means3D: Tensor,
         rotation: Tensor,
         scales: Tensor,
-        density: Tensor
+        density: Tensor,
     ) -> Tuple[Tensor, dict[str, Tensor]]:
 
         rasterizer = GaussianRasterizer(GaussianRasterizationSettings(
@@ -256,6 +266,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         
         # DSA uses original light intensity rather than log(I0/I), therefore we need to convert back
         rendered_image = torch.exp( - torch.clamp(rendered_image, min=1e-3, max=14.0))
+        # rendered_image = 1 - rendered_image
         
         meta = {
             "viewspace_points": means_2D,

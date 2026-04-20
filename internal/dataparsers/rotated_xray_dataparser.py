@@ -7,7 +7,6 @@ import hashlib
 import numpy as np
 import torch
 from torch import Tensor
-from jaxtyping import Float32
 
 from ..dataparsers.dataparser import DataParserConfig, DataParser, DataParserOutputs, ImageSet, PointCloud
 from ..cameras import Cameras
@@ -90,7 +89,7 @@ class RotatedXRay(DataParserConfig):
     train_ratio: ratio of images to use for training, only used when mode is render-new-views
     seed: random seed for data splitting and point cloud initialization
     """
-    base_name: str = "rotate_dsa"
+    base_name: str = "contrast_frames"
     mode: Literal["reconstruction", "render-new-views"] = "reconstruction"
     init_point_cloud_mode: Literal["uniform", "random", "random-ball", "FBP", "DL", "label", "central-line"] = "uniform"
     init_point_cloud_num: int = 100_000
@@ -110,7 +109,7 @@ def _get_frames_param(json_data: dict, key: str, indices: list[int] | None = Non
         return torch.tensor([json_data["frames"][i][key] for i in indices])
 
 
-def _get_cameras(json_data: dict, indices: list[int] | None = None) -> Cameras:
+def _get_cameras(json_data: dict, indices: list[int] | None = None, time_key: Literal["phase", "time_s"] = "phase") -> Cameras:
     if indices is None:
         n_camras = len(json_data["frames"])
     else:
@@ -153,6 +152,15 @@ def _get_cameras(json_data: dict, indices: list[int] | None = None) -> Cameras:
     cx = width / 2
     cy = height / 2
     
+    if time_key == "phase":
+        time = _get_frames_param(json_data, "phase", indices)
+    elif time_key == "time_s":
+        time = _get_frames_param(json_data, "time_s", indices)
+        time_range = time.max() - time.min()
+        time = (time - time.min()) / time_range  # normalize to [0, 1] for better training
+    else:
+        raise ValueError(f"Unknown time_key: {time_key}")
+    
     return Cameras(
         R = R_w2c,
         T = T_w2c,
@@ -163,7 +171,7 @@ def _get_cameras(json_data: dict, indices: list[int] | None = None) -> Cameras:
         width = torch.ones(n_camras) * width,
         height = torch.ones(n_camras) * height,
         camera_type=torch.zeros(n_camras),
-        time=_get_frames_param(json_data, "phase", indices),
+        time=_get_frames_param(json_data, time_key, indices),
         zfar=1e5
     )
 
@@ -489,7 +497,7 @@ def separate_coronary(coronary: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         return region_1, region_0
 
 
-def _get_backgound_gaussian_from_xyz(xyz: Float32[Tensor, "n_gaussians 3"]) -> Float32[Tensor, "n_gaussians 3"]:
+def _get_backgound_gaussian_from_xyz(xyz: Tensor) -> Tensor:
     """
     sample points from sphere around coronary's xyz.
     """

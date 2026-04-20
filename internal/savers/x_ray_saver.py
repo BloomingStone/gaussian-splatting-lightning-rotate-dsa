@@ -16,7 +16,6 @@ from xray_gaussian_rasterization_voxelization import (
 from . import Saver, SaverModule
 from ..gaussian_splatting import GaussianSplatting
 from ..mp_strategy import MPStrategy
-from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from ..renderers.deformabel_xray_renderer import CoronaryDeformableXrayRenderer
 from ..deform_models import DeformModel
 
@@ -223,7 +222,7 @@ class XRaySaverModule(SaverModule):
     def __del__(self):
         self._save_executor.shutdown(wait=False)
     
-    def save(self, pl_module: GaussianSplatting):
+    def save(self, pl_module):
         is_mp_strategy = isinstance(pl_module.trainer.strategy, MPStrategy)
         if pl_module.trainer.global_rank != 0 and not is_mp_strategy:
             return
@@ -241,7 +240,6 @@ class XRaySaverModule(SaverModule):
             
             pl_module.trainer.save_checkpoint(ckpt_path)
         
-        assert isinstance(pl_module.gaussian_model, XrayCoronaryGaussianModel)
         pc = pl_module.gaussian_model
         
         assert isinstance(pl_module.renderer, CoronaryDeformableXrayRenderer)
@@ -270,7 +268,7 @@ class XRaySaverModule(SaverModule):
             ply_payload = PlySavePayload(
                 path=ply_path,
                 means=means3D.detach().cpu(),
-                scales=pc.scale_inverse_activation(scales).detach().cpu(),
+                scales=pc.scale_(scales).detach().cpu(),
                 quats=pc.scale_inverse_activation(rotation).detach().cpu(),
                 opacities=gray.detach().cpu(),
                 sh0=sh0.detach().cpu(),

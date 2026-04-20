@@ -3,7 +3,6 @@ from collections import deque
 from dataclasses import dataclass
 from typing import override
 
-from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from .vanilla_density_controller import VanillaDensityControllerImpl, DensityController
 from .density_controller import Utils
 from ..gaussian_splatting import GaussianSplatting
@@ -45,7 +44,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         self.config = config
     
     @override
-    def setup(self, stage: str, pl_module: GaussianSplatting) -> None:
+    def setup(self, stage: str, pl_module) -> None:
         super().setup(stage, pl_module)
 
         if stage == "fit":
@@ -66,7 +65,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
     
         
     @override
-    def before_backward(self, outputs: dict, batch, gaussian_model: XrayCoronaryGaussianModel, optimizers: list, global_step: int, pl_module: GaussianSplatting) -> None:
+    def before_backward(self, outputs: dict, batch, gaussian_model, optimizers: list, global_step: int, pl_module) -> None:
         if global_step >= self.config.densify_until_frac*pl_module.trainer.max_steps:
             return
 
@@ -74,7 +73,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         
     
     @override
-    def after_backward(self, outputs: dict, batch, gaussian_model: XrayCoronaryGaussianModel, optimizers: list, global_step: int, pl_module: GaussianSplatting) -> None:
+    def after_backward(self, outputs: dict, batch, gaussian_model, optimizers: list, global_step: int, pl_module) -> None:
         if global_step >= self.config.densify_until_frac*pl_module.trainer.max_steps:
             return
 
@@ -82,9 +81,11 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
             self.update_states(outputs)
 
             # densify and pruning
-            if global_step > self.config.densify_from_iter\
+            if (
+                global_step > self.config.densify_from_iter\
                 and global_step % self.config.densification_interval == 0\
-                and global_step % self.config.density_reset_interval >= self.config.densification_interval: # avoid densifying right after density reset
+                and global_step % self.config.density_reset_interval >= self.config.densification_interval
+            ): # avoid densifying right after density reset
                 size_threshold = 20 if global_step > self.config.density_reset_interval else None
                 self._densify_and_prune(
                     max_screen_size=size_threshold,
@@ -101,7 +102,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
     
     
     @override
-    def _densify_and_prune(self, max_screen_size, gaussian_model: XrayCoronaryGaussianModel, optimizers: list):
+    def _densify_and_prune(self, max_screen_size, gaussian_model, optimizers: list):
         min_density = self.config.cull_density_threshold
         prune_extent = self.prune_extent
 
@@ -135,7 +136,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
 
 
     @override
-    def _densify_and_clone(self, grads, gaussian_model: XrayCoronaryGaussianModel, optimizers: list):
+    def _densify_and_clone(self, grads, gaussian_model, optimizers: list):
         percent_dense = self.config.percent_dense
         scene_extent = self.cameras_extent
 
@@ -160,7 +161,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         gaussian_model.clone_motion_by_mask(selected_pts_mask, repeats=1)
 
     @override
-    def _densify_and_split(self, grads, gaussian_model: XrayCoronaryGaussianModel, optimizers: list, N: int = 2):
+    def _densify_and_split(self, grads, gaussian_model, optimizers: list, N: int = 2):
         percent_dense = self.config.percent_dense
         scene_extent = self.cameras_extent
 
@@ -213,7 +214,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         self._prune_points(prune_filter, gaussian_model, optimizers)
 
     @override
-    def _prune_points(self, mask, gaussian_model: XrayCoronaryGaussianModel, optimizers: list):
+    def _prune_points(self, mask, gaussian_model, optimizers: list):
         """
         Args:
             mask: `True` indicating the Gaussians to be pruned
@@ -233,7 +234,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         self.denom = self.denom[valid_points_mask]
         self.max_radii2D = self.max_radii2D[valid_points_mask]
 
-    def _reset_density(self, gaussian_model: XrayCoronaryGaussianModel, optimizers: list):
+    def _reset_density(self, gaussian_model, optimizers: list):
         inits = GaussianInits(gaussian_model.n_gaussians)
         density = gaussian_model.get_density()
         density_new = gaussian_model.density_inverse_activation(torch.min(

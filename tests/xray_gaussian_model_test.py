@@ -17,7 +17,7 @@ from internal.renderers.deformabel_xray_renderer import (
 from internal.deform_models import HashGridDeformConfig
 
 from internal.dataparsers.rotated_xray_dataparser import RotatedXRay
-from internal.dataset import Dataset
+from internal.datasets.vanilla_dataset import Dataset
 from internal.savers.x_ray_saver import XRaySaver
 
 class TestDeformableXrayRenderAndSaver(unittest.TestCase):
@@ -81,6 +81,8 @@ class TestDeformableXrayRenderAndSaver(unittest.TestCase):
             module=self.lightning_module,
             viewpoint_camera=camera.to_device(self.device),
             pc=self.gs_model.to(self.device),
+            bg_color=torch.zeros(3, device=self.device),
+            render_types=["gray_image", "gray_coronary"],
         )
         
         for key, value in self.gs_model.get_properties().items():

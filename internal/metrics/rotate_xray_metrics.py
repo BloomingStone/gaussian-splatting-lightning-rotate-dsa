@@ -9,7 +9,6 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from ..utils.ssim import ssim
 from .metric import Metric, MetricImpl
 from ..renderers.deformabel_xray_renderer import RenderRes
-from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from ..gaussian_splatting import GaussianSplatting
 
 @dataclass
@@ -190,16 +189,16 @@ class RotateXrayMetricsImpl(MetricImpl):
         return self._from_nchw(vesselness_max, image)
 
     @staticmethod
-    def _get_gaussian_xyz(gaussian_model: XrayCoronaryGaussianModel) -> torch.Tensor:
+    def _get_gaussian_xyz(gaussian_model) -> torch.Tensor:
         xyz = gaussian_model.get_xyz
         if callable(xyz):
             xyz = xyz()
-        return xyz
+        return xyz  # type: ignore
 
     def _deform_field_tv_loss(
         self,
         pl_module: GaussianSplatting,
-        gaussian_model: XrayCoronaryGaussianModel,
+        gaussian_model,
         outputs: RenderRes,
     ) -> torch.Tensor:
         ref = outputs.gray_image
@@ -267,7 +266,7 @@ class RotateXrayMetricsImpl(MetricImpl):
     def _get_basic_metrics(
         self, 
         pl_module: GaussianSplatting, 
-        gaussian_model: XrayCoronaryGaussianModel, 
+        gaussian_model, 
         batch, 
         outputs: RenderRes,
         include_frangi_in_loss: bool = False,
@@ -370,7 +369,7 @@ class RotateXrayMetricsImpl(MetricImpl):
         image_info: Tuple[str, torch.Tensor, torch.Tensor]
         _, image_info, _ = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
         _, gt_image, masked_pixels = image_info
-        gt_image = gt_image[0:1]
+        gt_image = gt_image[0:1]    # [1, H, W] get gray image
 
         metrics["psnr"] = self.psnr(outputs.gray_image, gt_image)
         prog_bar["psnr"] = True

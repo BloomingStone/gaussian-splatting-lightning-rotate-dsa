@@ -33,7 +33,7 @@ class GaussianSplatting(LightningModule):
     def __init__(
             self,
             save_iterations: List[int],
-            gaussian: Gaussian = lazy_instance(VanillaGaussian),
+            gaussian: Gaussian,
             background_color: Tuple[float, float, float] = (0., 0., 0.),
             random_background: bool = False,
             output_path: str|None = None,
