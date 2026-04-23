@@ -80,9 +80,10 @@ class Dataset(torch.utils.data.Dataset):
         return len(self.image_set)
 
     def get_image(self, index) -> Tuple[str, torch.Tensor, Optional[torch.Tensor]]:
-        image = torch.from_numpy(self.tiff_data[index]).to(self.image_device)
-        image = image.unsqueeze(0).repeat(3, 1, 1)  # [3, H, W]
-        return self.image_set.image_names[index], image, None
+        image_index = self.image_set.image_names[index]
+        image = torch.from_numpy(self.tiff_data[image_index]).to(self.image_device)  # [H, W]
+        image = image.unsqueeze(0).repeat(3, 1, 1)
+        return str(image_index), image, None
 
     def get_extra_data(self, index):
         if self.image_set.extra_data_processor is None or self.image_set.extra_data is None:

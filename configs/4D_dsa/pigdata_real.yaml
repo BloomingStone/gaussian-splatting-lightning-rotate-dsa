@@ -5,10 +5,10 @@ trainer:
   check_val_every_n_epoch: 5
   precision: 16-mixed
 
-save_iterations: [20000]
+save_iterations: [10000]
 
 data:
-  val_max: null   # 3000
+  val_max: null
   image_on_cpu: false
   parser:
     class_path: internal.dataparsers.TiffDataParserConfig
@@ -22,7 +22,7 @@ data:
 model:
   max_save_val_output: 10
   renderer:
-    class_path: internal.renderers.deformabel_xray_renderer.CoronaryDeformableXrayRenderer
+    class_path: internal.renderers.xray_4d_renderer.Xray4DRender
     init_args:
       optimization_config:
         enable_ast: true
@@ -50,18 +50,18 @@ model:
       deform_tv_norm: l1
       deform_tv_eps: 1.0e-6
   gaussian:
-    class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
+    class_path: internal.models.xray_4d_gaussian.Xray4DGaussian
     init_args:
       optimization:
         log_gradients: true
         grad_log_interval: 50
   density:
-    class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
+    class_path: internal.density_controllers.xray_4d_density_controller.RotateXrayDensityController
   renderer_output_types: 
     - gray_image
     - gray_coronary
   saver:
-    class_path: internal.savers.x_ray_saver.XRaySaver
+    class_path: internal.savers.xray_4d_saver.XRaySaver
     init_args:
       save_ckpt: false
       save_ply: false

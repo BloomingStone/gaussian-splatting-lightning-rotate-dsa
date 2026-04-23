@@ -1,12 +1,12 @@
 import torch
 from collections import deque
 from dataclasses import dataclass
-from typing import override
+from typing import override, cast
 
 from .vanilla_density_controller import VanillaDensityControllerImpl, DensityController
 from .density_controller import Utils
 from ..gaussian_splatting import GaussianSplatting
-from ..models.xray_coronary_gaussian import GaussianInits
+from ..models.xray_4d_gaussian import GaussianInits, Xray4DGaussianModel
 
 @dataclass
 class RotateXrayDensityController(DensityController):    
@@ -26,6 +26,9 @@ class RotateXrayDensityController(DensityController):
     densify_until_frac: float = 0.8
 
     cull_density_threshold: float = 1e-3
+    density_mean_t_start: float = 0.0
+    density_mean_t_end: float = 1.0
+    density_mean_num_samples: int = 32
     
 
     camera_extent_factor: float = 1.
@@ -81,11 +84,9 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
             self.update_states(outputs)
 
             # densify and pruning
-            if (
-                global_step > self.config.densify_from_iter\
+            if global_step > self.config.densify_from_iter\
                 and global_step % self.config.densification_interval == 0\
-                and global_step % self.config.density_reset_interval >= self.config.densification_interval
-            ): # avoid densifying right after density reset
+                and global_step % self.config.density_reset_interval >= self.config.densification_interval: # avoid densifying right after density reset
                 size_threshold = 20 if global_step > self.config.density_reset_interval else None
                 self._densify_and_prune(
                     max_screen_size=size_threshold,
@@ -125,7 +126,8 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         self._densify_and_split(grads, gaussian_model, optimizers)
 
         # prune
-        prune_mask = (gaussian_model.get_density() < min_density).squeeze()
+        density_mean = gaussian_model.get_density_mean()
+        prune_mask = (density_mean < min_density).squeeze()
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
             big_points_ws = gaussian_model.get_scales().max(dim=1).values > 0.1 * prune_extent
@@ -235,14 +237,24 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         self.max_radii2D = self.max_radii2D[valid_points_mask]
 
     def _reset_density(self, gaussian_model, optimizers: list):
-        inits = GaussianInits(gaussian_model.n_gaussians)
-        density = gaussian_model.get_density()
-        density_new = gaussian_model.density_inverse_activation(torch.min(
-            density,
-            gaussian_model.density_activation(inits.density).to(density.device),
-        ))
-        new_parameters = Utils.replace_tensors_to_properties(tensors={
-            "density": density_new,
-        }, optimizers=optimizers)
+        gaussian_model = cast(Xray4DGaussianModel, gaussian_model)
+        inits = GaussianInits(
+            n_gs=gaussian_model.n_gaussians, 
+            density_res_freq_max=gaussian_model.density_freq_res_max
+        )
+        
+        density_freq_dc_old = gaussian_model.density_dc
+        
+        new_density_freq_dc = torch.min(
+            inits.density_dc.to(density_freq_dc_old.device),
+            density_freq_dc_old,
+        )
+        
+        new_parameters = Utils.replace_tensors_to_properties(
+            tensors={
+                gaussian_model._density_dc_name: new_density_freq_dc,
+            }, 
+            optimizers=optimizers
+        )
         gaussian_model.update_properties(new_parameters)
     

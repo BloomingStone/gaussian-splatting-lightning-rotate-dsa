@@ -156,8 +156,9 @@ def _get_cameras(json_data: dict, indices: list[int] | None = None, time_key: Li
         time = _get_frames_param(json_data, "phase", indices)
     elif time_key == "time_s":
         time = _get_frames_param(json_data, "time_s", indices)
-        time_range = time.max() - time.min()
-        time = (time - time.min()) / time_range  # normalize to [0, 1] for better training
+        time_all = _get_frames_param(json_data, "time_s")
+        time_range = time_all.max() - time_all.min()
+        time = (time - time_all.min()) / time_range  # normalize to [0, 1] for better training
     else:
         raise ValueError(f"Unknown time_key: {time_key}")
     

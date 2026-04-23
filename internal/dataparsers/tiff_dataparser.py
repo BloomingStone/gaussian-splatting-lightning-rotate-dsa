@@ -83,7 +83,7 @@ class TiffDataParser(RotatedXRayDataParser):
         self.roi = data.get("roi", None)
 
         n_images = len(data["frames"])
-        image_names = [str(i) for i in range(n_images)]
+        image_names = [i for i in range(n_images)]
         image_paths = [tiff_path for _ in range(n_images)]
 
         if self.params.mode == "reconstruction":

@@ -8,7 +8,6 @@ from xray_gaussian_rasterization_voxelization import (
     GaussianRasterizationSettings,
     GaussianRasterizer,
 )
-from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 
 from .renderer import Renderer, RendererOutputInfo, RendererOutputTypes
 from ..cameras import Camera
@@ -17,6 +16,7 @@ from ..deform_models import DeformModel, DefromModelConfig
 from ..utils.network_factory import NetworkFactory
 from ..utils.general_utils import get_linear_noise_func
 from ..utils.gaussian_utils import GaussianTransformUtils
+from ..models.xray_4d_gaussian import Xray4DGaussianModel
 
 
 @dataclass
@@ -77,7 +77,7 @@ class RenderRes:
         else:
             return defualt_value
 
-class CoronaryDeformableXrayRenderer(Renderer):
+class Xray4DRender(Renderer):
     deform_model: DeformModel
     
     def __init__(
@@ -119,12 +119,13 @@ class CoronaryDeformableXrayRenderer(Renderer):
         render_types: list|None = None,
         **kwargs,
     ) -> RenderRes:
+        pc = cast(Xray4DGaussianModel, pc)
         means3D = pc.get_means().detach()
-        density = pc.get_density().detach()
         rotation = pc.get_rotations().detach()
         scales = pc.get_scales().detach()
         
         time = viewpoint_camera.time.unsqueeze(0).expand(means3D.shape[0], -1)
+        density = pc.get_density(float(viewpoint_camera.time.item())).detach()
         
         d_xyz, d_scaling, d_rotation = self.deform_model(means3D.detach(), time.detach())
         self._ensure_finite("d_xyz", d_xyz)
@@ -176,10 +177,9 @@ class CoronaryDeformableXrayRenderer(Renderer):
         render_types: list|None = None,
         **kwargs
     )-> RenderRes:
-        pc = cast(XrayCoronaryGaussianModel, pc)
+        pc = cast(Xray4DGaussianModel, pc)
         # clone properties
         means3D = pc.get_means()
-        density = pc.get_density()
         rotation = pc.get_rotations()
         scales = pc.get_scales()
 
@@ -190,6 +190,8 @@ class CoronaryDeformableXrayRenderer(Renderer):
             time_interval = 1 / ((step % self.train_set_length) + 1)
             ast_noise = torch.randn(1, 1, device=means3D.device).expand(N, -1) * time_interval * self.smooth_term(step)
             time = time + ast_noise
+
+        density = pc.get_density(time)
 
         if module.global_step == 144:
             pass
@@ -236,7 +238,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         means3D: Tensor,
         rotation: Tensor,
         scales: Tensor,
-        density: Tensor,
+        density: Tensor
     ) -> Tuple[Tensor, dict[str, Tensor]]:
 
         rasterizer = GaussianRasterizer(GaussianRasterizationSettings(
@@ -312,3 +314,4 @@ class CoronaryDeformableXrayRenderer(Renderer):
             "gray_image": RendererOutputInfo("gray_image", RendererOutputTypes.GRAY, other_kwargs=cmap),
             "gray_coronary": RendererOutputInfo("gray_coronary", RendererOutputTypes.GRAY, other_kwargs=cmap)
         }
+        # TODO store raw as nii or tiff
