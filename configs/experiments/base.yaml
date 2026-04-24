@@ -44,12 +44,6 @@ train:
 
   # 这些是对所有run生效的固定覆盖。
   static_overrides:
-    data.parser.init_args.mode: render-new-views
-    model.metric.init_args.enable_deform_tv_loss: false
-    model.metric.init_args.w_deform_tv_loss: 0.0
-    model.metric.init_args.enable_frangi_loss: false
-    model.metric.init_args.w_frangi_loss: 0.0
-
     model.saver.init_args.save_phase: 0.5
     model.saver.init_args.save_ckpt: true
     pbar_rate: 50

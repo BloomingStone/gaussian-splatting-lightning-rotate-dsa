@@ -186,9 +186,6 @@ class CoronaryDeformableXrayRenderer(Renderer):
             ast_noise = torch.randn(1, 1, device=means3D.device).expand(N, -1) * time_interval * self.smooth_term(step)
             time = time + ast_noise
 
-        if module.global_step == 144:
-            pass
-        
         # update means3D, rotation, scales
         d_xyz, d_scaling, d_rotation= self.deform_model(means3D.detach(), time.detach())
         self._ensure_finite("d_xyz", d_xyz, step=step)

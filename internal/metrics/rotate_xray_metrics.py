@@ -45,7 +45,8 @@ class RotateXrayMetrics(Metric):
     the vanilla 3DGS uses 'vgg', but 'alex' is faster
     """
 
-    fused_ssim: bool = False
+    # 目前如果将 fused_ssim 设为 False 会导致 loss 无法正常下降， 可能是因为 pytorch 实现的ssim处理半精度时有问题
+    fused_ssim: bool = True
 
     def instantiate(self, *args, **kwargs) -> MetricImpl:
         return RotateXrayMetricsImpl(self)
