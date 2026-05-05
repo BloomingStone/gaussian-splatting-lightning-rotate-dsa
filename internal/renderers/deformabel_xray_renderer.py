@@ -13,7 +13,7 @@ from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from .renderer import Renderer, RendererOutputInfo, RendererOutputTypes
 from ..cameras import Camera
 from ..cameras import Camera
-from ..deform_models import DeformModel, DefromModelConfig
+from ..deform_models import DeformModel, DefromModelConfig, Deforms, GSParam
 from ..utils.network_factory import NetworkFactory
 from ..utils.general_utils import get_linear_noise_func
 from ..utils.gaussian_utils import GaussianTransformUtils
@@ -39,16 +39,15 @@ class RenderRes:
     visibility_filter: Tensor
     radii: Tensor
     
-    d_motion_mean: Tensor
-    d_motion_var: Tensor
+    deforms_mean: Tensor
+    deforms_var: Tensor
     
-    d_means3D: Tensor
-    d_rotation: Tensor
-    d_scales: Tensor
+    deforms: Deforms
     
     time: Tensor
+    density_mask: Tensor|None = None
     
-    in_warm_up: bool
+    in_warm_up: bool = False
 
     def __getitem__(self, item):
         return getattr(self, item)
@@ -90,26 +89,6 @@ class CoronaryDeformableXrayRenderer(Renderer):
         self.optimization_config = optimization_config
         self._grad_hook_registered = False
 
-    @staticmethod
-    def _ensure_finite(name: str, tensor: Tensor, step: int | None = None) -> None:
-        if torch.isfinite(tensor).all():
-            return
-
-        finite_mask = torch.isfinite(tensor)
-        finite_vals = tensor[finite_mask]
-        if finite_vals.numel() > 0:
-            min_v = float(finite_vals.min().item())
-            max_v = float(finite_vals.max().item())
-        else:
-            min_v = float("nan")
-            max_v = float("nan")
-
-        step_msg = f" at step={step}" if step is not None else ""
-        raise RuntimeError(
-            f"Non-finite tensor detected for '{name}'{step_msg}. "
-            f"shape={tuple(tensor.shape)}, finite_min={min_v}, finite_max={max_v}"
-        )
-
     def forward(
         self,
         viewpoint_camera: Camera,
@@ -119,48 +98,45 @@ class CoronaryDeformableXrayRenderer(Renderer):
         render_types: list|None = None,
         **kwargs,
     ) -> RenderRes:
-        means3D = pc.get_means().detach()
-        density = pc.get_density().detach()
-        rotation = pc.get_rotations().detach()
-        scales = pc.get_scales().detach()
-        
-        time = viewpoint_camera.time.unsqueeze(0).expand(means3D.shape[0], -1)
-        
-        d_xyz, d_scaling, d_rotation = self.deform_model(means3D.detach(), time.detach())
-        self._ensure_finite("d_xyz", d_xyz)
-        self._ensure_finite("d_scaling", d_scaling)
-        self._ensure_finite("d_rotation", d_rotation)
-        means3D, rotation, scales = self.deform_model.deform(
-            means3D, rotation, scales, d_xyz, d_rotation, d_scaling
+        pc = cast(XrayCoronaryGaussianModel, pc)
+        gs = GSParam(
+            xyz=pc.get_means().detach(),
+            rotation=pc.get_rotations().detach(),
+            scaling=pc.get_scales().detach(),
+            density=pc.get_density().detach(),
         )
-        self._ensure_finite("means3D", means3D)
-        self._ensure_finite("rotation", rotation)
-        self._ensure_finite("scales", scales)
         
-        d_motion_mean = pc.get_motion_mean().detach()
-        d_motion_var = pc.get_motion_var().detach()
-        
-        gray_image, meta_whole = self._render(viewpoint_camera, means3D, rotation, scales, density)
+        time = viewpoint_camera.time.unsqueeze(0).expand(gs.xyz.shape[0], -1)
+        deforms: Deforms = self.deform_model(gs.xyz.detach(), time.detach())
+        gs = self.deform_model.deform(gs, deforms)
+        gray_image, meta_whole = self._render(viewpoint_camera, gs)
 
         viewspace_points = meta_whole["viewspace_points"]
         radii = meta_whole["radii"]
         visibility_filter = radii > 0
         
-        mask = (density > torch.quantile(density, 0.90)).squeeze()
+        mask = (gs.density > torch.quantile(gs.density, 0.90)).squeeze()
         if not torch.any(mask):
             mask = torch.ones_like(mask, dtype=torch.bool)
         
         gray_coronary, _ = self._render(
-            viewpoint_camera, means3D[mask], rotation[mask], 
-            scales[mask], density[mask]
+            viewpoint_camera,
+            GSParam(
+                xyz=gs.xyz[mask],
+                rotation=gs.rotation[mask],
+                scaling=gs.scaling[mask],
+                density=gs.density[mask],
+            )
         )
         
+        deforms_mean = pc.deforms_recorder.get_deforms_mean().detach()
+        deforms_var = pc.deforms_recorder.get_deforms_var().detach()
+        
         res = RenderRes(
-            gray_image, gray_coronary,      # rendered
+            gray_image, gray_coronary,                  # rendered
             viewspace_points, visibility_filter, radii, # grad meta
-            d_motion_mean, d_motion_var,    # moving mean & var
-            d_xyz, d_rotation, d_scaling,      # deform properties
-            viewpoint_camera.time,
+            deforms_mean, deforms_var, deforms,         # deforms and mean & var
+            viewpoint_camera.time, mask,                 # other info     
             in_warm_up=False
         )
         return res
@@ -178,42 +154,34 @@ class CoronaryDeformableXrayRenderer(Renderer):
     )-> RenderRes:
         pc = cast(XrayCoronaryGaussianModel, pc)
         # clone properties
-        means3D = pc.get_means()
-        density = pc.get_density()
-        rotation = pc.get_rotations()
-        scales = pc.get_scales()
+        gs = GSParam(
+            xyz=pc.get_means(),
+            rotation=pc.get_rotations(),
+            scaling=pc.get_scales(),
+            density=pc.get_density(),
+        )
 
-        N = means3D.shape[0]
+        N = gs.xyz.shape[0]
         time = viewpoint_camera.time.unsqueeze(0).expand(N, -1)
         
         if self.optimization_config.enable_ast:     # add AST noise
             time_interval = 1 / ((step % self.train_set_length) + 1)
-            ast_noise = torch.randn(1, 1, device=means3D.device).expand(N, -1) * time_interval * self.smooth_term(step)
+            ast_noise = torch.randn(1, 1, device=gs.xyz.device).expand(N, -1) * time_interval * self.smooth_term(step)
             time = time + ast_noise
 
         if module.global_step == 144:
             pass
         
+        deforms = self.deform_model(gs.xyz.detach(), time.detach())
         if step > self.optimization_config.warm_up:
             # update means3D, rotation, scales
-            d_xyz, d_scaling, d_rotation= self.deform_model(means3D.detach(), time.detach())
-            self._ensure_finite("d_xyz", d_xyz, step=step)
-            self._ensure_finite("d_scaling", d_scaling, step=step)
-            self._ensure_finite("d_rotation", d_rotation, step=step)
-            
-            means3D, rotation, scales = self.deform_model.deform(
-                means3D, rotation, scales, d_xyz, d_rotation, d_scaling
-            )
-            self._ensure_finite("means3D", means3D, step=step)
-            self._ensure_finite("rotation", rotation, step=step)
-            self._ensure_finite("scales", scales, step=step)
-            d_motion_mean, d_motion_var = pc.update_motions(d_xyz, d_scaling, d_rotation)
+            gs = self.deform_model.deform(gs, deforms)
+            deforms_mean, deforms_var = pc.deforms_recorder.update(deforms)
         else:
-            d_xyz, d_scaling, d_rotation= self.deform_model(means3D.detach(), time.detach())
-            d_motion_mean = pc.get_motion_mean().detach()
-            d_motion_var = pc.get_motion_var().detach()
+            deforms_mean = pc.get_deforms_mean().detach()
+            deforms_var = pc.get_deforms_var().detach()
 
-        gray_image, meta_whole = self._render(viewpoint_camera, means3D, rotation, scales, density)
+        gray_image, meta_whole = self._render(viewpoint_camera, gs)
 
         viewspace_points = meta_whole["viewspace_points"]
         radii = meta_whole["radii"]
@@ -221,22 +189,20 @@ class CoronaryDeformableXrayRenderer(Renderer):
 
         gray_coronary = None
         
+        mask = (gs.density > torch.quantile(gs.density, 0.90)).squeeze()
+        
         return RenderRes(
-            gray_image, gray_coronary,      # rendered
+            gray_image, gray_coronary,                  # rendered
             viewspace_points, visibility_filter, radii, # grad meta
-            d_motion_mean, d_motion_var,    # moving mean & var
-            d_xyz, d_rotation, d_scaling,      # deforms
-            viewpoint_camera.time,
-            in_warm_up=step <= self.optimization_config.warm_up
+            deforms_mean, deforms_var, deforms,         # deforms and mean & var
+            viewpoint_camera.time, mask,                 # other info     
+            in_warm_up=False
         )
     
     def _render(
         self, 
         viewpoint_camera: Camera,
-        means3D: Tensor,
-        rotation: Tensor,
-        scales: Tensor,
-        density: Tensor,
+        gs: GSParam,
     ) -> Tuple[Tensor, dict[str, Tensor]]:
 
         rasterizer = GaussianRasterizer(GaussianRasterizationSettings(
@@ -253,15 +219,15 @@ class CoronaryDeformableXrayRenderer(Renderer):
             debug=False,
         ))
         
-        means_2D = torch.zeros_like(means3D, dtype=means3D.dtype, requires_grad=True, device=means3D.device) + 0
+        means_2D = torch.zeros_like(gs.xyz, dtype=gs.xyz.dtype, requires_grad=True, device=gs.xyz.device) + 0
         
         rendered_image: Tensor; radii: Tensor
         rendered_image, radii = rasterizer(
-            means3D=means3D,
+            means3D=gs.xyz,
             means2D=means_2D,
-            opacities=density,
-            scales=scales,
-            rotations=rotation,
+            opacities=gs.density,
+            scales=gs.scaling,
+            rotations=gs.rotation,
         )
         
         # DSA uses original light intensity rather than log(I0/I), therefore we need to convert back

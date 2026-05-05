@@ -3,104 +3,23 @@ from collections import deque
 from dataclasses import dataclass
 from typing import override, cast
 
-from .vanilla_density_controller import VanillaDensityControllerImpl, DensityController
+from .rotate_xray_density_controller import RotateXrayDensityController
+from .rotate_xray_density_controller import RotateXrayDensityControllerImpl
 from .density_controller import Utils
 from ..gaussian_splatting import GaussianSplatting
 from ..models.xray_4d_gaussian import GaussianInits, Xray4DGaussianModel
 
 @dataclass
-class RotateXrayDensityController(DensityController):    
-    # in C-arm X-ray, the scene extent = SOD > 1500 mm. so here we set percent_dense to 0.0005, 
-    # which means the maximum scaling of a Gaussian is 1500 * 0.0005 = 0.75 mm.
-    # the diameter of a coronary artery is around 2-3 mm, so 3*sigma = 2.25 probably covers the artery, which is a reasonable setting.
-    percent_dense: float = 0.0005
+class Xray4DDensityController(RotateXrayDensityController):    
     
-    densification_interval: int = 300
-
-    density_reset_interval: int = 2000
-
-    densify_from_iter: int = 500
-
-    densify_grad_threshold: float = 100.0
-    
-    densify_until_frac: float = 0.8
-
-    cull_density_threshold: float = 1e-3
-    density_mean_t_start: float = 0.0
-    density_mean_t_end: float = 1.0
-    density_mean_num_samples: int = 32
-    
-
-    camera_extent_factor: float = 1.
-
-    scene_extent_override: float = -1.
-
-    absgrad: bool = False
-    
-    def instantiate(self, *args, **kwargs) -> "RotateXrayDensityControllerImpl":
-        return RotateXrayDensityControllerImpl(self)
+    def instantiate(self, *args, **kwargs) -> "Xray4DDensityControllerImpl":
+        return Xray4DDensityControllerImpl(self)
 
 
-class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
-    def __init__(self, config: RotateXrayDensityController, *args, **kwargs) -> None:
+class Xray4DDensityControllerImpl(RotateXrayDensityControllerImpl):
+    def __init__(self, config: Xray4DDensityController, *args, **kwargs) -> None:
         super().__init__(config, *args, **kwargs)
         self.config = config
-    
-    @override
-    def setup(self, stage: str, pl_module) -> None:
-        super().setup(stage, pl_module)
-
-        if stage == "fit":
-            self.cameras_extent = pl_module.trainer.datamodule.dataparser_outputs.camera_extent * self.config.camera_extent_factor  #type: ignore
-            self.prune_extent = pl_module.trainer.datamodule.prune_extent * self.config.camera_extent_factor    #type: ignore
-
-            if self.config.scene_extent_override > 0:
-                self.cameras_extent = self.config.scene_extent_override
-                self.prune_extent = self.config.scene_extent_override
-                print(f"Override scene extent with {self.config.scene_extent_override}")
-
-            self._init_state(pl_module.gaussian_model.n_gaussians, pl_module.device)
-
-        self.density_reset_at = -32768
-        self._grad_threshold: float|None = None
-        self._do_percentile_update: bool = True
-        self._recent_grad_p9: deque[float] = deque(maxlen=5)
-    
-        
-    @override
-    def before_backward(self, outputs: dict, batch, gaussian_model, optimizers: list, global_step: int, pl_module) -> None:
-        if global_step >= self.config.densify_until_frac*pl_module.trainer.max_steps:
-            return
-
-        outputs["viewspace_points"].retain_grad()
-        
-    
-    @override
-    def after_backward(self, outputs: dict, batch, gaussian_model, optimizers: list, global_step: int, pl_module) -> None:
-        if global_step >= self.config.densify_until_frac*pl_module.trainer.max_steps:
-            return
-
-        with torch.no_grad():
-            self.update_states(outputs)
-
-            # densify and pruning
-            if global_step > self.config.densify_from_iter\
-                and global_step % self.config.densification_interval == 0\
-                and global_step % self.config.density_reset_interval >= self.config.densification_interval: # avoid densifying right after density reset
-                size_threshold = 20 if global_step > self.config.density_reset_interval else None
-                self._densify_and_prune(
-                    max_screen_size=size_threshold,
-                    gaussian_model=gaussian_model,
-                    optimizers=optimizers,
-                )
-
-            if global_step % self.config.density_reset_interval == 0 or \
-                    (
-                        torch.all(pl_module.background_color == 1.) and global_step == self.config.densify_from_iter
-                    ):
-                self._reset_density(gaussian_model, optimizers)
-                self.density_reset_at = global_step
-    
     
     @override
     def _densify_and_prune(self, max_screen_size, gaussian_model, optimizers: list):
@@ -136,105 +55,6 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
 
         torch.cuda.empty_cache()
 
-
-    @override
-    def _densify_and_clone(self, grads, gaussian_model, optimizers: list):
-        percent_dense = self.config.percent_dense
-        scene_extent = self.cameras_extent
-
-        grad_norm = grads.norm(dim=-1)
-
-        grad_threshold = self._grad_threshold if self._grad_threshold is not None else self.config.densify_grad_threshold
-
-        selected_pts_mask = grad_norm >= grad_threshold
-        # Exclude big Gaussians
-        selected_pts_mask = torch.logical_and(
-            selected_pts_mask,
-            torch.max(gaussian_model.get_scales(), dim=1).values <= percent_dense * scene_extent,
-        )
-
-        # Copy selected Gaussians
-        new_properties = {}
-        for key, value in gaussian_model.properties.items():
-            new_properties[key] = value[selected_pts_mask]
-
-        # Update optimizers and properties
-        self._densification_postfix(new_properties, gaussian_model, optimizers)
-        gaussian_model.clone_motion_by_mask(selected_pts_mask, repeats=1)
-
-    @override
-    def _densify_and_split(self, grads, gaussian_model, optimizers: list, N: int = 2):
-        percent_dense = self.config.percent_dense
-        scene_extent = self.cameras_extent
-
-        device = gaussian_model.get_property("means").device
-        n_init_points = gaussian_model.n_gaussians
-        scales = gaussian_model.get_scales()
-
-        # The number of Gaussians and `grads` is different after cloning, so padding is required
-        padded_grad = torch.zeros((n_init_points,), device=device)
-        padded_grad[:grads.shape[0]] = grads.squeeze()
-        
-        grad_threshold = self._grad_threshold if self._grad_threshold is not None else self.config.densify_grad_threshold
-        
-        # Extract points that satisfy the gradient condition
-        selected_pts_mask = (padded_grad >= grad_threshold)
-        # Exclude small Gaussians
-        selected_pts_mask = torch.logical_and(
-            selected_pts_mask,
-            torch.max(
-                scales,
-                dim=1,
-            ).values > percent_dense * scene_extent,
-        )
-        
-        # Exclude nan points
-        properties = gaussian_model.get_properties()
-        properties = torch.cat([v for v in properties.values()], dim=-1)
-        nan_mask = torch.any(torch.isnan(properties), dim=-1)
-        if nan_mask.any():
-            print(f"Warning: NaN detected in properties. {nan_mask.sum().item()} points will be excluded.")
-        selected_pts_mask = torch.logical_and(selected_pts_mask, ~nan_mask)
-
-        # Split
-        new_properties = self._split_properties(gaussian_model, selected_pts_mask, N)
-
-        # Update optimizers and properties
-        self._densification_postfix(new_properties, gaussian_model, optimizers)
-        
-        gaussian_model.clone_motion_by_mask(selected_pts_mask, repeats=N)
-
-        # Prune selected Gaussians, since they are already split
-        prune_filter = torch.cat((
-            selected_pts_mask,
-            torch.zeros(
-                N * int(selected_pts_mask.sum().item()),
-                device=device,
-                dtype=torch.bool,
-            ),
-        ))
-        self._prune_points(prune_filter, gaussian_model, optimizers)
-
-    @override
-    def _prune_points(self, mask, gaussian_model, optimizers: list):
-        """
-        Args:
-            mask: `True` indicating the Gaussians to be pruned
-            gaussian_model
-            optimizers
-        """
-        
-        valid_points_mask = ~mask  # `True` to keep
-        
-        new_parameters = Utils.prune_properties(valid_points_mask, gaussian_model, optimizers)
-        gaussian_model.properties = new_parameters
-        
-        gaussian_model.filter_motion_by_mask(valid_points_mask)
-
-        # prune states
-        self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
-        self.denom = self.denom[valid_points_mask]
-        self.max_radii2D = self.max_radii2D[valid_points_mask]
 
     def _reset_density(self, gaussian_model, optimizers: list):
         gaussian_model = cast(Xray4DGaussianModel, gaussian_model)

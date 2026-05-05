@@ -18,8 +18,7 @@ from .viewer.training_viewer import TrainingViewer
 from .models.gaussian import Gaussian, GaussianModel
 from .models.vanilla_gaussian import VanillaGaussian
 from .renderers import Renderer, VanillaRenderer, RendererConfig
-from .metrics.metric import Metric
-from .metrics.vanilla_metrics import VanillaMetrics
+from .metrics import Metric, VanillaMetrics
 from .density_controllers.density_controller import DensityController
 from .density_controllers.vanilla_density_controller import VanillaDensityController
 from jsonargparse import lazy_instance
@@ -173,7 +172,7 @@ class GaussianSplatting(LightningModule):
         elif isinstance(self.logger, lightning.pytorch.loggers.WandbLogger):
             self.log_image = self.wandb_log_image
 
-    def on_load_checkpoint(self, checkpoint) -> None:
+    def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
         if self.hparams["drop_optimizer_states"]:
             checkpoint["optimizer_states"] = []
 

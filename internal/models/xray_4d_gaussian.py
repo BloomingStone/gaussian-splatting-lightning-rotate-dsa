@@ -24,6 +24,7 @@ from ..utils.general_utils import (
 )
 from ..schedulers import ExponentialDecayScheduler
 from ..optimizers import OptimizerConfig, Adam
+from ..deform_models.deform_model import DeformsMARecoder
 
 @dataclass
 class XrayExponentialDecayScheduler(ExponentialDecayScheduler):
@@ -43,9 +44,9 @@ class OptimizationConfig:
     density_dc_lr: float | None = None
     density_res_lr: float | None = None
     res_to_dc_lr_ratio: float = 0.2
-    density_freq_res_max: int = 4
+    density_freq_res_max: int = 5
     density_omega: float = 2.0 * np.pi
-    density_frequency_up_interval: int = 1_000
+    density_frequency_up_interval: int = 500
 
     scales_lr: float = 0.005
 
@@ -204,7 +205,8 @@ class HasDensityGetter(ABC):
     
     @property
     def active_F(self) -> int:
-        if self.__getattribute__("_active_F") is None:
+        if not hasattr(self, "_active_F") or self._active_F is None:
+            Warning("active_F buffer is not initialized, returning density_freq_res_max")
             return self.density_freq_res_max
         else:
             return int(self._active_F.item())
@@ -231,12 +233,24 @@ class HasDensityGetter(ABC):
         """Return mean density estimate from DC component only"""
         return self.out_density(self.density_dc, t=None)
     
-    def get_density_res_energy(self) -> torch.Tensor:
+    def get_density_res(self, t: float|Tensor) -> torch.Tensor:
+        density = self.get_density(t)
+        density_mean = self.get_density_mean()
+        density_res = abs(density - density_mean)
+        return density_res
+    
+    def get_density_res_energy(self, lower_bound: int=0) -> torch.Tensor:
         """Return the energy of high frequency components, which can be used for recognize contrast flow"""
         if self.density_res_freq.shape[1] == 0:
             return torch.zeros_like(self.density_dc)
-        freq_res = self.density_res_freq[:, :self.active_F]
+        freq_res = self.density_res_freq[:, lower_bound:self.active_F]
         return torch.sum(freq_res ** 2, dim=-1, keepdim=True)
+    
+    def get_density_std(self, do_activate: bool, lower_bound: int=0) -> torch.Tensor:
+        std = torch.sqrt(self.get_density_res_energy(lower_bound=lower_bound)+1e-6)
+        if do_activate:
+            std = self.density_activateion(std)
+        return std
     
     @property
     def density_mean(self) -> torch.Tensor:
@@ -276,10 +290,7 @@ class Xray4DGaussianModel(
     HasRotationGetter,
 ):
     gaussians: nn.ParameterDict
-    
-    d_motion_mean: torch.Tensor     # E(motion), shape = (N, 3+3+1)  motion = (d_xyz, d_scale, d_rotation(quat_angle))
-    d_motion_2_mean: torch.Tensor
-    
+    deforms_recorder: DeformsMARecoder
     
     def __init__(self, config: Xray4DGaussian) -> None:
         super().__init__()
@@ -304,69 +315,8 @@ class Xray4DGaussianModel(
         self.rotation_activation = F.normalize
         self.rotation_inverse_activation = _identity_act
         
-        self.ema_lambda = 0.95
+        self.deforms_recorder = DeformsMARecoder()
         self._grad_hook_registered = False
-
-    @staticmethod
-    def _grad_stats(parameters: list[torch.Tensor]) -> dict[str, float]:
-        total_sq_norm = 0.0
-        max_abs = 0.0
-        nan_count = 0.0
-        inf_count = 0.0
-        grad_param_count = 0.0
-        grad_elem_count = 0.0
-
-        for p in parameters:
-            g = p.grad
-            if g is None:
-                continue
-            grad_param_count += 1.0
-            grad_elem_count += float(g.numel())
-            g32 = g.detach().float()
-            nan_count += float(torch.isnan(g32).sum().item())
-            inf_count += float(torch.isinf(g32).sum().item())
-            total_sq_norm += float(torch.square(g32).sum().item())
-            max_abs = max(max_abs, float(g32.abs().max().item()))
-
-        return {
-            "l2": total_sq_norm ** 0.5,
-            "max_abs": max_abs,
-            "nan_count": nan_count,
-            "inf_count": inf_count,
-            "grad_param_count": grad_param_count,
-        }
-
-    def _register_grad_monitor_hook(self, module: LightningModule):
-        if self._grad_hook_registered:
-            return
-
-        def _log_gradients(outputs, batch, gaussian_model, global_step: int, pl_module: LightningModule):
-            optimization_config = self.config.optimization
-            if optimization_config.log_gradients is False:
-                return
-            if optimization_config.grad_log_interval <= 0:
-                return
-            if global_step % optimization_config.grad_log_interval != 0:
-                return
-            if pl_module.global_rank != 0:
-                return
-            if pl_module.logger is None:
-                return
-
-            metrics_to_log: dict[str, float] = {}
-            for key in self._keys:
-                stats = self._grad_stats([self.gaussians[key]])
-                metrics_to_log[f"stats/gs_grad/{key}/l2"] = stats["l2"]
-                metrics_to_log[f"stats/gs_grad/{key}/max_abs"] = stats["max_abs"]
-                metrics_to_log[f"stats/gs_grad/{key}/nan_count"] = stats["nan_count"]
-                metrics_to_log[f"stats/gs_grad/{key}/inf_count"] = stats["inf_count"]
-            metrics_to_log["stats/gs_active_F"] = float(self._active_F)
-            metrics_to_log["stats/gs_density_freq_res_mean"] = self.density_res_freq.mean().item()
-            
-            pl_module.logger.log_metrics(metrics_to_log, step=pl_module.trainer.global_step)
-
-        module.on_after_backward_hooks.append(_log_gradients)
-        self._grad_hook_registered = True
 
     @property
     def n_gaussians(self) -> int:
@@ -377,71 +327,10 @@ class Xray4DGaussianModel(
     def setup_gaussians_container():
         return nn.ParameterDict()
     
-    def _init_motions(self, n_gaussians: int, device):
-        self.motion_ch = 3 + 3 + 1
-        self.register_buffer("d_motion_mean", torch.zeros(n_gaussians, self.motion_ch, device=device, requires_grad=False))
-        self.register_buffer("d_motion_2_mean", torch.zeros(n_gaussians, self.motion_ch, device=device, requires_grad=False))
-    
-    def update_motions(
-        self, 
-        d_xyz: torch.Tensor, 
-        d_scale: torch.Tensor, 
-        d_rotation: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        n_d_xyz, n_d_scale, n_d_rot = d_xyz.shape[0], d_scale.shape[0], d_rotation.shape[0]
-        n_gaussian = self.n_gaussians
-        assert n_d_xyz == n_d_scale == n_d_rot == n_gaussian
-        
-        d_rotation_norm = torch.nn.functional.normalize(d_rotation, dim=-1)
-        d_rotation_norm = d_rotation_norm.clamp(-1 + 1e-6, 1 - 1e-6)
-        d_angle = 2 * torch.acos(d_rotation_norm[:, 0]).unsqueeze(-1)
-        motion = torch.cat((d_xyz, d_scale, d_angle), dim=-1)
-        
-        motion_2 = torch.square(motion)
-        k = self.ema_lambda
-        d_motion_mean = k * self.d_motion_mean + (1-k) * motion
-        d_motion_2_mean = k * self.d_motion_2_mean + (1-k) * motion_2
-        
-        self.d_motion_mean = d_motion_mean.detach()
-        self.d_motion_2_mean = d_motion_2_mean.detach()
-
-        d_motion_var = d_motion_2_mean - torch.square(d_motion_mean)
-        
-        return d_motion_mean, d_motion_var
-    
-    def get_motion_var(self) -> torch.Tensor:
-        return self.d_motion_2_mean - torch.square(self.d_motion_mean)
-    
-    def get_motion_mean(self) -> torch.Tensor:
-        return self.d_motion_mean
-    
-    def clone_motion_by_mask(self, mask: torch.Tensor, repeats: int):
-        new_d_motion_mean = self.d_motion_mean[mask].repeat(repeats, 1)
-        new_d_motion_2_mean = self.d_motion_2_mean[mask].repeat(repeats, 1)
-        
-        self.d_motion_mean = torch.cat(
-            (self.d_motion_mean, new_d_motion_mean), 
-            dim=0
-        ).detach()
-        self.d_motion_2_mean = torch.cat(
-            (self.d_motion_2_mean, new_d_motion_2_mean),
-            dim = 0
-        ).detach()
-        
-        assert self.n_gaussians == self.d_motion_mean.shape[0] == self.d_motion_2_mean.shape[0]
-    
-    
-    def filter_motion_by_mask(self, valid_mask: torch.Tensor):
-        self.d_motion_mean = self.d_motion_mean[valid_mask].detach()
-        self.d_motion_2_mean = self.d_motion_2_mean[valid_mask].detach()
-        
-        assert self.n_gaussians == self.d_motion_mean.shape[0] == self.d_motion_2_mean.shape[0]
-        
-
     # --- Part2: Set up gaussians' parameters, optimizers and schedulers.
     @override
     def setup_from_pcd(
-            self, xyz: Tensor, 
+            self, xyz: Tensor|np.ndarray, 
             rgb: Any, 
             *args, 
             **kwargs 
@@ -471,7 +360,7 @@ class Xray4DGaussianModel(
             self._scale_name:               scales,
             self._rotation_name:            inits.rotations,
         })
-        self._init_motions(n_gaussians, device=torch.device("cuda"))
+        self.deforms_recorder.setup(n_gaussians, device=fused_point_cloud.device)
     
     @override
     def setup_from_number(self, n: int, *args, **kwargs):
@@ -485,7 +374,7 @@ class Xray4DGaussianModel(
             self._scale_name:               inits.scales,
             self._rotation_name:            inits.rotations,
         })
-        self._init_motions(n, device=torch.device("cuda"))
+        self.deforms_recorder.setup(n, device=torch.device("cuda"))
         
     @override
     def set_properties(self, properties: Mapping[str, Any]):
@@ -661,3 +550,65 @@ class Xray4DGaussianModel(
     
     def get_non_pre_activated_properties(self):
         raise NotImplementedError("get_non_pre_activated_properties is not implemented yet")
+    
+    
+    @staticmethod
+    def _grad_stats(parameters: list[torch.Tensor]) -> dict[str, float]:
+        total_sq_norm = 0.0
+        max_abs = 0.0
+        nan_count = 0.0
+        inf_count = 0.0
+        grad_param_count = 0.0
+        grad_elem_count = 0.0
+
+        for p in parameters:
+            g = p.grad
+            if g is None:
+                continue
+            grad_param_count += 1.0
+            grad_elem_count += float(g.numel())
+            g32 = g.detach().float()
+            nan_count += float(torch.isnan(g32).sum().item())
+            inf_count += float(torch.isinf(g32).sum().item())
+            total_sq_norm += float(torch.square(g32).sum().item())
+            max_abs = max(max_abs, float(g32.abs().max().item()))
+
+        return {
+            "l2": total_sq_norm ** 0.5,
+            "max_abs": max_abs,
+            "nan_count": nan_count,
+            "inf_count": inf_count,
+            "grad_param_count": grad_param_count,
+        }
+
+    def _register_grad_monitor_hook(self, module: LightningModule):
+        if self._grad_hook_registered:
+            return
+
+        def _log_gradients(outputs, batch, gaussian_model, global_step: int, pl_module: LightningModule):
+            optimization_config = self.config.optimization
+            if optimization_config.log_gradients is False:
+                return
+            if optimization_config.grad_log_interval <= 0:
+                return
+            if global_step % optimization_config.grad_log_interval != 0:
+                return
+            if pl_module.global_rank != 0:
+                return
+            if pl_module.logger is None:
+                return
+
+            metrics_to_log: dict[str, float] = {}
+            for key in self._keys:
+                stats = self._grad_stats([self.gaussians[key]])
+                metrics_to_log[f"stats/gs_grad/{key}/l2"] = stats["l2"]
+                metrics_to_log[f"stats/gs_grad/{key}/max_abs"] = stats["max_abs"]
+                metrics_to_log[f"stats/gs_grad/{key}/nan_count"] = stats["nan_count"]
+                metrics_to_log[f"stats/gs_grad/{key}/inf_count"] = stats["inf_count"]
+            metrics_to_log["stats/gs_active_F"] = float(self._active_F)
+            metrics_to_log["stats/gs_density_freq_res_mean"] = self.density_res_freq.mean().item()
+            
+            pl_module.logger.log_metrics(metrics_to_log, step=pl_module.trainer.global_step)
+
+        module.on_after_backward_hooks.append(_log_gradients)
+        self._grad_hook_registered = True

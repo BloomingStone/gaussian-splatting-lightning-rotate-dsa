@@ -24,6 +24,7 @@ class Camera:
     width: Tensor
     height: Tensor
     time: Tensor
+    phase: Tensor
     """
     NOTE: this should be None or a zero tensor currently
         
@@ -93,6 +94,7 @@ class Cameras:
     camera_center: Tensor = field(init=False)
 
     time: Tensor|None = None  # [n_cameras]
+    phase: Tensor|None = None  # [n_cameras]
 
     idx: Tensor|None = None  # [N_cameras]
     zfar: float = 100
@@ -157,12 +159,14 @@ class Cameras:
 
         if self.time is None:
             self.time = torch.zeros(self.R.shape[0])
+        if self.phase is None:
+            self.phase = torch.zeros(self.R.shape[0])
 
     def __len__(self):
         return self.R.shape[0]
 
     def __getitem__(self, index) -> Camera:
-        assert self.idx is not None and self.time is not None
+        assert self.idx is not None and self.time is not None and self.phase is not None
         return Camera(
             idx=self.idx[index],
             R=self.R[index],
@@ -176,6 +180,7 @@ class Cameras:
             width=self.width[index],
             height=self.height[index],
             time=self.time[index],
+            phase=self.phase[index],
             camera_type=self.camera_type[index],
             world_to_camera=self.world_to_camera[index],
             projection=self.projection[index],

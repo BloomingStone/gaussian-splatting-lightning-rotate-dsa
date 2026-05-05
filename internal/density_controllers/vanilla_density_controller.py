@@ -1,9 +1,10 @@
-from typing import Tuple, Optional, Union, List, Dict
+from typing import Union, List, Dict, Any, cast, Protocol
 from dataclasses import dataclass
 import torch
-from torch import nn
+from torch.optim.optimizer import Optimizer
 from lightning import LightningModule
 
+from ..models.gaussian import GaussianModel, HasOpacityGetter
 from ..models.vanilla_gaussian import VanillaGaussianModel
 from ..utils.general_utils import build_rotation
 from .density_controller import DensityController, DensityControllerImpl, Utils
@@ -25,8 +26,6 @@ class VanillaDensityController(DensityController):
 
     cull_opacity_threshold: float = 0.005
     """threshold of opacity for culling gaussians."""
-
-    cull_by_max_opacity: bool = False
 
     camera_extent_factor: float = 1.
 
@@ -50,8 +49,9 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
                 self.cameras_extent = self.config.scene_extent_override
                 self.prune_extent = self.config.scene_extent_override
                 print(f"Override scene extent with {self.config.scene_extent_override}")
+            guassian_model = cast(GaussianModel, pl_module.gaussian_model)
 
-            self._init_state(pl_module.gaussian_model.n_gaussians, pl_module.device)
+            self._init_state(guassian_model.n_gaussians, pl_module.device)
 
         self.opacity_reset_at = -32768
 
@@ -64,16 +64,14 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
         self.register_buffer("xyz_gradient_accum", xyz_gradient_accum, persistent=True)
         self.register_buffer("denom", denom, persistent=True)
 
-    def before_backward(self, outputs: dict, batch, gaussian_model: VanillaGaussianModel, optimizers: List, global_step: int, pl_module: LightningModule) -> None:
+    def before_backward(self, outputs: dict, batch, gaussian_model: GaussianModel, optimizers: List, global_step: int, pl_module: LightningModule) -> None:
+        gaussian_model = cast(VanillaGaussianModel, gaussian_model)
         if global_step >= self.config.densify_until_iter:
             return
-        
-        if self.config.cull_by_max_opacity:
-            gaussian_model.update_opacity_max(outputs["opacities"])
 
         outputs["viewspace_points"].retain_grad()
 
-    def after_backward(self, outputs: dict, batch, gaussian_model: VanillaGaussianModel, optimizers: List, global_step: int, pl_module: LightningModule) -> None:
+    def after_backward(self, outputs: dict, batch, gaussian_model: GaussianModel, optimizers: List, global_step: int, pl_module: LightningModule) -> None:
         if global_step >= self.config.densify_until_iter:
             return
 
@@ -120,7 +118,7 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
         self.xyz_gradient_accum[update_filter] += grad_norm
         self.denom[update_filter] += 1
 
-    def _densify_and_prune(self, max_screen_size, gaussian_model: VanillaGaussianModel, optimizers: List):
+    def _densify_and_prune(self, max_screen_size, gaussian_model: GaussianModel, optimizers: List):
         min_opacity = self.config.cull_opacity_threshold
         prune_extent = self.prune_extent
 
@@ -133,15 +131,7 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
         self._densify_and_split(grads, gaussian_model, optimizers)
 
         # prune
-        if self.config.cull_by_max_opacity:
-            # TODO: re-implement as a new density controller
-            prune_mask = torch.logical_and(
-                gaussian_model.get_opacity_max() >= 0.,
-                gaussian_model.get_opacity_max() < min_opacity,
-            )
-            gaussian_model.reset_opacity_max()
-        else:
-            prune_mask = (gaussian_model.get_opacities() < min_opacity).squeeze()
+        prune_mask = (gaussian_model.get_opacities() < min_opacity).squeeze()
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
             big_points_ws = gaussian_model.get_scales().max(dim=1).values > 0.1 * prune_extent
@@ -150,7 +140,7 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
 
         torch.cuda.empty_cache()
 
-    def _densify_and_clone(self, grads, gaussian_model: VanillaGaussianModel, optimizers: List):
+    def _densify_and_clone(self, grads: torch.Tensor, gaussian_model: GaussianModel, optimizers: List[Optimizer]):
         grad_threshold = self.config.densify_grad_threshold
         percent_dense = self.config.percent_dense
         scene_extent = self.cameras_extent
@@ -201,7 +191,7 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
 
         return new_properties
 
-    def _densify_and_split(self, grads, gaussian_model: VanillaGaussianModel, optimizers: List, N: int = 2):
+    def _densify_and_split(self, grads, gaussian_model: GaussianModel, optimizers: List, N: int = 2):
         grad_threshold = self.config.densify_grad_threshold
         percent_dense = self.config.percent_dense
         scene_extent = self.cameras_extent
@@ -249,7 +239,7 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
         # re-init states
         self._init_state(gaussian_model.n_gaussians, gaussian_model.get_property("means").device)
 
-    def _prune_points(self, mask, gaussian_model: VanillaGaussianModel, optimizers: List):
+    def _prune_points(self, mask, gaussian_model: GaussianModel, optimizers: List):
         """
         Args:
             mask: `True` indicating the Gaussians to be pruned
@@ -265,7 +255,7 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
         self.denom = self.denom[valid_points_mask]
         self.max_radii2D = self.max_radii2D[valid_points_mask]
 
-    def _reset_opacities(self, gaussian_model: VanillaGaussianModel, optimizers: List):
+    def _reset_opacities(self, gaussian_model: GaussianModel, optimizers: List[Optimizer]):
         opacities_new = gaussian_model.opacity_inverse_activation(torch.min(
             gaussian_model.get_opacities(),
             torch.ones_like(gaussian_model.get_opacities()) * 0.01,
@@ -275,8 +265,8 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
         }, optimizers=optimizers)
         gaussian_model.update_properties(new_parameters)
 
-    def on_load_checkpoint(self, module, checkpoint):
+    def on_load_checkpoint(self, module: LightningModule, checkpoint: dict[str, Any]):
         self._init_state(checkpoint["state_dict"]["density_controller.max_radii2D"].shape[0], module.device)
 
-    def after_density_changed(self, gaussian_model, optimizers: List, pl_module: LightningModule) -> None:
+    def after_density_changed(self, gaussian_model: GaussianModel, optimizers: List, pl_module: LightningModule) -> None:
         self._init_state(gaussian_model.n_gaussians, pl_module.device)

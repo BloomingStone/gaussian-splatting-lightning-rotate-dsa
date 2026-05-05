@@ -1,12 +1,11 @@
 import torch
 from collections import deque
 from dataclasses import dataclass
-from typing import override
+from typing import override, cast
 
 from .vanilla_density_controller import VanillaDensityControllerImpl, DensityController
 from .density_controller import Utils
-from ..gaussian_splatting import GaussianSplatting
-from ..models.xray_coronary_gaussian import GaussianInits
+from ..models.xray_coronary_gaussian import GaussianInits, XrayCoronaryGaussianModel
 
 @dataclass
 class RotateXrayDensityController(DensityController):    
@@ -137,6 +136,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
 
     @override
     def _densify_and_clone(self, grads, gaussian_model, optimizers: list):
+        gaussian_model = cast(XrayCoronaryGaussianModel, gaussian_model)
         percent_dense = self.config.percent_dense
         scene_extent = self.cameras_extent
 
@@ -158,10 +158,11 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
 
         # Update optimizers and properties
         self._densification_postfix(new_properties, gaussian_model, optimizers)
-        gaussian_model.clone_motion_by_mask(selected_pts_mask, repeats=1)
+        gaussian_model.deforms_recorder.clone_deforms_by_mask(selected_pts_mask, repeats=1)
 
     @override
     def _densify_and_split(self, grads, gaussian_model, optimizers: list, N: int = 2):
+        gaussian_model = cast(XrayCoronaryGaussianModel, gaussian_model)
         percent_dense = self.config.percent_dense
         scene_extent = self.cameras_extent
 
@@ -200,7 +201,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         # Update optimizers and properties
         self._densification_postfix(new_properties, gaussian_model, optimizers)
         
-        gaussian_model.clone_motion_by_mask(selected_pts_mask, repeats=N)
+        gaussian_model.deforms_recorder.clone_deforms_by_mask(selected_pts_mask, repeats=N)
 
         # Prune selected Gaussians, since they are already split
         prune_filter = torch.cat((
@@ -227,7 +228,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         new_parameters = Utils.prune_properties(valid_points_mask, gaussian_model, optimizers)
         gaussian_model.properties = new_parameters
         
-        gaussian_model.filter_motion_by_mask(valid_points_mask)
+        gaussian_model.deforms_recorder.filter_deforms_by_mask(valid_points_mask)
 
         # prune states
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]

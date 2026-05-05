@@ -92,7 +92,7 @@ class TiffDataParser(RotatedXRayDataParser):
                 image_paths=image_paths,
                 depth_paths=None,
                 mask_paths=None,
-                cameras=_get_cameras(data, time_key="time_s"),
+                cameras=_get_cameras(data),
                 extra_data=None,
                 extra_data_processor=None,
             )
@@ -105,7 +105,7 @@ class TiffDataParser(RotatedXRayDataParser):
                 image_paths=[image_paths[i] for i in train_indices],
                 depth_paths=None,
                 mask_paths=None,
-                cameras=_get_cameras(data, train_indices, time_key="time_s"),
+                cameras=_get_cameras(data, train_indices),
                 extra_data=None,
                 extra_data_processor=None,
             )
@@ -114,7 +114,7 @@ class TiffDataParser(RotatedXRayDataParser):
                 image_paths=[image_paths[i] for i in valid_indices],
                 depth_paths=None,
                 mask_paths=None,
-                cameras=_get_cameras(data, valid_indices, time_key="time_s"),
+                cameras=_get_cameras(data, valid_indices),
                 extra_data=None,
                 extra_data_processor=None,
             )

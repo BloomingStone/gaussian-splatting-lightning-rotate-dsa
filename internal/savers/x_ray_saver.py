@@ -14,10 +14,9 @@ from xray_gaussian_rasterization_voxelization import (
 )
 
 from . import Saver, SaverModule
-from ..gaussian_splatting import GaussianSplatting
 from ..mp_strategy import MPStrategy
 from ..renderers.deformabel_xray_renderer import CoronaryDeformableXrayRenderer
-from ..deform_models import DeformModel
+from ..deform_models import DeformModel, Deforms, GSParam
 
 
 def quaternion_to_matrix(q: torch.Tensor) -> torch.Tensor:
@@ -79,8 +78,8 @@ def deform_field_to_volume(
         end = min(start + batch_size, xyz.shape[0])
         xyz_batch = xyz[start:end]
         t_batch = torch.full((xyz_batch.shape[0], 1), save_phase, device=device)  # input phase is save_phase
-        d_xyz, _, _ = deform_model(xyz_batch, t_batch)
-        dxyz_chunks.append(d_xyz.cpu().float())
+        deforms: Deforms = deform_model(xyz_batch, t_batch)
+        dxyz_chunks.append(deforms.d_xyz.cpu().float())
 
     dxyz_volume = torch.cat(dxyz_chunks, dim=0).reshape(zoomed_shape + (3,))
     return dxyz_volume.numpy(), new_affine
@@ -250,14 +249,15 @@ class XRaySaverModule(SaverModule):
         rotation = pc.get_rotations().detach()
         scales = pc.get_scales().detach()
         
-        d_xyz, d_scaling, d_rotation = deform_model(
+        deforms: Deforms = deform_model(
             means3D.detach(), 
             torch.full((means3D.shape[0], 1), self.config.save_phase, device=means3D.device),   # input phase is save_phase
         )
         
-        means3D, rotation, scales = DeformModel.deform(
-            means3D, rotation, scales, d_xyz, d_rotation, d_scaling
+        source_deformed = DeformModel.deform(
+            GSParam(xyz=means3D, rotation=rotation, scaling=scales, density=density), deforms
         )
+        means3D, rotation, scales = source_deformed.xyz, source_deformed.rotation, source_deformed.scaling
         
         ply_payload: PlySavePayload | None = None
 

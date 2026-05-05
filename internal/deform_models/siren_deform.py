@@ -4,7 +4,7 @@ from typing import Any
 import torch
 from torch import nn
 
-from .deform_model import DeformModel, DefromModelConfig
+from .deform_model import DeformModel, DefromModelConfig, Deforms
 from ..encodings.vector_positional_encoding import VectorPositionalEncoding
 
 
@@ -70,7 +70,7 @@ class SirenDeformConfig(DefromModelConfig):
 	hidden_omega_0: float = 30.0
 
 	x_n_frequencies: int = 7
-	phase_n_frequencies: int = 1
+	t_n_frequencies: int = 1
 
 	def instantiate(self, *args, **kwargs) -> Any:
 		return SirenDeformModel(self)
@@ -85,15 +85,15 @@ class SirenDeformModel(DeformModel):
 			input_channels=3,
 			n_frequencies=self.cfg.x_n_frequencies,
 		)
-		self.embed_phase_fn = VectorPositionalEncoding(
+		self.embed_t_fn = VectorPositionalEncoding(
 			input_channels=1,
-			n_frequencies=self.cfg.phase_n_frequencies,
+			n_frequencies=self.cfg.t_n_frequencies,
 		)
 
 		emb_x_ch = self.embed_xyz_fn.get_output_n_channels()
-		emb_phase_ch = self.embed_phase_fn.get_output_n_channels()
+		emb_t_ch = self.embed_t_fn.get_output_n_channels()
 		self.backbone = SirenBackbone(
-			input_ch=emb_x_ch + emb_phase_ch,
+			input_ch=emb_x_ch + emb_t_ch,
 			hidden_dim=self.cfg.hidden_dim,
 			hidden_layers=self.cfg.hidden_layers,
 			first_omega_0=self.cfg.first_omega_0,
@@ -113,23 +113,24 @@ class SirenDeformModel(DeformModel):
 	def forward(
 		self,
 		xyz: torch.Tensor,
-		phase: torch.Tensor,
-	) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-		if phase.ndim == 1:
-			phase = phase.unsqueeze(-1)
-		if phase.shape[-1] != 1:
-			phase = phase[..., :1]
+		t: torch.Tensor,
+		phase: torch.Tensor|None = None,
+	) -> Deforms:
+		if t.ndim == 1:
+			t = t.unsqueeze(-1)
+		if t.shape[-1] != 1:
+			t = t[..., :1]
 
-		if phase.shape[0] == 1 and xyz.shape[0] != 1:
-			phase = phase.expand(xyz.shape[0], -1)
-		if phase.shape[0] != xyz.shape[0]:
+		if t.shape[0] == 1 and xyz.shape[0] != 1:
+			t = t.expand(xyz.shape[0], -1)
+		if t.shape[0] != xyz.shape[0]:
 			raise RuntimeError(
-				f"Batch mismatch between xyz and phase: {xyz.shape[0]} vs {phase.shape[0]}"
+				f"Batch mismatch between xyz and t: {xyz.shape[0]} vs {t.shape[0]}"
 			)
 
 		x_emb = self.embed_xyz_fn(xyz)
-		phase_emb = self.embed_phase_fn(phase)
-		h = self.backbone(torch.cat([x_emb, phase_emb], dim=-1))
+		t_emb = self.embed_t_fn(t)
+		h = self.backbone(torch.cat([x_emb, t_emb], dim=-1))
 
 		d_xyz = self.xyz_warp(h)
 		d_scaling = self.scaling_warp(h)
@@ -141,4 +142,4 @@ class SirenDeformModel(DeformModel):
 
 		d_rotation = torch.cat([q_w, q_v], dim=-1).to(xyz)
 		d_rotation = torch.nn.functional.normalize(d_rotation)
-		return d_xyz, d_scaling, d_rotation
+		return Deforms(d_xyz=d_xyz, d_scaling=d_scaling, d_rotation=d_rotation)	

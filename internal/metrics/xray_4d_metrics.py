@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Tuple, Dict, Literal, Any
+from typing import Tuple, Dict, Literal, Any, cast
 
 import torch
 import torch.nn.functional as F
@@ -10,12 +10,16 @@ from pytorch_lightning import LightningModule
 from internal.utils.ssim import ssim
 from internal.metrics.metric import Metric, MetricImpl
 from internal.renderers.xray_4d_renderer import RenderRes
+from internal.models.xray_4d_gaussian import Xray4DGaussianModel
 
 
 @dataclass
-class RotateXrayMetrics(Metric):
+class Xray4DMetrics(Metric):
     w_gray_loss: float = 1.0
     w_ssim_loss: float = 1.0
+    
+    w_density_var: float = 0.0
+    w_xyz_var: float = 0.0
 
     rgb_diff_loss: Literal["l1", "l2"] = "l1"
 
@@ -27,13 +31,13 @@ class RotateXrayMetrics(Metric):
     fused_ssim: bool = False
 
     def instantiate(self, *args, **kwargs) -> MetricImpl:
-        return RotateXrayMetricsImpl(self)
+        return Xray4DMetricsImpl(self)
 
 
-class RotateXrayMetricsImpl(MetricImpl):
-    config:  RotateXrayMetrics
+class Xray4DMetricsImpl(MetricImpl):
+    config:  Xray4DMetrics
     
-    def __init__(self, config: RotateXrayMetrics, *args, **kwargs) -> None:
+    def __init__(self, config: Xray4DMetrics, *args, **kwargs) -> None:
         super().__init__(config, *args, **kwargs)
 
         self.no_state_dict_models = {}
@@ -79,10 +83,19 @@ class RotateXrayMetricsImpl(MetricImpl):
         ssim_metric = self.ssim(outputs.gray_image, gt_image)
         ssim_loss = 1.0 - ssim_metric
 
+        d_xyz_var = outputs.deforms_var[outputs.density_mask, :3].mean()
+        
+        gaussian_model = cast(Xray4DGaussianModel, gaussian_model)
+        density_var_mean = gaussian_model.get_density_res_energy()[outputs.density_mask].mean()
+
         loss = (
             # image loss
             self.config.w_gray_loss * gray_loss +
-            self.config.w_ssim_loss * ssim_loss
+            self.config.w_ssim_loss * ssim_loss + 
+            
+            # regularization loss
+            self.config.w_density_var * density_var_mean +
+            self.config.w_xyz_var * d_xyz_var
         )
 
 
@@ -92,6 +105,8 @@ class RotateXrayMetricsImpl(MetricImpl):
             "loss": loss,
             "gray_loss": gray_loss,
             "ssim_loss": ssim_loss,
+            "density_var": density_var_mean,
+            "xyz_var": d_xyz_var
         }
 
 
@@ -99,6 +114,8 @@ class RotateXrayMetricsImpl(MetricImpl):
             "loss": True,
             "gray_loss": True,
             "ssim_loss": True,
+            "density_var": True,
+            "xyz_var": True,
         }
         return metrics, prog_bar
     

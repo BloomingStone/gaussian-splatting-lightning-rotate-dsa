@@ -1,4 +1,4 @@
-# 对有造影剂流动的数据使用原始的只考虑冠脉形变的模型，作为基线
+# 在原有3D形变场的基础上增加density 变化，命名用 with_flow 来区分原来的3D形变场模型
 max_steps: 20000
 save_val: true
 cache_all_images: true
@@ -9,7 +9,7 @@ trainer:
 save_iterations: [20000]
 
 data:
-  val_max: null   # 3000
+  val_max: null
   image_on_cpu: false
   parser:
     class_path: internal.dataparsers.TiffDataParserConfig
@@ -30,19 +30,19 @@ model:
         log_gradients: true
         grad_log_interval: 50
       deform_model_config:
-        class_path: internal.deform_models.HashGridDeformConfig
+        class_path: internal.deform_models.deform_with_flow.HashGridDeformConfig
         init_args:
           x_multires: 13
           log2_hashmap_size: 19
           max_resolution: 2048
   metric:
-    class_path: internal.metrics.rotate_xray_metrics.RotateXrayMetrics
+    class_path: internal.metrics.rotate_xray_metrics_with_flow.RotateXrayMetrics
     init_args:
       fused_ssim: true
       w_gray_loss: 1.0
       w_ssim_loss: 1.0
   gaussian:
-    class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
+    class_path: internal.models.xray_coronary_gaussian_with_flow.XrayCoronaryGaussianWithFlow
     init_args:
       optimization:
         log_gradients: true

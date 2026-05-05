@@ -1,7 +1,8 @@
-from typing import Tuple, Union, List, Dict, Optional, Type
+from typing import List, Dict
 import torch
 from torch import nn
 from lightning import LightningModule
+
 from ..instantiate_config import Instantiable
 from ..models.gaussian import GaussianModel
 

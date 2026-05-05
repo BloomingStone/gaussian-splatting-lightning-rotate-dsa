@@ -6,9 +6,9 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-from .deform_model import DeformModel, DefromModelConfig, Deforms
-from ..utils.network_factory import NetworkFactory
-from ..encodings.vector_positional_encoding import VectorPositionalEncoding
+from .deform_with_flow import DeformWithFlowModel, DeformWithFlowConfig, DeformsWithFlow
+from ...utils.network_factory import NetworkFactory
+from ...encodings.vector_positional_encoding import VectorPositionalEncoding
 
 
 
@@ -53,7 +53,7 @@ class Scale(nn.Module):
         return x * self.s
 
 @dataclass
-class HashGridDeformConfig(DefromModelConfig):
+class HashGridDeformConfig(DeformWithFlowConfig):
     D: int = 2  # deepth for each layer of MLP
     
     t_multires: int = 6
@@ -69,13 +69,11 @@ class HashGridDeformConfig(DefromModelConfig):
     base_resolution: int = 16
     max_resolution: int = 128
     
-    has_phase_input: bool = False
-    
     def instantiate(self, *args, **kwargs) -> Any:
         return HashGridDefromModel(self)
 
 
-class HashGridDefromModel(DeformModel):
+class HashGridDefromModel(DeformWithFlowModel):
     def __init__(
             self,
             cfg: HashGridDeformConfig = HashGridDeformConfig(),
@@ -98,9 +96,6 @@ class HashGridDefromModel(DeformModel):
             n_frequencies=self.cfg.t_multires,
         )
         emb_t_ch = self.embed_t_fn.get_output_n_channels()
-        
-        if self.cfg.has_phase_input:
-            raise NotImplementedError("Phase input not implemented yet")    # TODO
         
         def _mlp(W: int, layers: int, input_ch: int):
             return MLP(
@@ -133,19 +128,20 @@ class HashGridDefromModel(DeformModel):
             nn.Tanh(),      # w = |\vec{v}| <= \sqrt(1+1+1) = 1.73 rad = 99.2 degree  
         )
         
+        self.density_warp = _linear(self.cfg.combine_W, 1)
+        
 
     def forward(
         self, 
         xyz: torch.Tensor,
         t: torch.Tensor,
         phase: torch.Tensor|None = None,
-    )-> Deforms:
+    )-> DeformsWithFlow:
         """
         Forward pass of the deformable model.
         Args:
             xyz: [n, 3] the coordinates of the points to be deformed
             t: [1] the current time, normalized to [0, 1]
-            phase: [1] the current phase, normalized to [0, 1], optional
         Returns:
             d_xyz: [n, 3] \\in R^3, the translation for each point
             d_scaling: [n, 3] \\in [-1, 1], the scaling change for each point, where the new scaling will be scaling * (1 + d_scaling)
@@ -173,4 +169,6 @@ class HashGridDefromModel(DeformModel):
         d_rotation = torch.cat([q_w, q_v], dim=-1).to(xyz)
         d_rotation = torch.nn.functional.normalize(d_rotation)
         
-        return Deforms(d_xyz=d_xyz, d_scaling=d_scaling, d_rotation=d_rotation)
+        d_density = self.density_warp(h_combine)
+
+        return DeformsWithFlow(d_xyz=d_xyz, d_scaling=d_scaling, d_rotation=d_rotation, d_density=d_density)

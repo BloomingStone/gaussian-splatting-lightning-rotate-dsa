@@ -1,0 +1,110 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "test fit",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "fit",
+                "--data.path", "/media/data3/sj/Data/Gaussiang-Splatting/data/db/playroom",
+                "-n", "test"
+            ]
+        },
+        {
+            "name": "rotate x-ray train [static]",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "fit",
+                "--config", "configs/rotate_xray_3dgr/rotate_xray_3dgr_static.yaml",
+                "--data.path", "/media/data3/sj/Code/Gen4D/test/output/static_intergration_full/static_volume_reader_multipli_contrast_LCA",
+                "-n", "rotate-xcat-static"
+            ]
+        },
+        {
+            "name": "rotate x-ray train [static label]",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "fit",
+                "--config", "configs/rotate_xray_3dgr/rotate_xray_3dgr_static.yaml",
+                "--data.path", "/media/data3/sj/Code/Gen4D/test/output/only_static_label",
+                "-n", "rotate-xcat-static-label-temp"
+            ]
+        },
+        {
+            "name": "rotate x-ray train [deformable]",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "fit",
+                "--config", "configs/rotate_xray_3dgr/rotate_xray_3dgr_deformable_xray_render.yaml",
+                "--data.path", "data/Diseased_17",
+                "-n", "rotate-xcat-deformable"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "${config:gs.debug.cudaVisibleDevices}"
+            }
+        },
+        {
+            "name": "4D pig data recon[original deform]",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "fit",
+                "--config", "configs/4D_dsa/pigdata_3d_deform.yaml",
+                "--data.path", "data/pigdata",
+                "-n", "pigdata-4d-recon"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "${config:gs.debug.cudaVisibleDevices}"
+            }
+        },
+        {
+            "name": "4D pig data recon[4D]",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "fit",
+                "--config", "configs/4D_dsa/pigdata_4D.yaml",
+                "--data.path", "data/pigdata",
+                "-n", "pigdata-4d-recon"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "${config:gs.debug.cudaVisibleDevices}"
+            }
+        },
+        {
+            "name": "4D pig data recon[deform with flow]",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "fit",
+                "--config", "configs/4D_dsa/pigdata_deform_with_flow.yaml",
+                "--data.path", "data/pigdata",
+                "-n", "pigdata-4d-recon-deform-with-flow"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "${config:gs.debug.cudaVisibleDevices}"
+            }
+        }
+    ]
+}

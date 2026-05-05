@@ -109,7 +109,7 @@ def _get_frames_param(json_data: dict, key: str, indices: list[int] | None = Non
         return torch.tensor([json_data["frames"][i][key] for i in indices])
 
 
-def _get_cameras(json_data: dict, indices: list[int] | None = None, time_key: Literal["phase", "time_s"] = "phase") -> Cameras:
+def _get_cameras(json_data: dict, indices: list[int] | None = None) -> Cameras:
     if indices is None:
         n_camras = len(json_data["frames"])
     else:
@@ -152,15 +152,12 @@ def _get_cameras(json_data: dict, indices: list[int] | None = None, time_key: Li
     cx = width / 2
     cy = height / 2
     
-    if time_key == "phase":
-        time = _get_frames_param(json_data, "phase", indices)
-    elif time_key == "time_s":
-        time = _get_frames_param(json_data, "time_s", indices)
-        time_all = _get_frames_param(json_data, "time_s")
-        time_range = time_all.max() - time_all.min()
-        time = (time - time_all.min()) / time_range  # normalize to [0, 1] for better training
-    else:
-        raise ValueError(f"Unknown time_key: {time_key}")
+    phase = _get_frames_param(json_data, "phase", indices)
+    time = _get_frames_param(json_data, "time_s", indices)
+    time_all = _get_frames_param(json_data, "time_s")
+    time_range = time_all.max() - time_all.min()
+    time = (time - time_all.min()) / time_range  # normalize to [0, 1] for better training
+
     
     return Cameras(
         R = R_w2c,
@@ -172,7 +169,8 @@ def _get_cameras(json_data: dict, indices: list[int] | None = None, time_key: Li
         width = torch.ones(n_camras) * width,
         height = torch.ones(n_camras) * height,
         camera_type=torch.zeros(n_camras),
-        time=_get_frames_param(json_data, time_key, indices),
+        time=time,
+        phase=phase,
         zfar=1e5
     )
 

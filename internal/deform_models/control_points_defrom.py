@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-from .deform_model import DeformModel, DefromModelConfig
+from .deform_model import DeformModel, DefromModelConfig, Deforms, GSParam
 from ..encodings.vector_positional_encoding import VectorPositionalEncoding
 from internal.utils.gaussian_utils import GaussianTransformUtils
 
@@ -19,7 +19,7 @@ class SafeExponential(nn.Module):
 @dataclass
 class ControlPointDeformConfig(DefromModelConfig):
     grid_resolution: tuple[int, int, int] = (10, 10, 10)
-    phase_n_frequencies: int = 1
+    t_n_frequencies: int = 1
     interpolation_method: str = "bspline"
     bounds_padding_ratio: float = 0.05
     xyz_min: tuple[float, float, float] | None = None
@@ -35,20 +35,20 @@ class ControlPointDeformModel(DeformModel):
         super().__init__(cfg)
         self.cfg = cfg
 
-        self.embed_phase_fn = VectorPositionalEncoding(
+        self.embed_t_fn = VectorPositionalEncoding(
             input_channels=1,
-            n_frequencies=cfg.phase_n_frequencies,
+            n_frequencies=cfg.t_n_frequencies,
         )
-        self.n_phase_basis = self.embed_phase_fn.get_output_n_channels()
+        self.n_t_basis = self.embed_t_fn.get_output_n_channels()
 
         nx, ny, nz = cfg.grid_resolution
         self.grid_resolution = (nx, ny, nz)
         self.n_control_points = nx * ny * nz
 
         std = cfg.init_coeff_std
-        self.disp_coeff = nn.Parameter(torch.randn(self.n_control_points, self.n_phase_basis, 3) * std)
-        self.rotvec_coeff = nn.Parameter(torch.randn(self.n_control_points, self.n_phase_basis, 3) * std)
-        self.logscale_coeff = nn.Parameter(torch.randn(self.n_control_points, self.n_phase_basis, 3) * std)
+        self.disp_coeff = nn.Parameter(torch.randn(self.n_control_points, self.n_t_basis, 3) * std)
+        self.rotvec_coeff = nn.Parameter(torch.randn(self.n_control_points, self.n_t_basis, 3) * std)
+        self.logscale_coeff = nn.Parameter(torch.randn(self.n_control_points, self.n_t_basis, 3) * std)
 
         self.register_buffer("grid_min", torch.zeros(3), persistent=False)
         self.register_buffer("grid_max", torch.ones(3), persistent=False)
@@ -61,41 +61,42 @@ class ControlPointDeformModel(DeformModel):
     def forward(
         self,
         xyz: torch.Tensor,
-        phase: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        t: torch.Tensor,
+        phase: torch.Tensor|None = None,
+    ) -> Deforms:
         self._maybe_init_grid_bounds(xyz)
 
-        if phase.ndim == 1:
-            phase = phase.unsqueeze(-1)
-        if phase.shape[-1] != 1:
-            phase = phase[..., :1]
+        if t.ndim == 1:
+            t = t.unsqueeze(-1)
+        if t.shape[-1] != 1:
+            t = t[..., :1]
 
-        phase_basis = self.embed_phase_fn(phase)
-        if phase_basis.shape[0] == 1 and xyz.shape[0] != 1:
-            phase_basis = phase_basis.expand(xyz.shape[0], -1)
-        if phase_basis.shape[0] != xyz.shape[0]:
+        t_basis = self.embed_t_fn(t)
+        if t_basis.shape[0] == 1 and xyz.shape[0] != 1:
+            t_basis = t_basis.expand(xyz.shape[0], -1)
+        if t_basis.shape[0] != xyz.shape[0]:
             raise RuntimeError(
-                f"Batch mismatch between xyz and phase basis: {xyz.shape[0]} vs {phase_basis.shape[0]}"
+                f"Batch mismatch between xyz and t basis: {xyz.shape[0]} vs {t_basis.shape[0]}"
             )
 
-        d_xyz = self._interpolate_field(self.disp_coeff, xyz, phase_basis)
-        interp_rotvec = self._interpolate_field(self.rotvec_coeff, xyz, phase_basis)
-        interp_logscale = self._interpolate_field(self.logscale_coeff, xyz, phase_basis)
+        d_xyz = self._interpolate_field(self.disp_coeff, xyz, t_basis)
+        interp_rotvec = self._interpolate_field(self.rotvec_coeff, xyz, t_basis)
+        interp_logscale = self._interpolate_field(self.logscale_coeff, xyz, t_basis)
 
         d_xyz = self.xyz_activation(d_xyz)
         d_scaling = self.scaling_activation(interp_logscale)
         d_rotation = self.rotation_activation(interp_rotvec)
         d_rotation = self._axial_angle_to_quaternion(d_rotation)
 
-        return d_xyz, d_scaling, d_rotation
+        return Deforms(d_xyz=d_xyz, d_scaling=d_scaling, d_rotation=d_rotation)
 
     def _interpolate_field(
         self,
         coeff: torch.Tensor,
         xyz: torch.Tensor,
-        phase_basis: torch.Tensor,
+        t_basis: torch.Tensor,
     ) -> torch.Tensor:
-        cp_values = self._predict_control_point_motion(coeff, phase_basis)
+        cp_values = self._predict_control_point_motion(coeff, t_basis)
 
         method = self.cfg.interpolation_method.lower()
         if method == "bspline":
@@ -106,9 +107,9 @@ class ControlPointDeformModel(DeformModel):
             return self._interpolate_tps(cp_values, xyz)
         raise ValueError(f"Unknown interpolation method: {self.cfg.interpolation_method}")
 
-    def _predict_control_point_motion(self, coeff: torch.Tensor, phase_basis: torch.Tensor) -> torch.Tensor:
-        # coeff: [M, J, 3], phase_basis: [N, J] -> [N, M, 3]
-        return torch.einsum("mjc,nj->nmc", coeff, phase_basis)
+    def _predict_control_point_motion(self, coeff: torch.Tensor, t_basis: torch.Tensor) -> torch.Tensor:
+        # coeff: [M, J, 3], t_basis: [N, J] -> [N, M, 3]
+        return torch.einsum("mjc,nj->nmc", coeff, t_basis)
 
     def _interpolate_bspline(self, cp_values: torch.Tensor, xyz: torch.Tensor) -> torch.Tensor:
         # cp_values: [N, M, 3], xyz: [N, 3] -> [N, 3]
@@ -197,15 +198,11 @@ class ControlPointDeformModel(DeformModel):
     
     @staticmethod
     def deform(
-        xyz: torch.Tensor,
-        rotation: torch.Tensor,
-        scaling: torch.Tensor,
-        d_xyz: torch.Tensor,
-        d_rotation: torch.Tensor,
-        d_scaling: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        xyz = xyz + d_xyz
-        scaling = scaling * d_scaling
-        rotation = GaussianTransformUtils.quat_multiply(rotation, d_rotation)
+        source: GSParam,
+        deforms: Deforms
+    ) -> GSParam:
+        xyz = source.xyz + deforms.d_xyz
+        scaling = source.scaling * ( 1 + deforms.d_scaling )
+        rotation = GaussianTransformUtils.quat_multiply(source.rotation, deforms.d_rotation)
         
-        return xyz, rotation, scaling       
+        return GSParam(xyz=xyz, rotation=rotation, scaling=scaling)       

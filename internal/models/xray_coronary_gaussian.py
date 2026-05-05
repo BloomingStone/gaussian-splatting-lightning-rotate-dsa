@@ -22,6 +22,7 @@ from ..utils.general_utils import (
     strip_symmetric,
     build_scaling_rotation,
 )
+from ..deform_models.deform_model import DeformsMARecoder
 from ..schedulers import ExponentialDecayScheduler
 from ..optimizers import OptimizerConfig, Adam
 
@@ -125,17 +126,17 @@ class XrayCoronaryGaussianModel(
     HasRotationGetter,
 ):
     gaussians: nn.ParameterDict
-    
-    d_motion_mean: torch.Tensor     # E(motion), shape = (N, 3+3+1)  motion = (d_xyz, d_scale, d_rotation(quat_angle))
-    d_motion_2_mean: torch.Tensor
-    
+    deforms_recorder: DeformsMARecoder
     
     def __init__(self, config: XrayCoronaryGaussian) -> None:
         super().__init__()
         self.config = config
 
         self._keys = (
-            "means", "density", "scales", "rotations"
+            self._mean_name,
+            self._density_name,
+            self._scale_name,
+            self._rotation_name,
         )
 
         self.is_pre_activated = False
@@ -147,76 +148,9 @@ class XrayCoronaryGaussianModel(
         self.rotation_activation = F.normalize
         self.rotation_inverse_activation = _identity_act
         
-        self.ema_lambda = 0.95
+        self.deforms_recorder = DeformsMARecoder()
+        
         self._grad_hook_registered = False
-
-    @staticmethod
-    def _grad_stats(parameters: list[torch.Tensor]) -> dict[str, float]:
-        total_sq_norm = 0.0
-        max_abs = 0.0
-        nan_count = 0.0
-        inf_count = 0.0
-        grad_param_count = 0.0
-        grad_elem_count = 0.0
-
-        for p in parameters:
-            g = p.grad
-            if g is None:
-                continue
-            grad_param_count += 1.0
-            grad_elem_count += float(g.numel())
-            g32 = g.detach().float()
-            nan_count += float(torch.isnan(g32).sum().item())
-            inf_count += float(torch.isinf(g32).sum().item())
-            total_sq_norm += float(torch.square(g32).sum().item())
-            max_abs = max(max_abs, float(g32.abs().max().item()))
-
-        return {
-            "l2": total_sq_norm ** 0.5,
-            "max_abs": max_abs,
-            "nan_count": nan_count,
-            "inf_count": inf_count,
-            "grad_param_count": grad_param_count,
-            "grad_elem_count": grad_elem_count,
-        }
-
-    def _register_grad_monitor_hook(self, module: LightningModule):
-        if self._grad_hook_registered:
-            return
-
-        def _log_gradients(outputs, batch, gaussian_model, global_step: int, pl_module: LightningModule):
-            optimization_config = self.config.optimization
-            if optimization_config.log_gradients is False:
-                return
-            if optimization_config.grad_log_interval <= 0:
-                return
-            if global_step % optimization_config.grad_log_interval != 0:
-                return
-            if pl_module.global_rank != 0:
-                return
-            if pl_module.logger is None:
-                return
-
-            metrics_to_log: dict[str, float] = {}
-            for key in self._keys:
-                stats = self._grad_stats([self.gaussians[key]])
-                metrics_to_log[f"grad/model/gaussian_model/{key}/l2"] = stats["l2"]
-                metrics_to_log[f"grad/model/gaussian_model/{key}/max_abs"] = stats["max_abs"]
-                metrics_to_log[f"grad/model/gaussian_model/{key}/nan_count"] = stats["nan_count"]
-                metrics_to_log[f"grad/model/gaussian_model/{key}/inf_count"] = stats["inf_count"]
-                metrics_to_log[f"grad/model/gaussian_model/{key}/elem_count"] = stats["grad_elem_count"]
-
-            all_stats = self._grad_stats([self.gaussians[k] for k in self._keys])
-            metrics_to_log["grad/model/gaussian_model/all/l2"] = all_stats["l2"]
-            metrics_to_log["grad/model/gaussian_model/all/max_abs"] = all_stats["max_abs"]
-            metrics_to_log["grad/model/gaussian_model/all/nan_count"] = all_stats["nan_count"]
-            metrics_to_log["grad/model/gaussian_model/all/inf_count"] = all_stats["inf_count"]
-            metrics_to_log["grad/model/gaussian_model/all/param_count"] = all_stats["grad_param_count"]
-            metrics_to_log["grad/model/gaussian_model/all/elem_count"] = all_stats["grad_elem_count"]
-            pl_module.logger.log_metrics(metrics_to_log, step=pl_module.trainer.global_step)
-
-        module.on_after_backward_hooks.append(_log_gradients)
-        self._grad_hook_registered = True
 
     @property
     def n_gaussians(self) -> int:
@@ -226,66 +160,6 @@ class XrayCoronaryGaussianModel(
     @staticmethod
     def setup_gaussians_container():
         return nn.ParameterDict()
-    
-    def _init_motions(self, n_gaussians: int, device):
-        self.motion_ch = 3 + 3 + 1
-        self.register_buffer("d_motion_mean", torch.zeros(n_gaussians, self.motion_ch, device=device, requires_grad=False))
-        self.register_buffer("d_motion_2_mean", torch.zeros(n_gaussians, self.motion_ch, device=device, requires_grad=False))
-    
-    def update_motions(
-        self, 
-        d_xyz: torch.Tensor, 
-        d_scale: torch.Tensor, 
-        d_rotation: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        n_d_xyz, n_d_scale, n_d_rot = d_xyz.shape[0], d_scale.shape[0], d_rotation.shape[0]
-        n_gaussian = self.n_gaussians
-        assert n_d_xyz == n_d_scale == n_d_rot == n_gaussian
-        
-        d_rotation_norm = torch.nn.functional.normalize(d_rotation, dim=-1)
-        d_rotation_norm = d_rotation_norm.clamp(-1 + 1e-6, 1 - 1e-6)
-        d_angle = 2 * torch.acos(d_rotation_norm[:, 0]).unsqueeze(-1)
-        motion = torch.cat((d_xyz, d_scale, d_angle), dim=-1)
-        
-        motion_2 = torch.square(motion)
-        k = self.ema_lambda
-        d_motion_mean = k * self.d_motion_mean + (1-k) * motion
-        d_motion_2_mean = k * self.d_motion_2_mean + (1-k) * motion_2
-        
-        self.d_motion_mean = d_motion_mean.detach()
-        self.d_motion_2_mean = d_motion_2_mean.detach()
-
-        d_motion_var = d_motion_2_mean - torch.square(d_motion_mean)
-        
-        return d_motion_mean, d_motion_var
-    
-    def get_motion_var(self) -> torch.Tensor:
-        return self.d_motion_2_mean - torch.square(self.d_motion_mean)
-    
-    def get_motion_mean(self) -> torch.Tensor:
-        return self.d_motion_mean
-    
-    def clone_motion_by_mask(self, mask: torch.Tensor, repeats: int):
-        new_d_motion_mean = self.d_motion_mean[mask].repeat(repeats, 1)
-        new_d_motion_2_mean = self.d_motion_2_mean[mask].repeat(repeats, 1)
-        
-        self.d_motion_mean = torch.cat(
-            (self.d_motion_mean, new_d_motion_mean), 
-            dim=0
-        ).detach()
-        self.d_motion_2_mean = torch.cat(
-            (self.d_motion_2_mean, new_d_motion_2_mean),
-            dim = 0
-        ).detach()
-        
-        assert self.n_gaussians == self.d_motion_mean.shape[0] == self.d_motion_2_mean.shape[0]
-    
-    
-    def filter_motion_by_mask(self, valid_mask: torch.Tensor):
-        self.d_motion_mean = self.d_motion_mean[valid_mask].detach()
-        self.d_motion_2_mean = self.d_motion_2_mean[valid_mask].detach()
-        
-        assert self.n_gaussians == self.d_motion_mean.shape[0] == self.d_motion_2_mean.shape[0]
         
 
     # --- Part2: Set up gaussians' parameters, optimizers and schedulers.
@@ -314,24 +188,24 @@ class XrayCoronaryGaussianModel(
         inits = GaussianInits(n_gaussians)
         
         self.set_properties({
-            "means":     fused_point_cloud,
-            "density":   inits.density,
-            "scales":    scales,
-            "rotations": inits.rotations,
+            self._mean_name:     fused_point_cloud,
+            self._density_name:   inits.density,
+            self._scale_name:    scales,
+            self._rotation_name: inits.rotations,
         })
-        self._init_motions(n_gaussians, device=torch.device("cuda"))
+        self.deforms_recorder.setup(n_gaussians, device=fused_point_cloud.device)
     
     @override
     def setup_from_number(self, n: int, *args, **kwargs):
         inits = GaussianInits(n)
 
         self.set_properties({
-            "means":     inits.means,
-            "density":   inits.density,
-            "scales":    inits.scales,
-            "rotations": inits.rotations,
+            self._mean_name:     inits.means,
+            self._density_name:   inits.density,
+            self._scale_name:    inits.scales,
+            self._rotation_name: inits.rotations,
         })
-        self._init_motions(n, device=torch.device("cuda"))
+        self.deforms_recorder.setup(n, device=torch.device("cuda"))
         
     @override
     def set_properties(self, properties: Mapping[str, Any]):
@@ -400,7 +274,7 @@ class XrayCoronaryGaussianModel(
         # --- init optimizer and scheduler for other parameters
         params = []
         for key in self._keys:
-            if key == "means":
+            if key == self._mean_name:
                 continue
             params.append({
                 "params": [self.gaussians[key]],
@@ -506,3 +380,69 @@ class XrayCoronaryGaussianModel(
             return non_pre_activated_properties
         else:
             return self.properties
+
+    
+    @staticmethod
+    def _grad_stats(parameters: list[torch.Tensor]) -> dict[str, float]:
+        total_sq_norm = 0.0
+        max_abs = 0.0
+        nan_count = 0.0
+        inf_count = 0.0
+        grad_param_count = 0.0
+        grad_elem_count = 0.0
+
+        for p in parameters:
+            g = p.grad
+            if g is None:
+                continue
+            grad_param_count += 1.0
+            grad_elem_count += float(g.numel())
+            g32 = g.detach().float()
+            nan_count += float(torch.isnan(g32).sum().item())
+            inf_count += float(torch.isinf(g32).sum().item())
+            total_sq_norm += float(torch.square(g32).sum().item())
+            max_abs = max(max_abs, float(g32.abs().max().item()))
+
+        return {
+            "l2": total_sq_norm ** 0.5,
+            "max_abs": max_abs,
+            "nan_count": nan_count,
+            "inf_count": inf_count,
+            "grad_param_count": grad_param_count,
+        }
+
+    def _register_grad_monitor_hook(self, module: LightningModule):
+        if self._grad_hook_registered:
+            return
+
+        def _log_gradients(outputs, batch, gaussian_model, global_step: int, pl_module: LightningModule):
+            optimization_config = self.config.optimization
+            if optimization_config.log_gradients is False:
+                return
+            if optimization_config.grad_log_interval <= 0:
+                return
+            if global_step % optimization_config.grad_log_interval != 0:
+                return
+            if pl_module.global_rank != 0:
+                return
+            if pl_module.logger is None:
+                return
+
+            metrics_to_log: dict[str, float] = {}
+            for key in self._keys:
+                stats = self._grad_stats([self.gaussians[key]])
+                metrics_to_log[f"stats/gs_grad/{key}/l2"] = stats["l2"]
+                metrics_to_log[f"stats/gs_grad/{key}/max_abs"] = stats["max_abs"]
+                metrics_to_log[f"stats/gs_grad/{key}/nan_count"] = stats["nan_count"]
+                metrics_to_log[f"stats/gs_grad/{key}/inf_count"] = stats["inf_count"]
+
+            all_stats = self._grad_stats([self.gaussians[k] for k in self._keys])
+            metrics_to_log["stats/gs_grad/all/l2"] = all_stats["l2"]
+            metrics_to_log["stats/gs_grad/all/max_abs"] = all_stats["max_abs"]
+            metrics_to_log["stats/gs_grad/all/nan_count"] = all_stats["nan_count"]
+            metrics_to_log["stats/gs_grad/all/inf_count"] = all_stats["inf_count"]
+            metrics_to_log["stats/gs_grad/all/param_count"] = all_stats["grad_param_count"]
+            pl_module.logger.log_metrics(metrics_to_log, step=pl_module.trainer.global_step)
+
+        module.on_after_backward_hooks.append(_log_gradients)
+        self._grad_hook_registered = True

@@ -4,7 +4,7 @@ from typing import Any
 import torch
 from torch import nn
 
-from .deform_model import DeformModel, DefromModelConfig
+from .deform_model import DeformModel, DefromModelConfig, Deforms
 from ..encodings.vector_positional_encoding import VectorPositionalEncoding
 from ..utils.rigid_utils import exp_se3
 
@@ -15,7 +15,7 @@ class MLPDefromConfig(DefromModelConfig):
     W: int = 256
 
     x_multires: int = 10
-    phase_n_frequencies: int = 1
+    t_n_frequencies: int = 1
 
     is_6dof: bool = False
     chunk: int = -1
@@ -37,14 +37,14 @@ class MLPDefromModel(DeformModel):
             n_frequencies=self.cfg.x_multires,
             log_sampling=True,
         )
-        self.embed_phase_fn = VectorPositionalEncoding(
+        self.embed_t_fn = VectorPositionalEncoding(
             input_channels=1,
-            n_frequencies=self.cfg.phase_n_frequencies,
+            n_frequencies=self.cfg.t_n_frequencies,
         )
 
         xyz_ch = self.embed_xyz_fn.get_output_n_channels()
-        phase_ch = self.embed_phase_fn.get_output_n_channels()
-        self.input_ch = xyz_ch + phase_ch
+        t_ch = self.embed_t_fn.get_output_n_channels()
+        self.input_ch = xyz_ch + t_ch
 
         self.skips = [self.cfg.D // 2]
         self.skip_layers = nn.ModuleList()
@@ -100,11 +100,11 @@ class MLPDefromModel(DeformModel):
         d_rotation = torch.cat([q_w, q_v], dim=-1)
         return torch.nn.functional.normalize(d_rotation)
 
-    def _forward_chunk(self, x_input: torch.Tensor, phase_input: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        h = torch.cat([x_input, phase_input], dim=-1)
+    def _forward_chunk(self, x_input: torch.Tensor, t_input: torch.Tensor) -> Deforms:
+        h = torch.cat([x_input, t_input], dim=-1)
         for l in self.skip_layers:
             h = l(h)
-            h = torch.cat([x_input, phase_input, h], dim=-1)
+            h = torch.cat([x_input, t_input, h], dim=-1)
         h = self.output_linear(h)
 
         if self.is_6dof:
@@ -123,45 +123,46 @@ class MLPDefromModel(DeformModel):
         d_scaling = self.scaling_warp(h)
         axial_angle = self.axial_angle_warp(h).float()
         d_rotation = self._axial_angle_to_quaternion(axial_angle).to(d_xyz)
-        return d_xyz, d_scaling, d_rotation
+        return Deforms(d_xyz=d_xyz, d_scaling=d_scaling, d_rotation=d_rotation)
 
     def forward(
         self,
         xyz: torch.Tensor,
-        phase: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if phase.ndim == 1:
-            phase = phase.unsqueeze(-1)
-        if phase.shape[-1] != 1:
-            phase = phase[..., :1]
+        t: torch.Tensor,
+        phase: torch.Tensor|None = None,
+    ) -> Deforms:
+        if t.ndim == 1:
+            t = t.unsqueeze(-1)
+        if t.shape[-1] != 1:
+            t = t[..., :1]
 
-        if phase.shape[0] == 1 and xyz.shape[0] != 1:
-            phase = phase.expand(xyz.shape[0], -1)
-        if phase.shape[0] != xyz.shape[0]:
+        if t.shape[0] == 1 and xyz.shape[0] != 1:
+            t = t.expand(xyz.shape[0], -1)
+        if t.shape[0] != xyz.shape[0]:
             raise RuntimeError(
-                f"Batch mismatch between xyz and phase: {xyz.shape[0]} vs {phase.shape[0]}"
+                f"Batch mismatch between xyz and t: {xyz.shape[0]} vs {t.shape[0]}"
             )
 
         x_emb = self.embed_xyz_fn(xyz)
-        phase_emb = self.embed_phase_fn(phase)
+        t_emb = self.embed_t_fn(t)
 
         if self.cfg.chunk > 0:
             d_xyz_list: list[torch.Tensor] = []
             d_scaling_list: list[torch.Tensor] = []
             d_rotation_list: list[torch.Tensor] = []
             for i in range(0, xyz.shape[0], self.cfg.chunk):
-                d_xyz, d_scaling, d_rotation = self._forward_chunk(
+                deforms = self._forward_chunk(
                     x_emb[i:i + self.cfg.chunk],
-                    phase_emb[i:i + self.cfg.chunk],
+                    t_emb[i:i + self.cfg.chunk],
                 )
-                d_xyz_list.append(d_xyz)
-                d_scaling_list.append(d_scaling)
-                d_rotation_list.append(d_rotation)
+                d_xyz_list.append(deforms.d_xyz)
+                d_scaling_list.append(deforms.d_scaling)
+                d_rotation_list.append(deforms.d_rotation)
 
-            return (
-                torch.cat(d_xyz_list, dim=0),
-                torch.cat(d_scaling_list, dim=0),
-                torch.cat(d_rotation_list, dim=0),
+            return Deforms(
+                d_xyz=torch.cat(d_xyz_list, dim=0),
+                d_scaling=torch.cat(d_scaling_list, dim=0),
+                d_rotation=torch.cat(d_rotation_list, dim=0),
             )
 
-        return self._forward_chunk(x_emb, phase_emb)
+        return self._forward_chunk(x_emb, t_emb)
