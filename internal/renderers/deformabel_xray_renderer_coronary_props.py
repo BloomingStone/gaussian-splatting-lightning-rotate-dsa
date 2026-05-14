@@ -14,7 +14,7 @@ from .renderer import Renderer, RendererOutputInfo, RendererOutputTypes
 from ..cameras import Camera
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from ..cameras import Camera
-from ..deform_models import DeformModel, DefromModelConfig
+from ..deform_models.coronary_props_deform import HashGridDefromModel, HashGridDeformConfig
 from ..utils.network_factory import NetworkFactory
 from ..utils.general_utils import get_linear_noise_func
 from ..utils.gaussian_utils import GaussianTransformUtils
@@ -28,8 +28,6 @@ class DeformableRendererOptimizationConfig:
     eps: float = 1e-8
     warm_up: int = 0
     enable_ast: bool = True
-    log_gradients: bool = True
-    grad_log_interval: int = 100
 
 
 @dataclass
@@ -47,6 +45,7 @@ class RenderRes:
     d_rotation: Tensor
     d_scales: Tensor
     
+    coronary_props: Tensor
     time: Tensor
     
     in_warm_up: bool
@@ -79,12 +78,12 @@ class RenderRes:
             return defualt_value
 
 class CoronaryDeformableXrayRenderer(Renderer):
-    deform_model: DeformModel
+    deform_model: HashGridDefromModel
     
     def __init__(
             self,
             optimization_config: DeformableRendererOptimizationConfig,
-            deform_model_config: DefromModelConfig
+            deform_model_config: HashGridDeformConfig
     ) -> None:
         super().__init__()
         self.deform_model_config = deform_model_config
@@ -124,7 +123,8 @@ class CoronaryDeformableXrayRenderer(Renderer):
         
         time = viewpoint_camera.time.unsqueeze(0).expand(means3D.shape[0], -1)
         
-        d_xyz, d_scaling, d_rotation = self.deform_model(means3D.detach(), time.detach())
+
+        d_xyz, d_scaling, d_rotation, coronary_props = self.deform_model(means3D.detach(), time)
         self._ensure_finite("d_xyz", d_xyz)
         self._ensure_finite("d_scaling", d_scaling)
         self._ensure_finite("d_rotation", d_rotation)
@@ -158,7 +158,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
             viewspace_points, visibility_filter, radii, # grad meta
             d_motion_mean, d_motion_var,    # moving mean & var
             d_xyz, d_rotation, d_scaling,      # deform properties
-            viewpoint_camera.time,
+            coronary_props.squeeze(), viewpoint_camera.time,
             in_warm_up=False
         )
         return res
@@ -187,7 +187,10 @@ class CoronaryDeformableXrayRenderer(Renderer):
             time = time + ast_noise
 
         # update means3D, rotation, scales
-        d_xyz, d_scaling, d_rotation= self.deform_model(means3D.detach(), time.detach())
+        d_xyz, d_scaling, d_rotation, coronary_props = self.deform_model(means3D.detach(), time.detach())
+        assert torch.isnan(coronary_props).sum() == 0, "coronary_props has NaN!"
+        
+        
         self._ensure_finite("d_xyz", d_xyz, step=step)
         self._ensure_finite("d_scaling", d_scaling, step=step)
         self._ensure_finite("d_rotation", d_rotation, step=step)
@@ -198,7 +201,8 @@ class CoronaryDeformableXrayRenderer(Renderer):
         self._ensure_finite("means3D", means3D, step=step)
         self._ensure_finite("rotation", rotation, step=step)
         self._ensure_finite("scales", scales, step=step)
-        d_motion_mean, d_motion_var = pc.update_motions(d_xyz, d_scaling, d_rotation)
+        
+        d_motion_mean, d_motion_var = pc.update_motions(d_xyz, d_scaling, d_rotation)   #EMA of motion
 
         gray_image, meta_whole = self._render(viewpoint_camera, means3D, rotation, scales, density)
 
@@ -213,7 +217,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
             viewspace_points, visibility_filter, radii, # grad meta
             d_motion_mean, d_motion_var,    # moving mean & var
             d_xyz, d_rotation, d_scaling,      # deforms
-            viewpoint_camera.time,
+            coronary_props.squeeze(), viewpoint_camera.time,
             in_warm_up=step <= self.optimization_config.warm_up
         )
     

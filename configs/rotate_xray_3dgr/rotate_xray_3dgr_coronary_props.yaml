@@ -1,0 +1,49 @@
+max_steps: 10000
+save_val: false
+cache_all_images: true
+trainer:
+  check_val_every_n_epoch: 10
+  precision: 16-mixed
+
+save_iterations: [10000]
+
+
+data:
+  val_max_num_images_to_cache: -1
+  test_max_num_images_to_cache: -1
+  image_uint8: true
+  image_on_cpu: false
+  parser: 
+    class_path: internal.dataparsers.rotated_xray_dataparser.RotatedXRay
+    init_args:
+      mode: render-new-views
+      init_point_cloud_mode: random
+      init_point_cloud_num: 100_000
+      train_ratio: 0.8
+model:
+  max_save_val_output: 2
+  renderer:
+    class_path: internal.renderers.deformabel_xray_renderer_coronary_props.CoronaryDeformableXrayRenderer
+    init_args:
+      deform_model_config:
+        class_path: internal.deform_models.coronary_props_deform.HashGridDeformConfig
+        init_args:
+          t_multires: 6
+          x_multires: 8
+          max_resolution: 1024
+  metric:
+    class_path: internal.metrics.rotate_xray_metrics_coronary_props.RotateXrayMetrics
+  gaussian:
+    class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
+  density:
+    class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
+  renderer_output_types: 
+    - gray_image
+    - gray_coronary
+  saver:
+    class_path: internal.savers.x_ray_saver_coronary_props.XRaySaver
+    init_args:
+      save_ckpt: false
+      save_ply: false
+      save_nii: true
+      save_phase: 0.5

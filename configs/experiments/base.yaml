@@ -30,6 +30,8 @@ train:
     use_fragi_filter: false
   retries: 0
   dry_run: false
+  # true: 只有当 sweep 配置生成的 run 名集合与结果目录中的 run_summary 集合完全一致时，才执行 summary。
+  summary_require_exact_sweep_match: false
   # true: 若已有checkpoint，则跳过所有fit，仅对有checkpoint的case重跑test和指标计算。
   eval_only: false
   # true: 若已有checkpoint，则整案跳过（不重训、不重测、不重算指标）。
@@ -42,12 +44,6 @@ train:
 
   # 这些是对所有run生效的固定覆盖。
   static_overrides:
-    data.parser.init_args.mode: render-new-views
-    model.metric.init_args.enable_deform_tv_loss: false
-    model.metric.init_args.w_deform_tv_loss: 0.0
-    model.metric.init_args.enable_frangi_loss: false
-    model.metric.init_args.w_frangi_loss: 0.0
-
     model.saver.init_args.save_phase: 0.5
     model.saver.init_args.save_ckpt: true
     pbar_rate: 50

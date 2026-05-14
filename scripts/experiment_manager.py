@@ -178,6 +178,30 @@ def _sanitize(text: str) -> str:
     return "".join(out)
 
 
+def _short_grid_key(key: str) -> str:
+    tail = str(key).split(".")[-1]
+    return _sanitize(tail[:3])
+
+
+def _short_grid_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "T" if value else "F"
+
+    if isinstance(value, (int, float)):
+        sci = f"{float(value):.2e}"  # e.g. 1.23e+04
+        mantissa, exponent = sci.split("e")
+        return _sanitize(f"{mantissa}e{int(exponent)}")
+
+    return _sanitize(str(value)[:3])
+
+
+def _grid_combo_tag(keys: list[str], row: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in keys:
+        parts.append(f"{_short_grid_key(key)}-{_short_grid_value(row[key])}")
+    return "_".join(parts)
+
+
 def _to_plain(obj: Any) -> Any:
     if isinstance(obj, (DictConfig, ListConfig)):
         return OmegaConf.to_container(obj, resolve=True)
@@ -222,7 +246,6 @@ def _expand_sweeps(cfg: DictConfig) -> list[RunSpec]:
         mode = str(sweep.get("mode", "grid"))
         fixed = dict(sweep.get("fixed", {}))
         grid: dict[str, list[Any]] = {k: list(v) for k, v in dict(sweep.get("grid", {})).items()}
-        run_counter = 0
 
         if mode == "grid":
             keys = sorted(grid.keys())
@@ -239,8 +262,9 @@ def _expand_sweeps(cfg: DictConfig) -> list[RunSpec]:
             for row in combinations:
                 params = {**fixed, **row}
                 token = _hash_params(params)
-                run_counter += 1
-                run_specs.append(RunSpec(name=f"{_sanitize(sweep_name)}__r{run_counter:03d}__{token}", params=params))
+                combo_tag = _grid_combo_tag(keys, row)
+                run_name = f"{_sanitize(sweep_name)}__{combo_tag}__{token}" if combo_tag else f"{_sanitize(sweep_name)}__{token}"
+                run_specs.append(RunSpec(name=run_name, params=params))
             continue
 
         if mode == "single-variable":
@@ -249,16 +273,25 @@ def _expand_sweeps(cfg: DictConfig) -> list[RunSpec]:
                     params = dict(fixed)
                     params[k] = v
                     token = _hash_params(params)
-                    run_counter += 1
                     run_specs.append(
                         RunSpec(
-                            name=f"{_sanitize(sweep_name)}__sv-{_sanitize(k)}-{_sanitize(str(v))}__r{run_counter:03d}__{token}",
+                            name=f"{_sanitize(sweep_name)}__sv-{_sanitize(k)}-{_sanitize(str(v))}__{token}",
                             params=params,
                         )
                     )
             continue
 
         raise ValueError(f"Unknown sweep mode: {mode}")
+
+    seen: set[str] = set()
+    dup_names: set[str] = set()
+    for spec in run_specs:
+        if spec.name in seen:
+            dup_names.add(spec.name)
+        seen.add(spec.name)
+    if dup_names:
+        dups = ", ".join(sorted(dup_names))
+        raise ValueError(f"Duplicate run_name detected in sweeps: {dups}")
 
     return run_specs
 
@@ -563,6 +596,151 @@ def _write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def _deduplicate_run_specs_by_config(
+    run_specs: list[RunSpec],
+) -> tuple[list[RunSpec], dict[str, str]]:
+    token_to_canonical_name: dict[str, str] = {}
+    canonical_specs: list[RunSpec] = []
+    alias_to_canonical: dict[str, str] = {}
+
+    for spec in run_specs:
+        token = _hash_params(spec.params)
+        if token not in token_to_canonical_name:
+            token_to_canonical_name[token] = spec.name
+            canonical_specs.append(spec)
+            continue
+        alias_to_canonical[spec.name] = token_to_canonical_name[token]
+
+    return canonical_specs, alias_to_canonical
+
+
+def _ensure_cases_symlink(alias_run_root: Path, canonical_run_root: Path, logger: Logger) -> None:
+    alias_cases = alias_run_root / "cases"
+    canonical_cases = canonical_run_root / "cases"
+
+    if alias_cases.is_symlink():
+        try:
+            if alias_cases.resolve() == canonical_cases.resolve():
+                return
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warn(f"cases symlink exists but points elsewhere: {alias_cases}")
+        return
+
+    if alias_cases.exists():
+        logger.warn(f"Skip creating cases symlink because path already exists: {alias_cases}")
+        return
+
+    alias_cases.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        alias_cases.symlink_to(canonical_cases)
+    except Exception as e:  # noqa: BLE001
+        logger.warn(f"Failed to create cases symlink {alias_cases} -> {canonical_cases}: {e}")
+
+
+def _materialize_alias_runs(
+    all_run_specs: list[RunSpec],
+    alias_to_canonical: dict[str, str],
+    results_root: Path,
+    study_name: str,
+    canonical_case_results: dict[str, list[CaseResult]],
+    logger: Logger,
+) -> list[CaseResult]:
+    if not alias_to_canonical:
+        return []
+
+    spec_by_name = {spec.name: spec for spec in all_run_specs}
+    alias_results: list[CaseResult] = []
+
+    for alias_name, canonical_name in sorted(alias_to_canonical.items()):
+        alias_spec = spec_by_name.get(alias_name)
+        if alias_spec is None:
+            logger.warn(f"Alias run spec not found: {alias_name}")
+            continue
+
+        canonical_results = canonical_case_results.get(canonical_name)
+        if canonical_results is None:
+            logger.warn(f"Canonical run results not found for alias {alias_name}: canonical={canonical_name}")
+            continue
+
+        alias_run_root = results_root / study_name / alias_name
+        canonical_run_root = results_root / study_name / canonical_name
+        alias_run_root.mkdir(parents=True, exist_ok=True)
+        _write_json(alias_run_root / "run_spec.json", {"name": alias_spec.name, "params": alias_spec.params})
+        _write_json(
+            alias_run_root / "linked_from.json",
+            {
+                "alias_run": alias_name,
+                "canonical_run": canonical_name,
+                "config_hash": _hash_params(alias_spec.params),
+            },
+        )
+
+        _ensure_cases_symlink(alias_run_root, canonical_run_root, logger)
+
+        alias_case_results: list[CaseResult] = []
+        for src in canonical_results:
+            alias_case_dir = alias_run_root / "cases" / src.case_name
+            alias_case_results.append(
+                CaseResult(
+                    run_name=alias_name,
+                    case_name=src.case_name,
+                    case_path=src.case_path,
+                    gpu_id=src.gpu_id,
+                    success=src.success,
+                    status=src.status,
+                    return_code=src.return_code,
+                    duration_sec=src.duration_sec,
+                    output_dir=str(alias_case_dir),
+                    run_log=str(alias_case_dir / "manager_run.log"),
+                    metrics_2d=src.metrics_2d,
+                    metrics_3d=src.metrics_3d,
+                    metrics_2d_file=src.metrics_2d_file,
+                    metrics_3d_file=src.metrics_3d_file,
+                )
+            )
+
+        _write_run_summary(alias_run_root, alias_spec, alias_case_results, logger)
+        alias_results.extend(alias_case_results)
+        logger.info(f"Alias run materialized without rerun: alias={alias_name}, canonical={canonical_name}")
+
+    return alias_results
+
+
+def _discover_summary_run_names(study_root: Path) -> set[str]:
+    run_summary_files = sorted(study_root.glob("*/run_summary.json"))
+    return {p.parent.name for p in run_summary_files}
+
+
+def _is_summary_sweep_match_exact(
+    run_specs: list[RunSpec],
+    results_root: Path,
+    study_name: str,
+    logger: Logger,
+) -> bool:
+    expected = {spec.name for spec in run_specs}
+    study_root = results_root / study_name
+    actual = _discover_summary_run_names(study_root)
+
+    missing = sorted(expected - actual)
+    extra = sorted(actual - expected)
+
+    if not missing and not extra:
+        logger.info("Summary strict-match passed: sweep config and result folders are exactly matched")
+        return True
+
+    logger.warn("Summary strict-match failed: skip summary due to mismatch between sweep config and result folders")
+    if missing:
+        preview = ", ".join(missing[:10])
+        tail = " ..." if len(missing) > 10 else ""
+        logger.warn(f"Missing run_summary.json for expected runs ({len(missing)}): {preview}{tail}")
+    if extra:
+        preview = ", ".join(extra[:10])
+        tail = " ..." if len(extra) > 10 else ""
+        logger.warn(f"Extra result runs not in sweep config ({len(extra)}): {preview}{tail}")
+    return False
 
 
 def _run_single_case(
@@ -1151,7 +1329,11 @@ def main(cfg: DictConfig) -> None:
         return
 
     run_specs = _expand_sweeps(cfg)
-    logger.info(f"Study={cfg.study_name}, runs={len(run_specs)}, cases={len(cases)}")
+    executable_run_specs, alias_to_canonical = _deduplicate_run_specs_by_config(run_specs)
+    logger.info(
+        f"Study={cfg.study_name}, runs={len(run_specs)}, executable_runs={len(executable_run_specs)}, "
+        f"dedup_aliases={len(alias_to_canonical)}, cases={len(cases)}"
+    )
 
     parallel_mode = str(_to_plain(cfg.train.get("parallel_mode", "serial"))).strip().lower()
     if parallel_mode not in ("serial", "multi_gpu"):
@@ -1162,10 +1344,10 @@ def main(cfg: DictConfig) -> None:
     try:
         if parallel_mode == "multi_gpu":
             logger.info("Use global queue scheduler for multi_gpu mode")
-            all_results = _execute_all_runs_multi_gpu(cfg, run_specs, cases, results_root, repo_root, logger)
+            all_results = _execute_all_runs_multi_gpu(cfg, executable_run_specs, cases, results_root, repo_root, logger)
         else:
-            for idx, run_spec in enumerate(run_specs, start=1):
-                logger.info(f"Run {idx}/{len(run_specs)}: {run_spec.name}")
+            for idx, run_spec in enumerate(executable_run_specs, start=1):
+                logger.info(f"Run {idx}/{len(executable_run_specs)}: {run_spec.name}")
                 rs = _execute_one_run(cfg, run_spec, cases, results_root, repo_root, logger)
                 all_results.extend(rs)
     except KeyboardInterrupt:
@@ -1185,6 +1367,21 @@ def main(cfg: DictConfig) -> None:
         )
         return
 
+    canonical_results_by_run: dict[str, list[CaseResult]] = {}
+    for result in all_results:
+        canonical_results_by_run.setdefault(result.run_name, []).append(result)
+
+    alias_results = _materialize_alias_runs(
+        all_run_specs=run_specs,
+        alias_to_canonical=alias_to_canonical,
+        results_root=results_root,
+        study_name=str(cfg.study_name),
+        canonical_case_results=canonical_results_by_run,
+        logger=logger,
+    )
+    if alias_results:
+        all_results.extend(alias_results)
+
     summary = {
         "study": str(cfg.study_name),
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -1195,6 +1392,57 @@ def main(cfg: DictConfig) -> None:
         "num_failed": sum(1 for x in all_results if not x.success),
     }
     _write_json(results_root / str(cfg.study_name) / "study_summary.json", summary)
+
+    summarize_script = repo_root / "scripts" / "summarize_experiments.py"
+    strict_match = bool(cfg.train.get("summary_require_exact_sweep_match", False))
+    should_run_summary = True
+    if strict_match:
+        should_run_summary = _is_summary_sweep_match_exact(run_specs, results_root, str(cfg.study_name), logger)
+
+    if summarize_script.exists() and should_run_summary:
+        summarize_cmd = [
+            sys.executable,
+            str(summarize_script),
+            "--results-root",
+            str(results_root),
+            "--study",
+            str(cfg.study_name),
+        ]
+        user_plot_metrics = _to_plain(cfg.train.get("summary_plot_metrics", []))
+        if isinstance(user_plot_metrics, list) and len(user_plot_metrics) > 0:
+            summarize_cmd.extend(["--plot-metrics", *[str(x) for x in user_plot_metrics]])
+
+        user_zero_as_missing = _to_plain(cfg.train.get("summary_zero_as_missing_metrics", []))
+        if isinstance(user_zero_as_missing, list) and len(user_zero_as_missing) > 0:
+            summarize_cmd.extend(["--zero-as-missing-metrics", *[str(x) for x in user_zero_as_missing]])
+
+        max_outliers = _to_plain(cfg.train.get("summary_max_outliers_per_run", 2))
+        summarize_cmd.extend(["--max-outliers-per-run", str(int(max_outliers))])
+
+        logger.info(f"Run summarize script: {' '.join(summarize_cmd)}")
+        try:
+            proc = subprocess.run(  # noqa: S603
+                summarize_cmd,
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.stdout:
+                for line in proc.stdout.splitlines():
+                    logger.info(f"[summarize] {line}")
+            if proc.stderr:
+                for line in proc.stderr.splitlines():
+                    logger.warn(f"[summarize] {line}")
+            if proc.returncode != 0:
+                logger.warn(f"Summarize script finished with non-zero code: {proc.returncode}")
+        except Exception as e:  # noqa: BLE001
+            logger.warn(f"Summarize script failed to execute: {e}")
+    elif summarize_script.exists() and not should_run_summary:
+        logger.warn("Skip summarize script due to summary_require_exact_sweep_match=true and mismatch detected")
+    else:
+        logger.warn(f"Summarize script not found: {summarize_script}")
+
     logger.info(f"Done: {summary}")
 
 
