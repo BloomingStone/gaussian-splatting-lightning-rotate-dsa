@@ -27,14 +27,9 @@ gs-viewer = "internal.entrypoints.viewer:cli"
 channels = ["conda-forge"]
 platforms = ["linux-64"]
 
-[tool.pixi.system-requirements]
-cuda = "12.0"
-
-[tool.pixi.activation.env]
 
 [tool.pixi.dependencies]
-pytorch-gpu = ">=2.5.1,<2.6"
-torchvision = "*"
+python = ">=3.12, <3.13"
 wandb = ">=0.21.1,<0.22"
 viser = ">=0.2.23,<0.3"
 matplotlib = ">=3.9.1,<4"
@@ -46,7 +41,8 @@ einops = ">=0.8.1,<0.9"
 notebook = "*"
 nibabel = ">=5.3.2,<6"
 pyvista = ">=0.46.3,<0.47"
-monai = ">=1.5.1,<2"
+mypy = ">=1.19.1,<2"
+rich = ">=14.0.0,<15"
 setuptools = "<82"
 pytest = ">=9.0.3,<10"
 cyclopts = ">=4.10.1,<5"
@@ -60,10 +56,12 @@ no-build-isolation = [
     "gsplat",
     "fused_ssim",
     "xray-gaussian-rasterization-voxelization",
+    "monai",
 ]
 
 [tool.pixi.pypi-dependencies]
-gaussian-splatting-lightning = { path = ".", editable = true }
+torch = { version = ">=2.5.1", index = "https://mirrors.nju.edu.cn/pytorch/whl/cu121" }
+torchvision = { version = ">=0.20.1", index = "https://mirrors.nju.edu.cn/pytorch/whl/cu121" }
 simple-knn = { git = "https://github.com/yzslab/simple-knn.git", rev = "86710c2d4b46680c02301765dd79e465819c8f19" }
 tinycudann = { git = "https://github.com/NVlabs/tiny-cuda-nn.git", subdirectory = "bindings/torch", rev = "68d4f0f1f81fa9085fff66077d9966c8323095bc" }
 fused_ssim = { git = "https://github.com/rahul-goel/fused-ssim.git", branch = "main" }
@@ -71,15 +69,17 @@ opencv-python-headless = ">=4.11.0.86,<5"
 pytorch-lightning = ">=2.5.5,<3"
 lightning = { version = ">=2.5.5,<3", extras = ["pytorch-extra"] }
 jaxtyping = "*"
+gaussian-splatting-lightning = { path = ".", editable = true }
+monai = ">=1.5.1,<2"
 
 [tool.pixi.feature.vanilla-gs-rasterization.pypi-dependencies]
 diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gaussian-rasterization.git", branch = "main" }
 
-[tool.pixi.feature.x-gs-rasterization.pypi-dependencies]
-diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gaussian-rasterization.git", branch = "X-Gaussian" }
+# [tool.pixi.feature.x-gs-rasterization.pypi-dependencies]
+# diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gaussian-rasterization.git", branch = "X-Gaussian" }
 
-[tool.pixi.feature.gsplat-v0.pypi-dependencies]
-gsplat = { git = "https://github.com/yzslab/gsplat.git" }
+# [tool.pixi.feature.gsplat-v0.pypi-dependencies]
+# gsplat = { git = "https://github.com/yzslab/gsplat.git" }
 
 [tool.pixi.feature.gsplat-v1.pypi-dependencies]
 gsplat = { git = "https://github.com/nerfstudio-project/gsplat.git", tag = "v1.5.3" }
@@ -94,8 +94,4 @@ default = [
     "default",
     "gsplat-v1",
     "r2-gaussian",
-] # 实际上 gs-rasterization 和 gsplat 应该是互斥的，但目前先这样
-x-gs = ["x-gs-rasterization", "default", "gsplat-v1"]
-gsplat-v0 = ["vanilla-gs-rasterization", "default", "gsplat-v0"]
-
-[tool.pixi.tasks]
+]
