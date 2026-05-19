@@ -46,7 +46,6 @@ rich = ">=14.0.0,<15"
 setuptools = "<82"
 pytest = ">=9.0.3,<10"
 cyclopts = ">=4.10.1,<5"
-cupy = ">=13.0.0"
 
 [tool.pixi.pypi-options]
 no-build-isolation = [
@@ -71,6 +70,7 @@ lightning = { version = ">=2.5.5,<3", extras = ["pytorch-extra"] }
 jaxtyping = "*"
 gaussian-splatting-lightning = { path = ".", editable = true }
 monai = ">=1.5.1,<2"
+cupy-cuda12x = { version = ">=13.0.0", extras = ["ctk"] }
 
 [tool.pixi.feature.vanilla-gs-rasterization.pypi-dependencies]
 diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gaussian-rasterization.git", branch = "main" }

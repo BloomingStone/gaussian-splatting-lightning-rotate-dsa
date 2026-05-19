@@ -119,6 +119,7 @@ def _get_cameras(json_data: dict, indices: list[int] | None = None) -> Cameras:
     sod = json_data["c_arm_geometry"]["sod"]
     
     # GS follows COLMAP orientation, where Z is forward direction of camera and Y is down
+    # 注意欧拉角使用内旋，绕旋转后的坐标轴继续旋转，旋转矩阵作用顺序与世界坐标旋转相反，R_colmap_orient = Rx(90) @ Rz(180)
     R_colmap_orient = euler_angles_to_matrix(torch.tensor((torch.pi/2, torch.pi, 0.)), "XZY")
     M_colmap_orient = torch.eye(4)
     M_colmap_orient[:3, :3] = R_colmap_orient

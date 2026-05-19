@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 
 
-DEFAULT_RESULTS_ROOT = "/media/data2/sj/Data/ASOCA_recon"
+DEFAULT_RESULTS_ROOT = "/media/F/sj/Data/ASOCA_recon"
 
 DEFAULT_PLOT_METRICS = [
     "3d_dice",

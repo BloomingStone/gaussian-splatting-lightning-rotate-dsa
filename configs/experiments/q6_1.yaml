@@ -7,7 +7,7 @@ study_name: Q6_1
 train:
   dry_run: false
   base_config: configs/rotate_xray_3dgr/rotate_xray_3dgr_coronary_props.yaml
-  gpus: ["0", "1"]
+  # gpus: ["0", "1"]
 
 # Q6: 参考 Q3 的写法，专门做不同 loss weight 的 single-variable 扫描。
 sweeps:

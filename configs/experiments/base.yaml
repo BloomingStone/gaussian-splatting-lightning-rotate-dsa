@@ -4,9 +4,9 @@ defaults:
 study_name: BASE
 
 train:
-  data_root: /media/data3/sj/Data/gen4d_outputs/ASOCA_samples
+  data_root: /media/F/sj/Data/gen4d_outputs/ASOCA_samples
   base_config: configs/rotate_xray_3dgr/rotate_xray_3dgr_deformable_xray_render.yaml
-  results_root: outputs/experiments_asoca
+  results_root: /media/F/sj/Data/ASOCA_recon
   runner: pixi run python
   # 单进程模式：每次只跑一个case，避免并发导致显存峰值叠加。
   gpu: "0"
