@@ -7,7 +7,7 @@ import hashlib
 import numpy as np
 import torch
 from torch import Tensor
-from jaxtyping import Float32
+from PIL import Image
 
 from ..dataparsers.dataparser import DataParserConfig, DataParser, DataParserOutputs, ImageSet, PointCloud
 from ..cameras import Cameras
@@ -83,9 +83,11 @@ class RotatedXRay(DataParserConfig):
     init_point_cloud_mod:
         uniform: will use uniform sampling in given range to init point cloud
         random: will use random sampling in given range to init point cloud
-        FBP: use FBP to construct volume from images firstly, then sample points by volume value.
+        FBP: reconstruct a volume with ODL FBP or adjoint, then sample points from the normalized voxel probability.
         DL: use deep learning to init point cloud.
-    init_point_cloud_num: number of points to init point cloud, only used when init_point_cloud_mode is uniform or random.
+    init_point_cloud_num: number of points to sample for point cloud initialization.
+    init_point_cloud_fbp_use_filter: use filtered back-projection when init_point_cloud_mode is FBP. If False, use the adjoint instead.
+    init_point_cloud_fbp_phase_max: upper bound of phase used for FBP initialization. Only frames with phase in [0, phase_max] are used.
     coronary_type: only used when init_point_cloud_mode is label, specify which coronary to reconstruct
     train_ratio: ratio of images to use for training, only used when mode is render-new-views
     seed: random seed for data splitting and point cloud initialization
@@ -94,6 +96,8 @@ class RotatedXRay(DataParserConfig):
     mode: Literal["reconstruction", "render-new-views"] = "reconstruction"
     init_point_cloud_mode: Literal["uniform", "random", "random-ball", "FBP", "DL", "label", "central-line"] = "uniform"
     init_point_cloud_num: int = 100_000
+    init_point_cloud_fbp_use_filter: bool = True
+    init_point_cloud_fbp_phase_max: float = 1.0
     coronary_type: Literal["LCA", "RCA"]|None = None
     train_ratio: float = 0.8
     seed: int = 0
@@ -205,6 +209,238 @@ def _filter_points_visible(
     # 只要进过任意一个相机
     visible_any = in_frustum.any(dim=0)  # (N,)
     return points_[visible_any].cpu().numpy()
+
+
+def _sorted_frame_indices_by_alpha(json_data: dict, indices: list[int] | None = None) -> list[int]:
+    if indices is None:
+        indices = list(range(len(json_data["frames"])))
+
+    return sorted(indices, key=lambda i: float(json_data["frames"][i]["alpha_degree"]))
+
+
+def _phase_filtered_indices(
+    json_data: dict,
+    phase_max: float,
+    indices: list[int] | None = None,
+) -> list[int]:
+    if not 0.0 <= phase_max <= 1.0:
+        raise ValueError(f"phase_max must be in [0, 1], got {phase_max}")
+
+    if indices is None:
+        indices = list(range(len(json_data["frames"])))
+
+    selected = [
+        i
+        for i in indices
+        if float(json_data["frames"][i]["phase"]) <= phase_max + 1e-8
+    ]
+    if len(selected) == 0:
+        raise ValueError(f"No frames found in phase range [0, {phase_max}]")
+
+    return _sorted_frame_indices_by_alpha(json_data, selected)
+
+
+def _load_projection_image(image_path: Path) -> np.ndarray:
+    with Image.open(image_path) as image:
+        arr = np.asarray(image.convert("L"), dtype=np.float32) / 255.0
+    return 1.0 - arr
+
+
+def _build_odl_reconstruction_space(
+    volume_shape: tuple[int, int, int],
+    volume_affine: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    affine = np.asarray(volume_affine, dtype=np.float64)
+    A = affine[:3, :3]
+    spacing = np.linalg.norm(A, axis=0)
+    if np.any(spacing <= 0):
+        raise ValueError("Invalid volume affine: zero spacing detected")
+
+    D = A / spacing
+    perm = np.argmax(np.abs(D), axis=0)
+    if len(np.unique(perm)) != 3:
+        raise ValueError("Volume affine includes oblique rotation/shear; ODL cone-beam geometry requires axis-aligned volume")
+
+    aligned_score = np.abs(D[perm, np.arange(3)])
+    if not np.allclose(aligned_score, 1.0, atol=1e-3):
+        raise ValueError("Volume affine includes arbitrary rotation; ODL cone-beam geometry requires axis-aligned volume")
+
+    if not np.allclose(perm, np.arange(3)):
+        raise NotImplementedError("Volume affine includes axis permutation; this parser currently assumes identity axis order")
+
+    origin_world = affine[:3, 3]
+    shape_world = A @ np.array(volume_shape, dtype=np.float64) + origin_world
+    min_pt_world = np.minimum(origin_world, shape_world).astype(np.float32)
+    max_pt_world = np.maximum(origin_world, shape_world).astype(np.float32)
+    return min_pt_world, max_pt_world
+
+
+def _reconstruct_volume_with_odl(
+    json_data: dict,
+    volume_shape: tuple[int, int, int],
+    volume_affine: np.ndarray,
+    projections: np.ndarray,
+    alphas: np.ndarray,
+    use_filter: bool,
+) -> np.ndarray:
+    try:
+        import odl
+        from odl.contrib import torch as odl_torch
+        from odl.tomo.operators.ray_trafo import RAY_TRAFO_IMPLS
+    except ImportError as exc:
+        raise ImportError(
+            "FBP initialization requires odl and its cone-beam dependencies; install them before using init_point_cloud_mode='FBP'."
+        ) from exc
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("FBP initialization requires CUDA because the 3D ODL cone-beam backend uses astra_cuda")
+
+    projections = np.asarray(projections, dtype=np.float32)
+    if np.any(~np.isfinite(projections)):
+        projections = np.nan_to_num(projections, nan=0.0, posinf=0.0, neginf=0.0)
+    projections = np.clip(projections, 0.0, None)
+
+    max_val = float(projections.max())
+    if max_val > 0.0:
+        projections = projections / max_val
+    else:
+        projections = np.zeros_like(projections, dtype=np.float32)
+
+    min_pt_world, max_pt_world = _build_odl_reconstruction_space(volume_shape, volume_affine)
+
+    sdd = float(json_data["c_arm_geometry"]["sdd"])
+    sod = float(json_data["c_arm_geometry"]["sod"])
+    dde = sdd - sod
+    dx = float(json_data["c_arm_geometry"]["delx"])
+    dy = float(json_data["c_arm_geometry"]["dely"])
+    width = int(json_data["c_arm_geometry"]["width"])
+    height = int(json_data["c_arm_geometry"]["height"])
+
+    beta = np.array([float(frame["beta_degree"]) for frame in json_data["frames"]], dtype=np.float32)
+    if not np.allclose(beta, 0.0, atol=1e-6):
+        raise NotImplementedError("Current ODL FBP initialization assumes beta_degree == 0 for all selected frames")
+
+    impl = "astra_cuda"
+    available_impls = set(RAY_TRAFO_IMPLS.keys())
+    if impl not in available_impls:
+        raise RuntimeError(f"Requested impl '{impl}' is not available. Available ODL impls: {sorted(available_impls)}")
+
+    reco_space = odl.uniform_discr(
+        min_pt=min_pt_world.tolist(),
+        max_pt=max_pt_world.tolist(),
+        shape=[int(volume_shape[0]), int(volume_shape[1]), int(volume_shape[2])],
+        dtype="float32",
+    )
+
+    angle_partition = odl.nonuniform_partition(alphas.astype(np.float32))
+    detector_partition = odl.uniform_partition(
+        min_pt=[-(height * dy / 2.0), -(width * dx / 2.0)],
+        max_pt=[(height * dy / 2.0), (width * dx / 2.0)],
+        shape=[height, width],
+        nodes_on_bdry=True,
+    )
+
+    geometry = odl.tomo.ConeBeamGeometry(
+        apart=angle_partition,
+        dpart=detector_partition,
+        src_radius=sod,
+        det_radius=dde,
+        axis=[0, 0, 1],
+    )
+
+    ray_trafo = odl.tomo.RayTransform(
+        vol_space=reco_space,
+        geometry=geometry,
+        impl=impl,
+    )
+
+    recon_operator = odl.tomo.fbp_op(
+        ray_trafo=ray_trafo,
+        filter_type="Ram-Lak",
+        frequency_scaling=1.0,
+    ) if use_filter else ray_trafo.adjoint
+
+    projections_t = torch.from_numpy(projections)[None, None, ...]
+    recon_module = odl_torch.OperatorModule(recon_operator)
+
+    with torch.no_grad():
+        volume_t = recon_module(projections_t)
+
+    if volume_t.ndim == 5 and volume_t.shape[1] == 1:
+        volume_t = volume_t[:, 0]
+    if volume_t.ndim == 4 and volume_t.shape[0] == 1:
+        volume_t = volume_t[0]
+
+    volume = volume_t.detach().cpu().numpy().astype(np.float32)
+    volume = np.nan_to_num(volume, nan=0.0, posinf=0.0, neginf=0.0)
+    return volume
+
+
+def _sample_points_from_volume(
+    volume: np.ndarray,
+    affine: np.ndarray,
+    num_points: int,
+    seed: int,
+) -> np.ndarray:
+    volume = np.asarray(volume, dtype=np.float64)
+    volume = np.nan_to_num(volume, nan=0.0, posinf=0.0, neginf=0.0)
+    volume = np.clip(volume, 0.0, None)
+
+    if volume.size == 0:
+        raise ValueError("Cannot sample points from an empty volume")
+
+    volume = volume - volume.min()
+    total = float(volume.sum())
+
+    rng = np.random.default_rng(seed)
+    flat_size = int(volume.size)
+
+    if total <= 0.0:
+        chosen = rng.integers(0, flat_size, size=num_points)
+    else:
+        prob = (volume / total).reshape(-1)
+        chosen = rng.choice(flat_size, size=num_points, replace=True, p=prob)
+
+    coords = np.column_stack(np.unravel_index(chosen, volume.shape)).astype(np.float64)
+    coords_h = np.concatenate([coords, np.ones((coords.shape[0], 1), dtype=np.float64)], axis=1)
+    xyz = (coords_h @ np.asarray(affine, dtype=np.float64).T)[:, :3]
+    return xyz
+
+
+def _init_point_cloud_from_fbp(
+    json_data: dict,
+    image_paths: list[Path],
+    frame_indices: list[int],
+    volume_shape: tuple[int, int, int],
+    volume_affine: np.ndarray,
+    num_points: int,
+    seed: int,
+    use_filter: bool,
+    phase_max: float,
+) -> np.ndarray:
+    selected_indices = _phase_filtered_indices(json_data, phase_max=phase_max, indices=frame_indices)
+
+    projections = np.stack([
+        _load_projection_image(image_paths[i])
+        for i in selected_indices
+    ], axis=0)
+    alphas = -np.deg2rad(np.array([float(json_data["frames"][i]["alpha_degree"]) for i in selected_indices], dtype=np.float32))
+
+    volume = _reconstruct_volume_with_odl(
+        json_data=json_data,
+        volume_shape=volume_shape,
+        volume_affine=volume_affine,
+        projections=projections,
+        alphas=alphas,
+        use_filter=use_filter,
+    )
+
+    return _sample_points_from_volume(
+        volume=volume,
+        affine=volume_affine,
+        num_points=num_points,
+        seed=seed,
+    )
     
 
 
@@ -271,6 +507,7 @@ class RotatedXRayDataParser(DataParser):
         image_paths = [f.absolute() for f in sorted(images_dir.glob("*.png"))]
         label_paths = [f.absolute() for f in sorted(label_dir.glob("*.png"))]
         image_names = [f.name for f in image_paths]
+        all_indices = list(range(len(image_paths)))
         
         if self.params.mode == "reconstruction":
             train_set = ImageSet(
@@ -304,6 +541,8 @@ class RotatedXRayDataParser(DataParser):
             test_set = valid_set
         else:
             raise ValueError(f"Unknown mode: {self.params.mode}")
+
+        active_indices = all_indices if self.params.mode == "reconstruction" else train_indices
         
         bounds = self._get_bounds()
         match self.params.init_point_cloud_mode:
@@ -326,7 +565,17 @@ class RotatedXRayDataParser(DataParser):
                     r * np.cos(theta)
                 ]).T
             case "FBP":
-                raise NotImplementedError   # TODO
+                xyz = _init_point_cloud_from_fbp(
+                    json_data=data,
+                    image_paths=image_paths,
+                    frame_indices=active_indices,
+                    volume_shape=self.volume_shape,
+                    volume_affine=self.volume_affine,
+                    num_points=self.params.init_point_cloud_num,
+                    seed=self.params.seed,
+                    use_filter=self.params.init_point_cloud_fbp_use_filter,
+                    phase_max=self.params.init_point_cloud_fbp_phase_max,
+                )
             case "DL":
                 raise NotImplementedError   # TODO
             case "label":
