@@ -7,6 +7,7 @@ import hashlib
 import numpy as np
 import torch
 from torch import Tensor
+from jaxtyping import Float32
 from PIL import Image
 
 from ..dataparsers.dataparser import DataParserConfig, DataParser, DataParserOutputs, ImageSet, PointCloud
