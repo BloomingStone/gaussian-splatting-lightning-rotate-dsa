@@ -27,15 +27,13 @@ class Dataset(torch.utils.data.Dataset):
     def __init__(
             self,
             image_set: ImageSet,
-            undistort_image: bool = True,
-            camera_device: torch.device = None,
-            image_device: torch.device = None,
+            camera_device: torch.device|None = None,
+            image_device: torch.device|None = None,
             image_uint8: bool = False,
             allow_mask_interpolation: bool = False,
     ) -> None:
         super().__init__()
         self.image_set = image_set
-        self.undistort_image = undistort_image
 
         if camera_device is None:
             camera_device = torch.device("cpu")
@@ -51,56 +49,13 @@ class Dataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.image_set)
 
-    def get_image(self, index) -> Tuple[str, torch.Tensor, Optional[torch.Tensor]]:
+    def get_image(self, index) -> Tuple[str, torch.Tensor|None, torch.Tensor|None]:
         if self.image_set.image_paths[index] is None:
             return self.image_set.image_names[index], None, None
 
         # TODO: resize
         pil_image = Image.open(self.image_set.image_paths[index])
         numpy_image = np.array(pil_image, dtype=np.uint8)
-
-        # undistort image
-        if self.undistort_image is True:
-            assert self.image_uint8 == False
-            # TODO: validate this undistortion implementation
-            camera = self.image_set.cameras[index]  # get original camera
-            distortion = camera.distortion_params
-            if distortion is not None and torch.any(distortion != 0.):
-                # TODO: support fisheye camera model
-                assert camera.camera_type == CameraType.PERSPECTIVE
-                # build intrinsics matrix
-                intrinsics_matrix = np.eye(3)
-                intrinsics_matrix[0, 0] = float(camera.fx)  # fx
-                intrinsics_matrix[1, 1] = float(camera.fy)  # fy
-                intrinsics_matrix[0, 2] = float(camera.cx)  # cx
-                intrinsics_matrix[1, 2] = float(camera.cy)  # cy
-                # calculate new intrinsics matrix, without black border
-                image_shape = (int(camera.width), int(camera.height))
-                distortion = distortion.numpy()
-                new_intrinsics_matrix, _ = cv2.getOptimalNewCameraMatrix(
-                    intrinsics_matrix,
-                    distortion,
-                    image_shape,
-                    0,
-                    image_shape,
-                )
-                # undistort image
-                undistorted_image = cv2.undistort(numpy_image, intrinsics_matrix, distortion, None, new_intrinsics_matrix)
-                # update variables
-                numpy_image = undistorted_image
-                # update image camera
-                self.image_cameras[index].camera_type = torch.tensor(CameraType.PERSPECTIVE)
-                self.image_cameras[index].fx = torch.tensor(new_intrinsics_matrix[0, 0], dtype=torch.float)
-                self.image_cameras[index].fy = torch.tensor(new_intrinsics_matrix[1, 1], dtype=torch.float)
-                self.image_cameras[index].cx = torch.tensor(new_intrinsics_matrix[0, 2], dtype=torch.float)
-                self.image_cameras[index].cy = torch.tensor(new_intrinsics_matrix[1, 2], dtype=torch.float)
-                self.image_cameras[index].distortion_params = torch.zeros((4,), dtype=torch.float)
-
-                if "PREVIEW_UNDISTORTED_IMAGE" in os.environ:
-                    undistorted_pil_image = Image.fromarray(undistorted_image)
-                    image_save_path = os.path.join(os.environ["PREVIEW_UNDISTORTED_IMAGE"], self.image_set.image_names[index])
-                    os.makedirs(os.path.dirname(image_save_path), exist_ok=True)
-                    undistorted_pil_image.save(image_save_path, quality=100)
 
         if self.image_uint8:
             image = torch.from_numpy(numpy_image)
@@ -120,7 +75,7 @@ class Dataset(torch.utils.data.Dataset):
         assert image.shape[2] == 3
 
         mask = None
-        if self.image_set.mask_paths[index] is not None:
+        if self.image_set.mask_paths is not None and self.image_set.mask_paths[index] is not None:
             pil_image = Image.open(self.image_set.mask_paths[index])
             mask = torch.from_numpy(np.array(pil_image))
             # mask must be single channel
@@ -147,6 +102,8 @@ class Dataset(torch.utils.data.Dataset):
         return self.image_set.image_names[index], image, mask
 
     def get_extra_data(self, index):
+        assert self.image_set.extra_data_processor is not None, "extra_data_processor must be provided in image_set when extra_data is not None"
+        assert self.image_set.extra_data is not None, "extra_data must be provided in image_set when extra_data_processor is not None"
         return self.image_set.extra_data_processor(self.image_set.extra_data[index])
 
     def __getitem__(self, index) -> Tuple[Camera, Tuple, Any]:
@@ -176,7 +133,7 @@ class CacheDataLoader(torch.utils.data.DataLoader):
         self.max_cache_num = max_cache_num
 
         # image indices to use
-        self.indices = list(range(len(self.dataset)))
+        self.indices = list(range(len(self.dataset)))   # type: ignore
         if distributed is True and self.max_cache_num != 0:
             assert world_size > 0
             assert global_rank >= 0
@@ -232,6 +189,7 @@ class CacheDataLoader(torch.utils.data.DataLoader):
                 to_cache = not_cached[:self.max_cache_num]
                 del not_cached[:self.max_cache_num]
 
+                assert self.cache_output_queue is not None
                 self.cache_output_queue.put(None)  # simulate a queue with zero size
                 self.cache_output_queue.put(self._cache_data(to_cache, pbar_leave=False))
 
@@ -289,6 +247,7 @@ class CacheDataLoader(torch.utils.data.DataLoader):
 
                 if self.async_caching:
                     while True:
+                        assert self.cache_output_queue is not None
                         cached = self.cache_output_queue.get()  # setting to None allows GC
                         assert cached is None
                         cached = self.cache_output_queue.get()
@@ -317,7 +276,6 @@ class DataModule(LightningDataModule):
             path: str,
             parser: DataParserConfig,
             distributed: bool = False,
-            undistort_image: bool = False,
             val_on_train: bool = False,
             image_scale_factor: float = 1.,  # TODO
             train_max_num_images_to_cache: int = -1,
@@ -326,18 +284,18 @@ class DataModule(LightningDataModule):
             num_workers: int = 2,
             add_background_sphere: bool = False,
             background_sphere_center: Literal["points", "cameras"] = "points",
-            background_sphere_scene_center: Tuple[float, float, float] = None,
+            background_sphere_scene_center: Tuple[float, float, float]|None = None,
             background_sphere_distance: float = 2.2,
             background_sphere_points: int = 204_800,
             background_sphere_color: Literal["random", "white"] = "random",
             background_sphere_min_altitude: float = -math.inf,
-            background_sphere_up: Tuple[float, float, float] = None,
+            background_sphere_up: Tuple[float, float, float]|None = None,
             camera_on_cpu: bool = False,
             image_on_cpu: bool = True,
             image_uint8: bool = False,
             async_caching: bool = False,
             allow_mask_interpolation: bool = False,
-            extra_points: str = None,
+            extra_points: str|None = None,
             max_extra_points: int = -1,
     ) -> None:
         r"""Load dataset
@@ -368,6 +326,7 @@ class DataModule(LightningDataModule):
     def setup(self, stage: str) -> None:
         super().setup(stage)
 
+        assert self.trainer is not None, "trainer must be set before setup"
         output_path = self.trainer.lightning_module.hparams["output_path"]
 
         # store global rank, will be used as the seed of the CacheDataLoader
@@ -522,10 +481,10 @@ class DataModule(LightningDataModule):
             self.dataparser_outputs.point_cloud.rgb = np.concatenate([self.dataparser_outputs.point_cloud.rgb, extra_pcd.colors], axis=0)
 
     def train_dataloader(self) -> TRAIN_DATALOADERS:
+        assert self.trainer is not None, "trainer must be set before setup"
         return CacheDataLoader(
             Dataset(
                 self.dataparser_outputs.train_set,
-                undistort_image=self.hparams["undistort_image"],
                 camera_device=self.camera_device,
                 image_device=self.image_device,
                 image_uint8=self.hparams["image_uint8"],
@@ -549,7 +508,6 @@ class DataModule(LightningDataModule):
         return CacheDataLoader(
             Dataset(
                 image_set,
-                undistort_image=self.hparams["undistort_image"],
                 camera_device=self.camera_device,
                 image_device=self.image_device,
                 image_uint8=self.hparams["image_uint8"],
@@ -568,7 +526,6 @@ class DataModule(LightningDataModule):
         return CacheDataLoader(
             Dataset(
                 image_set,
-                undistort_image=self.hparams["undistort_image"],
                 camera_device=self.camera_device,
                 image_device=self.image_device,
                 image_uint8=self.hparams["image_uint8"],

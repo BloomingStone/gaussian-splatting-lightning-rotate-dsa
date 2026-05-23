@@ -15,6 +15,7 @@ from ..utils.general_utils import (
     inverse_sigmoid,
     strip_symmetric,
     build_scaling_rotation,
+    knn,
 )
 from ..optimizers import OptimizerConfig, Adam, SelectiveAdam, SparseGaussianAdam
 from ..schedulers import Scheduler, ExponentialDecayScheduler
@@ -97,7 +98,7 @@ class VanillaGaussianModel(
             return
         pl_module.on_after_backward_hooks.append(hook)
 
-    def setup_from_pcd(self, xyz: Union[torch.Tensor, np.ndarray], rgb: Union[torch.Tensor, np.ndarray], *args, **kwargs):
+    def setup_from_pcd(self, xyz: Union[torch.Tensor, np.ndarray], rgb: Union[torch.Tensor, np.ndarray], init_scale: float=1.0, *args, **kwargs):
         from ..utils.sh_utils import RGB2SH
 
         if isinstance(xyz, np.ndarray):
@@ -114,13 +115,11 @@ class VanillaGaussianModel(
         shs = torch.zeros((n_gaussians, 3, (self.config.sh_degree + 1) ** 2)).float()
         shs[:, :3, 0] = fused_color
         shs[:, 3:, 1:] = 0.0
-
-        # scales
-        # TODO: replace `simple_knn`
-        from simple_knn._C import distCUDA2
-        # the parameter device may be "cpu", so tensor must move to cuda before calling distCUDA2()
-        dist2 = torch.clamp_min(distCUDA2(fused_point_cloud.cuda()), 0.0000001).to(fused_point_cloud.device)
-        scales = torch.log(torch.sqrt(dist2))[..., None].repeat(1, 3)
+        
+        # Initialize the GS size to be the average dist of the 3 nearest neighbors
+        dist2_avg = (knn(fused_point_cloud, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
+        dist_avg = torch.sqrt(dist2_avg)
+        scales = torch.log(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
 
         # rotations
         rots = torch.zeros((fused_point_cloud.shape[0], 4))

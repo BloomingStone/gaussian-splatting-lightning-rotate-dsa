@@ -22,6 +22,7 @@ from ..utils.general_utils import (
     inverse_sigmoid,
     strip_symmetric,
     build_scaling_rotation,
+    knn,
 )
 from ..schedulers import ExponentialDecayScheduler
 from ..optimizers import OptimizerConfig, Adam
@@ -294,6 +295,7 @@ class XrayCoronaryGaussianModel(
     def setup_from_pcd(
             self, xyz: Float32[Tensor|np.ndarray, "n_gaussians 3"], 
             rgb: Any, 
+            init_scale: float = 1.0,
             *args, 
             **kwargs 
         ):
@@ -305,9 +307,10 @@ class XrayCoronaryGaussianModel(
         
         fused_point_cloud = xyz_coronary
 
-        from simple_knn._C import distCUDA2
-        dist2 = torch.clamp_min(distCUDA2(fused_point_cloud.cuda()), 0.0000001).to(fused_point_cloud.device)
-        scales = torch.log(torch.sqrt(dist2))[..., None].repeat(1, 3)
+        # Initialize the GS size to be the average dist of the 3 nearest neighbors
+        dist2_avg = (knn(fused_point_cloud, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
+        dist_avg = torch.sqrt(dist2_avg)
+        scales = torch.log(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
 
         n_gaussians = fused_point_cloud.shape[0]
         inits = GaussianInits(n_gaussians)

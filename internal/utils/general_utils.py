@@ -14,7 +14,15 @@ import sys
 from datetime import datetime
 import numpy as np
 import random
+from torch import Tensor
+from sklearn.neighbors import NearestNeighbors
 
+
+def knn(x: Tensor, K: int = 4) -> Tensor:
+    x_np = x.cpu().numpy()
+    model = NearestNeighbors(n_neighbors=K, metric="euclidean").fit(x_np)
+    distances, _ = model.kneighbors(x_np)
+    return torch.from_numpy(distances).to(x)
 
 def inverse_sigmoid(x):
     return torch.log(x / (1 - x))

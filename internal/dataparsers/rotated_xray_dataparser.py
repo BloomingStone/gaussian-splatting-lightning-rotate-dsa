@@ -1,16 +1,19 @@
-from typing import Literal
+from typing import Literal, Any
 import json
 from dataclasses import dataclass
 from pathlib import Path
 import hashlib
+import math
 
 import numpy as np
 import torch
 from torch import Tensor
 from jaxtyping import Float32
+from PIL import Image
 
 from ..dataparsers.dataparser import DataParserConfig, DataParser, DataParserOutputs, ImageSet, PointCloud
 from ..cameras import Cameras
+from .conebeam import ConeBeamParams, PngOdlTransform, ConeBeamProjector
 
 # ref: DiffDRR at diffdrr/pose.py
 def _axis_angle_rotation(axis: str, angle: torch.Tensor) -> torch.Tensor:
@@ -83,9 +86,11 @@ class RotatedXRay(DataParserConfig):
     init_point_cloud_mod:
         uniform: will use uniform sampling in given range to init point cloud
         random: will use random sampling in given range to init point cloud
-        FBP: use FBP to construct volume from images firstly, then sample points by volume value.
+        FBP: reconstruct a volume with ODL FBP or adjoint, then sample points from the normalized voxel probability.
         DL: use deep learning to init point cloud.
-    init_point_cloud_num: number of points to init point cloud, only used when init_point_cloud_mode is uniform or random.
+    init_point_cloud_num: number of points to sample for point cloud initialization.
+    init_point_cloud_fbp_use_filter: use filtered back-projection when init_point_cloud_mode is FBP. If False, use the adjoint instead.
+    init_point_cloud_fbp_phase_max: upper bound of phase used for FBP initialization. Only frames with phase in [0, phase_max] are used.
     coronary_type: only used when init_point_cloud_mode is label, specify which coronary to reconstruct
     train_ratio: ratio of images to use for training, only used when mode is render-new-views
     seed: random seed for data splitting and point cloud initialization
@@ -94,6 +99,11 @@ class RotatedXRay(DataParserConfig):
     mode: Literal["reconstruction", "render-new-views"] = "reconstruction"
     init_point_cloud_mode: Literal["uniform", "random", "random-ball", "FBP", "DL", "label", "central-line"] = "uniform"
     init_point_cloud_num: int = 100_000
+    
+    init_point_cloud_fbp_use_filter: bool = True
+    init_point_cloud_fbp_phase_min: float = 0.0
+    init_point_cloud_fbp_phase_max: float = 0.5
+    
     coronary_type: Literal["LCA", "RCA"]|None = None
     train_ratio: float = 0.8
     seed: int = 0
@@ -102,12 +112,14 @@ class RotatedXRay(DataParserConfig):
     def instantiate(self, path: str, output_path: str, global_rank: int) -> DataParser:
         return RotatedXRayDataParser(path=path, output_path=output_path, global_rank=global_rank, params=self)
 
+def _get_frames_list(json_data: dict, key: str, indices: list[int] | None = None) -> list[Any]:
+    if indices is None:
+        return [d[key] for d in json_data["frames"]]
+    else:
+        return [json_data["frames"][i][key] for i in indices]
 
 def _get_frames_param(json_data: dict, key: str, indices: list[int] | None = None) -> torch.Tensor:
-    if indices is None:
-        return torch.tensor([d[key] for d in json_data["frames"]])
-    else:
-        return torch.tensor([json_data["frames"][i][key] for i in indices])
+    return torch.tensor(_get_frames_list(json_data, key, indices))
 
 
 def _get_cameras(json_data: dict, indices: list[int] | None = None) -> Cameras:
@@ -206,10 +218,103 @@ def _filter_points_visible(
     # 只要进过任意一个相机
     visible_any = in_frustum.any(dim=0)  # (N,)
     return points_[visible_any].cpu().numpy()
+
+
+
+def _preprocess_indices_alphas(
+    indices: list[int],
+    alphas: list[float],
+    phases: list[float],
+    phase_min: float,
+    phase_max: float,
+) -> tuple[list[int], list[float]]:
+    assert phase_min >= 0.0 and phase_max <= 0.5 and phase_min <= phase_max, \
+        f"Invalid phase range: [{phase_min}, {phase_max}]"
+    
+    # DSA 中 alpha 角为从前向右转。在 RAS 坐标系中即旋转方向从 前（A +Y）转到右（R +X），即绕 Z 轴负向旋转。
+    # degree 转 radian
+    alphas = [-math.radians(a) for a in alphas]
+    
+    data = zip(indices, alphas, phases)
+    
+    # 收缩期和舒张期大致对称，因此也可以考虑使用对称的 phase 范围 [1-phase_max, 1] 来增加可用的视角数量
+    y0 = 1 - phase_min
+    y1 = 1 - phase_max
+    
+    phase_min_sym = min(y0, y1)
+    phase_max_sym = max(y0, y1)
+    
+    data_selected = [
+        (i, a, phi) for i, a, phi in data
+        if (
+            (phi <= phase_max + 1e-8 and phi >= phase_min - 1e-8) or
+            (phi <= phase_max_sym + 1e-8 and phi >= phase_min_sym - 1e-8)
+        )
+    ]
+
+    if len(data_selected) == 0:
+        raise ValueError(f"No frames found in phase range [0, {phase_max}]")
+
+    # ODL 仅接受单调递增的视角列表，因此根据 alpha 角对选定的帧进行排序
+    data_sorted = sorted(data_selected, key=lambda d: float(d[1]))
+    
+    indices, alphas, phases = map(list, zip(*data_sorted))
+
+    return indices, alphas
+
+
+def _sample_points_from_volume(
+    volume: np.ndarray,
+    affine: np.ndarray,
+    num_points: int,
+    seed: int,
+) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    
+    volume = volume.astype(np.float32)
+    volume = np.nan_to_num(volume, nan=0.0, posinf=0.0, neginf=0.0)
+
+    if volume.size == 0:
+        raise ValueError("Cannot sample points from an empty volume")
+
+    volume = volume - volume.min()
+    
+    threshold = np.percentile(volume, 75)
+    mask = volume > threshold
+    indices = np.argwhere(mask)
+    weights = volume[mask]
+    weights /= weights.sum()
+    
+    chosen = rng.choice(len(indices), size=num_points, p=weights)
+    coords = indices[chosen]
+
+    coords_h = np.concatenate([coords, np.ones((coords.shape[0], 1), dtype=np.float64)], axis=1)
+    xyz = (coords_h @ np.asarray(affine, dtype=np.float64).T)[:, :3]
+    return xyz
     
 
-
 class RotatedXRayDataParser(DataParser):
+    path: str       # path to data root, which contains the json file, image folder and label folder
+    output_path: str    # path to save the outputs, including the validation results, checkpoint, log, etc.
+    global_rank: int
+    params: RotatedXRay
+    
+    data_root: Path #  Path(self.path)
+    data: dict[str, Any]
+    coronary_type: Literal["LCA", "RCA"]
+    volume_shape: tuple[int, int, int]
+    _affine_dict: dict[Literal["LCA", "RCA", "volume"], np.ndarray]
+    
+    image_paths: list[Path]
+    label_paths: list[Path]
+    image_names: list[str]
+    json_path: Path
+    
+    train_indices: list[int]
+    valid_indices: list[int]
+    
+    depth_npy: np.ndarray
+    
     def __init__(
         self,
         path: str,
@@ -222,10 +327,40 @@ class RotatedXRayDataParser(DataParser):
         self.output_path = output_path
         self.global_rank = global_rank
         self.params = params
-        self._data: dict|None = None
-        self._coronary_type: Literal["LCA", "RCA"]|None = params.coronary_type
-        self._volume_shape: tuple[int, int, int]|None = None
-        self._affine_dict: dict[Literal["LCA", "RCA", "volume"], np.ndarray]|None = None
+        
+        self.data_root = Path(self.path)
+        images_dir = self.data_root / self.params.base_name
+        label_dir = self.data_root / "label"
+        
+        self.json_path = self.data_root / f"{self.params.base_name}.json"
+        
+        self.depth_npy = np.load(self.data_root / "depth_map.npz")["arr_0"]
+        
+        with open(self.json_path, "r") as f:
+            data = json.load(f)
+        
+        self.data = data
+        self.coronary_type = data["coronary_type"].upper()
+        assert self.coronary_type in ["LCA", "RCA"], f"Unknown coronary type: {self.coronary_type}"
+        self.volume_shape = tuple(data["volume_size"])
+        self._affine_dict = {
+            "LCA": np.array(data["lca_centering_affine"]),
+            "RCA": np.array(data["rca_centering_affine"]),
+            "volume": np.array(data["volume_affine"]),
+        }
+        
+        self.image_paths = [f.absolute() for f in sorted(images_dir.glob("*.png"))]
+        self.label_paths = [f.absolute() for f in sorted(label_dir.glob("*.png"))]
+        self.image_names = [f.name for f in self.image_paths]
+        all_indices = list(range(len(self.image_paths)))
+        
+        if self.params.mode == "reconstruction":
+            self.train_indices = all_indices
+            self.valid_indices = all_indices
+        elif self.params.mode == "render-new-views":
+            self.train_indices, self.valid_indices = self._random_split(len(self.image_paths))
+        else:
+            raise ValueError(f"Unknown mode: {self.params.mode}")
     
     def _random_split(self, n_images: int) -> tuple[list[int], list[int]]:
         indices = np.arange(n_images)
@@ -249,62 +384,20 @@ class RotatedXRayDataParser(DataParser):
         valid_indices = indices[len_train:].tolist()
         return train_indices, valid_indices
 
-    def get_outputs(self) -> DataParserOutputs:
-        data_root = Path(self.path)
-        images_dir = data_root / self.params.base_name
-        label_dir = data_root / "label"
-        json_path = data_root / f"{self.params.base_name}.json"
-        depth_npy = np.load(data_root / "depth_map.npz")["arr_0"]
-        
-        with open(json_path, "r") as f:
-            data = json.load(f)
-        
-        self._data = data
-        self._coronary_type = data["coronary_type"].upper()
-        assert self._coronary_type in ["LCA", "RCA"], f"Unknown coronary type: {self._coronary_type}"
-        self._volume_shape = tuple(data["volume_size"])
-        self._affine_dict = {
-            "LCA": np.array(data["lca_centering_affine"]),
-            "RCA": np.array(data["rca_centering_affine"]),
-            "volume": np.array(data["volume_affine"]),
-        }
-        
-        image_paths = [f.absolute() for f in sorted(images_dir.glob("*.png"))]
-        label_paths = [f.absolute() for f in sorted(label_dir.glob("*.png"))]
-        image_names = [f.name for f in image_paths]
-        
-        if self.params.mode == "reconstruction":
-            train_set = ImageSet(
-                image_names=image_names,
-                image_paths=image_paths,
-                mask_paths=label_paths,
-                cameras=_get_cameras(data),
-                extra_data=depth_npy,
+    def get_outputs(self) -> DataParserOutputs:        
+        def _get_set(indices: list[int]) -> ImageSet:
+            return ImageSet(
+                image_names=[self.image_names[i] for i in indices],
+                image_paths=[self.image_paths[i] for i in indices],
+                mask_paths=[self.label_paths[i] for i in indices],
+                cameras=_get_cameras(self.data, indices),
+                extra_data=self.depth_npy[indices].tolist(),
                 extra_data_processor=torch.from_numpy
             )
-            valid_set = train_set
-            test_set = train_set
-        elif self.params.mode == "render-new-views":
-            train_indices, valid_indices = self._random_split(len(image_paths))
-            train_set = ImageSet(
-                image_names=[image_names[i] for i in train_indices],
-                image_paths=[image_paths[i] for i in train_indices],
-                mask_paths=[label_paths[i] for i in train_indices],
-                cameras=_get_cameras(data, train_indices),
-                extra_data=depth_npy[train_indices],
-                extra_data_processor=torch.from_numpy
-            )
-            valid_set = ImageSet(
-                image_names=[image_names[i] for i in valid_indices],
-                image_paths=[image_paths[i] for i in valid_indices],
-                mask_paths=[label_paths[i] for i in valid_indices],
-                cameras=_get_cameras(data, valid_indices),
-                extra_data=depth_npy[valid_indices],
-                extra_data_processor=torch.from_numpy
-            )
-            test_set = valid_set
-        else:
-            raise ValueError(f"Unknown mode: {self.params.mode}")
+
+        train_set = _get_set(self.train_indices)
+        valid_set = _get_set(self.valid_indices)
+        test_set = _get_set(self.valid_indices)  # use the same set for validation and testing
         
         bounds = self._get_bounds()
         match self.params.init_point_cloud_mode:
@@ -313,7 +406,7 @@ class RotatedXRayDataParser(DataParser):
                 axes = [np.linspace(-0.5 * b, 0.5 * b, size) for b in bounds]
                 xyz = np.array(np.meshgrid(*axes, indexing="ij")).reshape(3, -1).T
             case "random":
-                xyz = np.random.rand(self.params.init_point_cloud_num, 3) * bounds - 0.5 * bounds
+                xyz = np.random.rand(self.params.init_point_cloud_num, 3) * bounds - bounds * 0.5
             case "random-ball":
                 rng = np.random.default_rng(self.params.seed)
                 phi = rng.uniform(0, 2 * np.pi, self.params.init_point_cloud_num)
@@ -327,17 +420,17 @@ class RotatedXRayDataParser(DataParser):
                     r * np.cos(theta)
                 ]).T
             case "FBP":
-                raise NotImplementedError   # TODO
+                xyz, volume = self._init_point_cloud_from_fbp()
             case "DL":
                 raise NotImplementedError   # TODO
             case "label":
                 assert self.params.coronary_type is not None, "coronary_type must be specified when init_point_cloud_mode is label"
-                assert self.params.coronary_type == self._coronary_type, f"coronary_type in params ({self.params.coronary_type}) must be the same as coronary_type in data ({self._coronary_type})"
-                xyz = init_point_cloud_from_label(data_root / "label_3d.nii.gz", coronary_type=self.params.coronary_type)
+                assert self.params.coronary_type == self.coronary_type, f"coronary_type in params ({self.params.coronary_type}) must be the same as coronary_type in data ({self.coronary_type})"
+                xyz = init_point_cloud_from_label(self.data_root / "label_3d.nii.gz", coronary_type=self.params.coronary_type)
                 xyz_background = _get_backgound_gaussian_from_xyz(torch.from_numpy(xyz).float()).numpy()
                 xyz = np.concatenate([xyz, xyz_background], axis=0)
             case "central-line":
-                xyz = np.load(data_root / "central_line.npz")["arr_0"]
+                xyz = np.load(self.data_root / "central_line.npz")["arr_0"]
                 xyz_background = _get_backgound_gaussian_from_xyz(torch.from_numpy(xyz).float()).numpy()
                 xyz = np.concatenate([xyz, xyz_background], axis=0)
             case _:
@@ -345,6 +438,10 @@ class RotatedXRayDataParser(DataParser):
         
         xyz = _filter_points_visible(xyz, train_set.cameras)
         rgb = np.ones(xyz.shape) * 127
+        
+        assert xyz.shape[0] > 0, "No points are visible in any camera; check the volume bounds and camera parameters"
+        assert len(train_set.cameras) > 0, "No cameras found; check the input data and camera parsing"
+        
         return DataParserOutputs(
             train_set=train_set,
             val_set=valid_set,
@@ -353,34 +450,66 @@ class RotatedXRayDataParser(DataParser):
         )
     
     @property
-    def coronary_type(self) -> Literal["LCA", "RCA"]:
-        assert self._coronary_type is not None, "coronary_type is not set yet"
-        return self._coronary_type
-    
-    @property
-    def volume_shape(self) -> tuple[int, int, int]:
-        assert self._volume_shape is not None, "volume_shape is not set yet"
-        return self._volume_shape
-    
-    @property
     def volume_affine(self) -> np.ndarray:
         assert self._affine_dict is not None, "affine_dict is not set yet"
         return self._affine_dict["volume"]
     
     @property
-    def data(self) -> dict:
-        assert self._data is not None, "data is not set yet"
-        return self._data
-    
-    @property
     def coronary_affine(self) -> np.ndarray:
+        """Get the centering affine for the specified coronary type (LCA or RCA)."""
         assert self._affine_dict is not None, "affine_dict is not set yet"
         return self._affine_dict[self.coronary_type]
 
+
     def _get_bounds(self) -> np.ndarray:
         shape = np.array(self.volume_shape)
-        affine = self.volume_affine
+        affine = self.coronary_affine
         return np.abs(affine[:3, :3]) @ shape
+    
+    
+    def _init_point_cloud_from_fbp(self) -> tuple[np.ndarray, np.ndarray]:
+        data = self.data
+        
+        # FBP 初始化仅使用训练集的图像，防止可能的数据泄露造成的 valid/test 评估不公平。
+        # 但需要注意如果 mode 是 reconstruction，则训练集已包含所有图像。
+        indices, alphas = _preprocess_indices_alphas(
+            indices     =   self.train_indices,
+            alphas      =   _get_frames_list(data, "alpha_degree", self.train_indices),
+            phases      =   _get_frames_list(data, "phase", self.train_indices),
+            phase_min   =   self.params.init_point_cloud_fbp_phase_min,
+            phase_max   =   self.params.init_point_cloud_fbp_phase_max
+        )
+
+        projections = np.stack([
+            np.asarray(Image.open(self.image_paths[i]).convert("L"))
+            for i in indices
+        ], axis=0)
+        
+        geom = data["c_arm_geometry"]
+        affine = self.coronary_affine   # 注意这里使用 centering affine 来保证 FBP 初始化的点云与后续训练使用的坐标系一致
+        projector = ConeBeamProjector(
+            param = ConeBeamParams.init_from(
+                shape       =   self.volume_shape,
+                affine      =   affine,    
+                alphas      =   np.asarray(alphas),
+                proj_size   =   projections.shape[1:],
+                dh          =   geom["dely"],
+                dw          =   geom["delx"],
+                dde         =   geom["sdd"] - geom["sod"],
+                dso         =   geom["sod"],
+            ), 
+            img_transform = PngOdlTransform()
+        )
+        
+        volume = projector.backward_proj(projections, use_filter=self.params.init_point_cloud_fbp_use_filter)
+        xyz = _sample_points_from_volume(
+            volume=volume,
+            affine=affine,
+            num_points=self.params.init_point_cloud_num,
+            seed=self.params.seed,
+        )
+        
+        return xyz, volume
 
 
 def init_point_cloud_from_label(

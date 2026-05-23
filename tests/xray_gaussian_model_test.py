@@ -23,9 +23,10 @@ from internal.savers.x_ray_saver import XRaySaver
 class TestDeformableXrayRenderAndSaver(unittest.TestCase):
     def setUp(self):
         parser = RotatedXRay(
-            init_point_cloud_mode="random"
+            init_point_cloud_mode="FBP",
+            init_point_cloud_fbp_phase_max=0.2
         ).instantiate(
-            path="data/volume_dvf_reader_multipli_contrast_LCA",
+            path="data/asoca-diseased__Diseased_17__LCA",
             output_path="outputs/temp",
             global_rank=0
         )
@@ -111,4 +112,4 @@ if __name__ == "__main__":
     test = TestDeformableXrayRenderAndSaver()
     test.setUp()
     test.test_training_forward()
-    test.test_saver()
+    # test.test_saver()

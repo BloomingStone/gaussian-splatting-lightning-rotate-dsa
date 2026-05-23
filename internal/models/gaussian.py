@@ -78,7 +78,7 @@ class GaussianModel(nn.Module, ABC):
         self.gaussians = FreezableParameterDict(self.gaussians, new_requires_grad=False)
 
     @abstractmethod
-    def setup_from_pcd(self, xyz, rgb, *args, **kwargs):
+    def setup_from_pcd(self, xyz, rgb, init_scale: float=1.0, *args, **kwargs):
         """
         Args:
             xyz: [N, 3]
