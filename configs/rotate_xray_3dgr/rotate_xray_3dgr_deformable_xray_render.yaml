@@ -12,7 +12,7 @@ trainer:
           class_path: internal.savers.x_ray_saver.XRaySaver
           init_args:
             save_ckpt: false
-            save_ply: false
+            save_vtp: false
             save_nii: true
             save_phase: 0.5
     - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd

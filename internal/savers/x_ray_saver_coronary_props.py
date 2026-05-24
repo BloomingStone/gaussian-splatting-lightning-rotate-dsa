@@ -4,7 +4,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 
 import numpy as np
 import torch
-from gsplat.exporter import export_splats
+import pyvista as pv
 import nibabel as nib
 from nibabel import loadsave as nib_io
 from nibabel.nifti1 import Nifti1Image
@@ -149,7 +149,7 @@ def gaussians_to_volume_by_Rasterizer(
 @dataclass
 class XRaySaver(Saver):
     save_ckpt: bool = True
-    save_ply: bool = True
+    save_vtp: bool = True
     save_nii: bool = True
     save_phase: float = 0.0
     def instantiate(self, *args, **kwargs) -> "XRaySaverModule":
@@ -157,13 +157,12 @@ class XRaySaver(Saver):
 
 
 @dataclass
-class PlySavePayload:
+class VtpSavePayload:
     path: Path
-    means: torch.Tensor
-    scales: torch.Tensor
-    quats: torch.Tensor
-    opacities: torch.Tensor
-    sh0: torch.Tensor
+    means: np.ndarray
+    scales: np.ndarray
+    rotations: np.ndarray
+    density: np.ndarray
 
 
 @dataclass
@@ -178,7 +177,7 @@ class NiftiSavePayload:
 
 @dataclass
 class SaveOutputsPayload:
-    ply: PlySavePayload | None = None
+    vtp: VtpSavePayload | None = None
     nifti: NiftiSavePayload | None = None
 
 class XRaySaverModule(SaverModule):
@@ -192,22 +191,13 @@ class XRaySaverModule(SaverModule):
     def _save_outputs(
         payload: SaveOutputsPayload,
     ) -> None:
-        if payload.ply is not None:
-            export_splats(
-                means=payload.ply.means,
-                scales=payload.ply.scales,
-                quats=payload.ply.quats,
-                opacities=payload.ply.opacities.squeeze(),
-                sh0=payload.ply.sh0,
-                shN=torch.zeros(
-                    payload.ply.opacities.shape[0],
-                    0,
-                    3,
-                    dtype=payload.ply.sh0.dtype,
-                    device=payload.ply.sh0.device,
-                ),
-                save_to=str(payload.ply.path),
-            )
+        if payload.vtp is not None:
+            pd = pv.PolyData(payload.vtp.means)
+            pd.point_data["density"] = payload.vtp.density
+            pd.point_data["scales"] = payload.vtp.scales
+            pd.point_data["rotations"] = payload.vtp.rotations
+            pd.field_data["model_type"] = np.array(["XrayCoronaryGaussian"])
+            pv.save_meshio(str(payload.vtp.path), pd)
 
         if payload.nifti is not None:
             nib_io.save(
@@ -258,21 +248,18 @@ class XRaySaverModule(SaverModule):
             means3D, rotation, scales, d_xyz, d_rotation, d_scaling
         )
         
-        ply_payload: PlySavePayload | None = None
+        vtp_payload: VtpSavePayload | None = None
 
-        if self.config.save_ply:
-            ply_dir = output_root / "point_cloud"
-            ply_dir.mkdir(parents=True, exist_ok=True)
-            ply_path = ply_dir / f"iteration_{step}.ply"
-            gray = torch.exp(-density)
-            sh0 = gray[..., None].repeat(1, 1, 3)
-            ply_payload = PlySavePayload(
-                path=ply_path,
-                means=means3D.detach().cpu(),
-                scales=pc.scale_inverse_activation(scales).detach().cpu(),
-                quats=pc.scale_inverse_activation(rotation).detach().cpu(),
-                opacities=gray.detach().cpu(),
-                sh0=sh0.detach().cpu(),
+        if self.config.save_vtp:
+            vtp_dir = output_root / "point_cloud"
+            vtp_dir.mkdir(parents=True, exist_ok=True)
+            vtp_path = vtp_dir / f"iteration_{step}.vtp"
+            vtp_payload = VtpSavePayload(
+                path=vtp_path,
+                means=means3D.detach().cpu().numpy().astype(np.float32),
+                scales=pc.scale_inverse_activation(scales).detach().cpu().numpy().astype(np.float32),
+                rotations=pc.rotation_inverse_activation(rotation).detach().cpu().numpy().astype(np.float32),
+                density=density.detach().cpu().numpy().astype(np.float32),
             )
 
         nifti_payload: NiftiSavePayload | None = None
@@ -303,6 +290,6 @@ class XRaySaverModule(SaverModule):
         if self._pending_save is not None and not self._pending_save.done():
             self._pending_save.result()
 
-        payload = SaveOutputsPayload(ply=ply_payload, nifti=nifti_payload)
+        payload = SaveOutputsPayload(vtp=vtp_payload, nifti=nifti_payload)
         self._pending_save = self._save_executor.submit(self._save_outputs, payload)
         
