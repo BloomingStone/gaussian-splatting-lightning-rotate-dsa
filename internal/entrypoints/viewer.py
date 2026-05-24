@@ -1,6 +1,6 @@
 import argparse
 import torch
-from internal.viewer.viewer import Viewer
+from internal.web_viewer.viewer import Viewer
 
 
 def cli():

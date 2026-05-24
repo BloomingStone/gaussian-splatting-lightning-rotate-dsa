@@ -281,6 +281,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/docker-pycreds-0.4.0-py_0.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/noarch/docstring_parser-0.18.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/docutils-0.22.4-pyhd8ed1ab_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/e3nn-0.6.0-pyhcf101f3_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/einops-0.8.2-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/eval_type_backport-0.3.1-pyha770c72_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/exceptiongroup-1.3.1-pyhd8ed1ab_0.conda
@@ -349,6 +350,9 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/nodeenv-1.10.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/notebook-7.5.6-pyhcf101f3_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/notebook-shim-0.2.4-pyhd8ed1ab_1.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/opt-einsum-3.4.0-hd8ed1ab_1.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/opt_einsum-3.4.0-pyhd8ed1ab_1.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/opt_einsum_fx-0.1.4-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/overrides-7.7.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/packaging-26.2-pyhc364b38_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pandocfilters-1.5.0-pyhd8ed1ab_0.tar.bz2
@@ -423,11 +427,11 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/yourdfpy-0.0.57-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: .
-      - pypi: git+https://github.com/BloomingStone/diff-gaussian-rasterization.git?branch=main#a829cd8b5a90aa1751b0116e4ceb0c79467b32cc
-      - pypi: git+https://github.com/NVlabs/tiny-cuda-nn.git?subdirectory=bindings%2Ftorch&rev=68d4f0f1f81fa9085fff66077d9966c8323095bc#68d4f0f1f81fa9085fff66077d9966c8323095bc
-      - pypi: git+https://github.com/Ruyi-Zha/r2_gaussian.git?subdirectory=r2_gaussian%2Fsubmodules%2Fxray-gaussian-rasterization-voxelization#f2579bfddd9aac009cb797c8503bef8119bbd022
-      - pypi: git+https://github.com/nerfstudio-project/gsplat.git?tag=v1.5.3#937e29912570c372bed6747a5c9bf85fed877bae
-      - pypi: git+https://github.com/rahul-goel/fused-ssim.git?branch=main#a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38
+      - pypi: git+https://github.com/bloomingstone/diff-gaussian-rasterization?branch=main#a829cd8b5a90aa1751b0116e4ceb0c79467b32cc
+      - pypi: git+https://github.com/nerfstudio-project/gsplat?tag=v1.5.3#937e29912570c372bed6747a5c9bf85fed877bae
+      - pypi: git+https://github.com/nvlabs/tiny-cuda-nn?subdirectory=bindings%2Ftorch&rev=68d4f0f1f81fa9085fff66077d9966c8323095bc#68d4f0f1f81fa9085fff66077d9966c8323095bc
+      - pypi: git+https://github.com/rahul-goel/fused-ssim?branch=main#a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38
+      - pypi: git+https://github.com/ruyi-zha/r2_gaussian?subdirectory=r2_gaussian%2Fsubmodules%2Fxray-gaussian-rasterization-voxelization#f2579bfddd9aac009cb797c8503bef8119bbd022
       - pypi: https://files.pythonhosted.org/packages/19/57/3443d6f183436fbdaf5000aac332c4d5ddb056665d459244a5608e98ae92/bitsandbytes-0.49.2-py3-none-manylinux_2_24_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/25/f4/ead6e0e37209b07c9baa3e984ccdb0348ca370b77cea3aaea8ddbb097e00/lightning_utilities-0.15.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/31/d5/95e6e5b128cfc891bbeb33e56300bed52f9ceaa3028f1f20730105bb35ae/lightning-2.6.4-py3-none-any.whl
@@ -4378,6 +4382,22 @@ packages:
   - pkg:pypi/docutils?source=hash-mapping
   size: 438002
   timestamp: 1766092633160
+- conda: https://conda.anaconda.org/conda-forge/noarch/e3nn-0.6.0-pyhcf101f3_1.conda
+  sha256: 6f0b58e8427e8399094a8e8fb9b0a74008a73bd82c562842b086ffa7dec7b981
+  md5: ff4d702b7a86d1906ab0b35f8420383e
+  depends:
+  - opt_einsum_fx >=0.1.4
+  - python >=3.10
+  - scipy
+  - sympy
+  - pytorch >=1.8.0
+  - python
+  license: MIT
+  license_family: MIT
+  purls:
+  - pkg:pypi/e3nn?source=hash-mapping
+  size: 391463
+  timestamp: 1777474663095
 - conda: https://conda.anaconda.org/conda-forge/noarch/einops-0.8.2-pyhd8ed1ab_0.conda
   sha256: 3f2f951176fe646371b7bf09d42521b5a30a7a5d5c7ba49eb79efb97fe870cfa
   md5: 59f72c47e4c63aacae4b322ac00bda7c
@@ -5325,6 +5345,41 @@ packages:
   - pkg:pypi/notebook-shim?source=hash-mapping
   size: 16817
   timestamp: 1733408419340
+- conda: https://conda.anaconda.org/conda-forge/noarch/opt-einsum-3.4.0-hd8ed1ab_1.conda
+  sha256: 8db3d841c72f184de69e1237b900a2d79c742e30e8378973814543bf987b6bc6
+  md5: b94f689d8b1ce7dd212946e0331037ad
+  depends:
+  - opt_einsum >=3.4.0,<3.4.1.0a0
+  license: MIT
+  license_family: MIT
+  purls: []
+  size: 6558
+  timestamp: 1733688054327
+- conda: https://conda.anaconda.org/conda-forge/noarch/opt_einsum-3.4.0-pyhd8ed1ab_1.conda
+  sha256: af71aabb2bfa4b2c89b7b06403e5cec23b418452cae9f9772bd7ac3f9ea1ff44
+  md5: 52919815cd35c4e1a0298af658ccda04
+  depends:
+  - python >=3.9
+  license: MIT
+  license_family: MIT
+  purls:
+  - pkg:pypi/opt-einsum?source=hash-mapping
+  size: 62479
+  timestamp: 1733688053334
+- conda: https://conda.anaconda.org/conda-forge/noarch/opt_einsum_fx-0.1.4-pyhd8ed1ab_1.conda
+  sha256: ce86179c307c19643655d2e171c782b006c9eb35dbd501bcb197c4944dad2bda
+  md5: 00e15f6b5740a25b86dabf22483b002c
+  depends:
+  - opt-einsum
+  - packaging
+  - python >=3.9
+  - pytorch >=1.8.0
+  license: MIT
+  license_family: MIT
+  purls:
+  - pkg:pypi/opt-einsum-fx?source=hash-mapping
+  size: 17532
+  timestamp: 1734789249385
 - conda: https://conda.anaconda.org/conda-forge/noarch/overrides-7.7.0-pyhd8ed1ab_1.conda
   sha256: 1840bd90d25d4930d60f57b4f38d4e0ae3f5b8db2819638709c36098c6ba770c
   md5: e51f1e4089cad105b6cac64bd8166587
@@ -6287,16 +6342,10 @@ packages:
 - pypi: .
   name: gaussian-splatting-lightning
   requires_python: '>=3.10'
-- pypi: git+https://github.com/BloomingStone/diff-gaussian-rasterization.git?branch=main#a829cd8b5a90aa1751b0116e4ceb0c79467b32cc
+- pypi: git+https://github.com/bloomingstone/diff-gaussian-rasterization?branch=main#a829cd8b5a90aa1751b0116e4ceb0c79467b32cc
   name: diff-gaussian-rasterization
   version: 0.0.0
-- pypi: git+https://github.com/NVlabs/tiny-cuda-nn.git?subdirectory=bindings%2Ftorch&rev=68d4f0f1f81fa9085fff66077d9966c8323095bc#68d4f0f1f81fa9085fff66077d9966c8323095bc
-  name: tinycudann
-  version: '2.0'
-- pypi: git+https://github.com/Ruyi-Zha/r2_gaussian.git?subdirectory=r2_gaussian%2Fsubmodules%2Fxray-gaussian-rasterization-voxelization#f2579bfddd9aac009cb797c8503bef8119bbd022
-  name: xray-gaussian-rasterization-voxelization
-  version: 0.0.0
-- pypi: git+https://github.com/nerfstudio-project/gsplat.git?tag=v1.5.3#937e29912570c372bed6747a5c9bf85fed877bae
+- pypi: git+https://github.com/nerfstudio-project/gsplat?tag=v1.5.3#937e29912570c372bed6747a5c9bf85fed877bae
   name: gsplat
   version: 1.5.3
   requires_dist:
@@ -6316,12 +6365,18 @@ packages:
   - build ; extra == 'dev'
   - twine ; extra == 'dev'
   requires_python: '>=3.7'
-- pypi: git+https://github.com/rahul-goel/fused-ssim.git?branch=main#a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38
+- pypi: git+https://github.com/nvlabs/tiny-cuda-nn?subdirectory=bindings%2Ftorch&rev=68d4f0f1f81fa9085fff66077d9966c8323095bc#68d4f0f1f81fa9085fff66077d9966c8323095bc
+  name: tinycudann
+  version: '2.0'
+- pypi: git+https://github.com/rahul-goel/fused-ssim?branch=main#a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38
   name: fused-ssim
   version: 1.0.0
   requires_dist:
   - torch>=2.0.0
   requires_python: '>=3.8'
+- pypi: git+https://github.com/ruyi-zha/r2_gaussian?subdirectory=r2_gaussian%2Fsubmodules%2Fxray-gaussian-rasterization-voxelization#f2579bfddd9aac009cb797c8503bef8119bbd022
+  name: xray-gaussian-rasterization-voxelization
+  version: 0.0.0
 - pypi: https://files.pythonhosted.org/packages/19/57/3443d6f183436fbdaf5000aac332c4d5ddb056665d459244a5608e98ae92/bitsandbytes-0.49.2-py3-none-manylinux_2_24_x86_64.whl
   name: bitsandbytes
   version: 0.49.2

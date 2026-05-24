@@ -1,10 +1,12 @@
+import glob
+import os
 from pathlib import Path
 import torch
-from typing import Tuple
+from typing import Tuple, cast
 
-from ..models.gaussian import Gaussian
-from ..renderers import RendererConfig
-from ..renderers.vanilla_renderer import VanillaRenderer
+from ...models.gaussian import Gaussian
+from ...renderers import RendererConfig
+from ...renderers.vanilla_renderer import VanillaRenderer
 
 
 class GaussianModelLoader:
@@ -29,8 +31,9 @@ class GaussianModelLoader:
     }
 
     @staticmethod
-    def search_load_file(model_path: Path) -> Path:
-        # if a directory path is provided, auto search checkpoint or ply
+    def search_load_file(model_path: Path|str) -> Path:
+        model_path = Path(model_path)
+        # if a directory path is provided, auto search checkpoint or vtp
         if model_path.is_file():
             return model_path
         # search checkpoint
@@ -64,7 +67,7 @@ class GaussianModelLoader:
                     continue
                 if point_cloud_iteration > previous_point_cloud_iteration:
                     previous_point_cloud_iteration = point_cloud_iteration
-                    load_from = p / "point_cloud.ply"
+                    load_from = p / "point_cloud.vtp"
 
         assert load_from is not None, "not a checkpoint or point cloud can be found"
 
@@ -163,32 +166,44 @@ class GaussianModelLoader:
         return model, renderer, checkpoint
 
     @staticmethod
-    def initialize_model_and_renderer_from_ply_file(ply_file_path: str, device, eval_mode: bool = True, pre_activate: bool = True):
-        from internal.utils.gaussian_utils import GaussianPlyUtils
-        gaussian_ply_utils = GaussianPlyUtils.load_from_ply(ply_file_path).to_parameter_structure()
-        model_state_dict = {
-            "_active_sh_degree": torch.tensor(gaussian_ply_utils.sh_degrees, dtype=torch.int, device=device),
-            "gaussians.means": gaussian_ply_utils.xyz.to(device),
-            "gaussians.opacities": gaussian_ply_utils.opacities.to(device),
-            "gaussians.shs_dc": gaussian_ply_utils.features_dc.to(device),
-            "gaussians.shs_rest": gaussian_ply_utils.features_rest.to(device),
-            "gaussians.scales": gaussian_ply_utils.scales.to(device),
-            "gaussians.rotations": gaussian_ply_utils.rotations.to(device),
-        }
+    def initialize_model_and_renderer_from_vtp_file(vtp_file_path: Path, device, eval_mode: bool = True, pre_activate: bool = True):
+        import pyvista as pv
 
-        # use 2DGS if the number of last dim is 2
-        if model_state_dict["gaussians.scales"].shape[-1] == 2:
+        polydata = cast(pv.PolyData, pv.read(vtp_file_path))
+
+        # detect model type from stored field_data, fallback to VanillaGaussian
+        model_type = "VanillaGaussian"
+        if "model_type" in polydata.field_data:
+            model_type = str(polydata.field_data["model_type"][0])
+
+        # detect 2DGS from scales shape
+        if "scales" in polydata.point_data and polydata.point_data["scales"].shape[-1] == 2:
             from internal.models.gaussian_2d import Gaussian2D
-            model = Gaussian2D(sh_degree=gaussian_ply_utils.sh_degrees).instantiate()
+            # determine sh_degree from shs_rest
+            sh_degree = 0
+            if "shs_rest" in polydata.point_data:
+                rest_dim = polydata.point_data["shs_rest"].shape[1]
+                for i in range(4):
+                    if rest_dim == (i + 1) ** 2 - 1:
+                        sh_degree = i
+                        break
+            model = Gaussian2D(sh_degree=sh_degree).instantiate()
             from internal.renderers.vanilla_2dgs_renderer import Vanilla2DGSRenderer
             renderer_type = Vanilla2DGSRenderer
         else:
             from internal.models.vanilla_gaussian import VanillaGaussian
-            model = VanillaGaussian(sh_degree=gaussian_ply_utils.sh_degrees).instantiate()
+            sh_degree = 3
+            if "shs_rest" in polydata.point_data:
+                rest_dim = polydata.point_data["shs_rest"].shape[1]
+                for i in range(4):
+                    if rest_dim == (i + 1) ** 2 - 1:
+                        sh_degree = i
+                        break
+            model = VanillaGaussian(sh_degree=sh_degree).instantiate()
             renderer_type = VanillaRenderer
-        model.setup_from_number(gaussian_ply_utils.xyz.shape[0])
+
         model.to(device)
-        model.load_state_dict(model_state_dict, strict=False)
+        model.setup_from_polydata(polydata)
 
         renderer = renderer_type().to(device)
 
@@ -212,15 +227,15 @@ class GaussianModelLoader:
             pre_activate: bool = True,
     ):
         load_from = cls.search_load_file(model_path)
-        if load_from.endswith(".ckpt"):
+        if load_from.suffix == ".ckpt":
             model, renderer, _ = cls.initialize_model_and_renderer_from_checkpoint_file(
                 load_from,
                 device=device,
                 eval_mode=eval_mode,
                 pre_activate=pre_activate,
             )
-        elif load_from.endswith(".ply"):
-            model, renderer = cls.initialize_model_and_renderer_from_ply_file(
+        elif load_from.suffix == ".vtp":
+            model, renderer = cls.initialize_model_and_renderer_from_vtp_file(
                 load_from,
                 device=device,
                 eval_mode=eval_mode,
@@ -323,7 +338,7 @@ class GSplatV1ExampleCheckpointLoader:
             means_key = "means3d"
 
         from internal.models.vanilla_gaussian import VanillaGaussian
-        from internal.utils.gaussian_utils import SHS_REST_DIM_TO_DEGREE
+        from internal.utils.guassian_utils.gaussian_utils import SHS_REST_DIM_TO_DEGREE
         model = VanillaGaussian(sh_degree=SHS_REST_DIM_TO_DEGREE[gaussian_state_dict["shN"].shape[1]]).instantiate()
         model.setup_from_number(gaussian_state_dict[means_key].shape[0])
 

@@ -1,7 +1,7 @@
 import os
 import torch
 import viser
-from ...utils.sh_utils import RGB2SH
+from ...utils.math.sh_utils import RGB2SH
 
 
 class DistanceMeasurementPanel:

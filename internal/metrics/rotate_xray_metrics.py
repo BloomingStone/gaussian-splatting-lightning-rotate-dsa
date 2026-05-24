@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torchmetrics.image import PeakSignalNoiseRatio
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
-from ..utils.ssim import ssim
+from .ssim import ssim
 from .metric import Metric, MetricImpl
 from ..renderers.deformabel_xray_renderer_coronary_props import XrayRendererOuputs
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel

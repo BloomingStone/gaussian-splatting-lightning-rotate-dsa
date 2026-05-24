@@ -12,7 +12,6 @@ import torch.utils.data
 from lightning import LightningDataModule
 from lightning.pytorch.utilities.types import EVAL_DATALOADERS, TRAIN_DATALOADERS
 
-from .utils.graphics_utils import store_ply
 from .cameras import Camera
 from .dataparsers import DataParserConfig, ImageSet
 
@@ -301,8 +300,6 @@ class DataModule(LightningDataModule):
             image_uint8: bool = False,
             async_caching: bool = False,
             allow_mask_interpolation: bool = False,
-            extra_points: str|None = None,
-            max_extra_points: int = -1,
     ) -> None:
         r"""Load dataset
 
@@ -348,7 +345,6 @@ class DataModule(LightningDataModule):
 
         # some extra points
         self._build_background_sphere()
-        self._fetch_extra_points()
 
         # convert point cloud
         self.point_cloud = self.dataparser_outputs.point_cloud
@@ -378,12 +374,11 @@ class DataModule(LightningDataModule):
             with open(os.path.join(output_path, "cameras.json"), "w") as f:
                 json.dump(cameras, f, indent=4, ensure_ascii=False)
 
-            # save input point cloud to ply file
-            store_ply(
-                os.path.join(output_path, "input.ply"),
-                xyz=self.dataparser_outputs.point_cloud.xyz,
-                rgb=self.dataparser_outputs.point_cloud.rgb,
-            )
+            # save input point cloud to vtp file
+            import pyvista as pv
+            pd = pv.PolyData(self.dataparser_outputs.point_cloud.xyz.astype(np.float32))
+            pd.point_data["rgb"] = self.dataparser_outputs.point_cloud.rgb.astype(np.float32)
+            pv.save_meshio(os.path.join(output_path, "input.vtp"), pd)
 
             # write cfg_args
             try:
@@ -451,31 +446,6 @@ class DataModule(LightningDataModule):
             self.prune_extent = scene_radius * self.hparams["background_sphere_distance"] * 1.0001
 
             print("added {} background sphere points, scene_center={}, scene_radius={}, rescale prune extent from {} to {}".format(background_sphere_point_xyz.shape, scene_center.tolist(), scene_radius, self.dataparser_outputs.camera_extent, self.prune_extent))
-
-    def _fetch_extra_points(self) -> None:
-        if self.hparams["extra_points"] is not None:
-            if self.hparams["extra_points"].endswith(".ply"):
-                from internal.utils.graphics_utils import fetch_ply_without_rgb_normalization
-                extra_pcd = fetch_ply_without_rgb_normalization(self.hparams["extra_points"])
-            elif self.hparams["extra_points"].endswith(".pcd"):
-                from internal.utils.graphics_utils import fetch_pcd
-                extra_pcd = fetch_pcd(self.hparams["extra_points"])
-            elif self.hparams["extra_points"].endswith(".las"):
-                from internal.utils.graphics_utils import fetch_las
-                extra_pcd = fetch_las(self.hparams["extra_points"])
-            elif os.path.isdir(self.hparams["extra_points"]):
-                from internal.utils.graphics_utils import fetch_pcd_dir
-                extra_pcd = fetch_pcd_dir(self.hparams["extra_points"])
-            print("Load {} extra points from {}".format(extra_pcd.points.shape[0], self.hparams["extra_points"]))
-
-            if self.hparams["max_extra_points"] > 0:
-                select_indices = np.random.choice(extra_pcd.points.shape[0], self.hparams["max_extra_points"])
-                extra_pcd.points = extra_pcd.points[select_indices]
-                extra_pcd.colors = extra_pcd.colors[select_indices]
-                print("Randomly selected {} extra points".format(extra_pcd.points.shape[0]))
-
-            self.dataparser_outputs.point_cloud.xyz = np.concatenate([self.dataparser_outputs.point_cloud.xyz, extra_pcd.points], axis=0)
-            self.dataparser_outputs.point_cloud.rgb = np.concatenate([self.dataparser_outputs.point_cloud.rgb, extra_pcd.colors], axis=0)
 
     def train_dataloader(self) -> TRAIN_DATALOADERS:
         assert self.trainer is not None, "trainer must be set before setup"

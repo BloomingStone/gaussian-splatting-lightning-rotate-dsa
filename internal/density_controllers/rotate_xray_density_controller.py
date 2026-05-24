@@ -5,7 +5,7 @@ from typing import override
 
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from .vanilla_density_controller import VanillaDensityControllerImpl, DensityController
-from . import density_controller_utils as utils
+from . import utils as utils
 from ..gaussian_splatting import GaussianSplatting
 from ..models.xray_coronary_gaussian import GaussianInits
 

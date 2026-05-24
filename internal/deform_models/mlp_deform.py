@@ -6,7 +6,7 @@ from torch import nn
 
 from .deform_model import DeformModel, DefromModelConfig
 from ..encodings.vector_positional_encoding import VectorPositionalEncoding
-from ..utils.rigid_utils import exp_se3
+from ..utils.math.rigid_utils import exp_se3
 
 
 @dataclass

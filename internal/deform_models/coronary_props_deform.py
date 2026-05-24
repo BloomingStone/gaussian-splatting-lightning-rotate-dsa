@@ -9,7 +9,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 from .deform_model import DeformModel, DefromModelConfig
-from ..utils.network_factory import NetworkFactory
+from .network_factory import NetworkFactory
 from ..encodings.vector_positional_encoding import VectorPositionalEncoding
 
 

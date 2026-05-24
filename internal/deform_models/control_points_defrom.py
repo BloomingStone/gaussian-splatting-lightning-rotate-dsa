@@ -5,7 +5,7 @@ from torch import nn
 
 from .deform_model import DeformModel, DefromModelConfig
 from ..encodings.vector_positional_encoding import VectorPositionalEncoding
-from internal.utils.gaussian_utils import GaussianTransformUtils
+from internal.utils.guassian_utils.gaussian_utils import GaussianTransformUtils
 
 
 class SafeExponential(nn.Module):

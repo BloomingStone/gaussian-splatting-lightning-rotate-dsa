@@ -197,7 +197,7 @@ class EditPanel:
                                     traceback.print_exc()
 
                                 if self.viewer.checkpoint is None:
-                                    from internal.utils.gaussian_utils import GaussianPlyUtils
+                                    from internal.utils.guassian_utils.gaussian_utils import GaussianPlyUtils
                                     # save ply
                                     ply_save_path = os.path.join(output_directory, "{}.ply".format(name))
                                     GaussianPlyUtils.load_from_model_properties(self.viewer.gaussian_model.get_non_pre_activated_properties(), self.viewer.gaussian_model.max_sh_degree).to_ply_format().save_to_ply(ply_save_path)

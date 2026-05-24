@@ -11,7 +11,7 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 import lightning.pytorch.loggers
 from jsonargparse.typing import lazy_instance
 
-from .viewer.training_viewer import TrainingViewer
+from .web_viewer.training_viewer import TrainingViewer
 from .models.gaussian import Gaussian, GaussianModel
 from .models.vanilla_gaussian import VanillaGaussian
 from .renderers import Renderer, VanillaRenderer, RendererConfig
@@ -97,17 +97,14 @@ class GaussianSplatting(LightningModule):
     def _initialize_gaussians_from_trained_model(self):
         # assert self.hparams["gaussian"].extra_feature_dims == 0
 
-        from .utils.gaussian_model_loader import GaussianModelLoader
+        from .utils.guassian_utils.gaussian_model_loader import GaussianModelLoader
         load_from = GaussianModelLoader.search_load_file(self.hparams["initialize_from"])
 
-        # TODO: may be should adapt sh_degree of ply or checkpoint to current value?
-        if load_from.endswith(".ply") is True:
-            gaussian_model, _ = GaussianModelLoader.initialize_model_and_renderer_from_ply_file(
-                ply_file_path=load_from,
-                device=self.device,
-                eval_mode=False,
-                pre_activate=False,
-            )
+        if load_from.suffix == ".vtp":
+            import pyvista as pv
+            polydata = cast(pv.PolyData, pv.read(str(load_from)))
+            self.gaussian_model.setup_from_polydata(polydata)
+            self.gaussian_model.to(self.device)
         else:
             # load from ckpt
             gaussian_model, _, _ = GaussianModelLoader.initialize_model_and_renderer_from_checkpoint_file(
@@ -116,12 +113,11 @@ class GaussianSplatting(LightningModule):
                 eval_mode=False,
                 pre_activate=False,
             )
+            # replace config
+            self.hparams["gaussians"] = gaussian_model.config
+            self.gaussian_model = cast(GaussianModel, gaussian_model)
 
-        # replace config
-        self.hparams["gaussians"] = gaussian_model.config
-        self.gaussian_model = cast(GaussianModel, gaussian_model)
-
-        print(f"initialize from {load_from}: sh_degree={self.gaussian_model.max_sh_degree}")
+        print(f"initialize from {load_from}")
 
     def setup(self, stage: str):
         if stage == "fit":

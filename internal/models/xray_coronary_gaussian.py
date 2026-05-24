@@ -1,3 +1,4 @@
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import override, Mapping, Callable, Any
 from abc import ABC
@@ -10,6 +11,7 @@ from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from lightning import LightningModule
 from jaxtyping import Float32
+import pyvista as pv
 
 from .gaussian import (
     Gaussian, 
@@ -76,6 +78,7 @@ class GaussianInits:
 @dataclass
 class XrayCoronaryGaussian(Gaussian):
     optimization: OptimizationConfig = field(default_factory=lambda: OptimizationConfig())
+    save_motion: bool = True  # 是否在 to_polydata 时保存 motion 统计量
 
     def instantiate(self, *args, **kwargs) -> "XrayCoronaryGaussianModel":
         return XrayCoronaryGaussianModel(self)
@@ -428,3 +431,77 @@ class XrayCoronaryGaussianModel(
             return non_pre_activated_properties
         else:
             return self.properties
+
+    # --- VTK / PolyData 序列化 ---
+
+    def to_polydata(self) -> pv.PolyData:
+        props = self.get_non_pre_activated_properties()
+
+        # means → points
+        means_np = props["means"].detach().cpu().numpy().astype(np.float32)
+        pd = pv.PolyData(means_np)
+
+        # store each property as point_data
+        for name in self.property_names:
+            if name == "means":
+                continue
+            val = props[name].detach().cpu().numpy().astype(np.float32)
+            pd.point_data[name] = val
+
+        # optionally save motion buffers
+        if self.config.save_motion and hasattr(self, "d_motion_mean") and self.d_motion_mean is not None:
+            pd.point_data["d_motion_mean"] = self.d_motion_mean.detach().cpu().numpy().astype(np.float32)
+            pd.point_data["d_motion_2_mean"] = self.d_motion_2_mean.detach().cpu().numpy().astype(np.float32)
+
+        pd.field_data["model_type"] = np.array(["XrayCoronaryGaussian"])
+
+        return pd
+
+    def setup_from_polydata(self, polydata: pv.PolyData, *args, **kwargs):
+        import numpy as np
+        import torch as _torch
+
+        means = _torch.tensor(np.asarray(polydata.points, dtype=np.float32), dtype=_torch.float)
+        n_gaussians = means.shape[0]
+        device = means.device
+
+        # build property dict
+        property_dict: dict = {}
+        property_dict["means"] = nn.Parameter(means.requires_grad_(True))
+
+        for name in self.property_names:
+            if name == "means":
+                continue
+            if name in polydata.point_data:
+                val = _torch.tensor(np.asarray(polydata.point_data[name], dtype=np.float32), dtype=_torch.float)
+            else:
+                # fallback to defaults
+                if name == "density":
+                    val = _torch.ones(n_gaussians, 1, dtype=_torch.float)
+                elif name == "scales":
+                    val = _torch.zeros(n_gaussians, 3, dtype=_torch.float)
+                elif name == "rotations":
+                    val = _torch.zeros(n_gaussians, 4, dtype=_torch.float)
+                    val[:, 0] = 1.0
+                else:
+                    val = _torch.zeros(n_gaussians, 1, dtype=_torch.float)
+            property_dict[name] = nn.Parameter(val.requires_grad_(True))
+
+        self.set_properties(property_dict)
+
+        # try to restore motion buffers; fallback to zeros if not present
+        try:
+            d_motion_mean_np = np.asarray(polydata.point_data["d_motion_mean"], dtype=np.float32)
+            d_motion_2_mean_np = np.asarray(polydata.point_data["d_motion_2_mean"], dtype=np.float32)
+            self.register_buffer(
+                "d_motion_mean",
+                _torch.tensor(d_motion_mean_np, dtype=_torch.float, device=device, requires_grad=False),
+            )
+            self.register_buffer(
+                "d_motion_2_mean",
+                _torch.tensor(d_motion_2_mean_np, dtype=_torch.float, device=device, requires_grad=False),
+            )
+            self.motion_ch = self.d_motion_mean.shape[-1]
+        except KeyError:
+            # motion data not in polydata → initialize to zeros
+            self._init_motions(n_gaussians, device=device)

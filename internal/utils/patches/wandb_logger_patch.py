@@ -3,12 +3,9 @@ from argparse import Namespace
 
 
 try:
-    from lightning.pytorch.loggers.wandb import (
-        WandbLogger,
-        rank_zero_only,
-        _convert_params,
-        _sanitize_callable_params,
-    )
+    from lightning.fabric.utilities.rank_zero import rank_zero_only
+    from lightning.fabric.utilities.logger import _convert_params, _sanitize_callable_params
+    from lightning.pytorch.loggers.wandb import WandbLogger
 
     vanilla_log_hyperparams = WandbLogger.log_hyperparams
 

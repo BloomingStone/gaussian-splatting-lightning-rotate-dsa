@@ -1,3 +1,4 @@
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Union, Optional, Mapping
 import torch
@@ -6,6 +7,7 @@ from torch import nn
 from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 import lightning
+import pyvista as pv
 
 from .gaussian import (
     Gaussian,
@@ -98,7 +100,7 @@ class VanillaGaussianModel(
 
 
     def setup_from_pcd(self, xyz: Union[torch.Tensor, np.ndarray], rgb: Union[torch.Tensor, np.ndarray], init_scale: float=1.0, *args, **kwargs):
-        from ..utils.sh_utils import RGB2SH
+        from ..utils.math.sh_utils import RGB2SH
 
         if isinstance(xyz, np.ndarray):
             xyz = torch.tensor(xyz)
@@ -421,3 +423,88 @@ class VanillaGaussianModel(
             scaling_modifier,
             self.get_rotations(),
         )
+
+    # --- VTK / PolyData 序列化 ---
+
+    def to_polydata(self) -> pv.PolyData:
+        props = self.get_non_pre_activated_properties()
+
+        # means → points
+        means_np = props["means"].detach().cpu().numpy().astype(np.float32)
+
+        # build point_data dict from remaining properties
+        point_data = {}
+        for name in self.property_names:
+            if name == "means":
+                continue
+            val = props[name].detach().cpu().numpy().astype(np.float32)
+            # squeeze any trailing dim=1 so arrays like [N, 1] or [N, 1, 3] are clean
+            # but don't squeeze the channel dim for shs
+            point_data[name] = val
+
+        pd = pv.PolyData(means_np)
+        for name, arr in point_data.items():
+            pd.point_data[name] = arr
+
+        # store active_sh_degree as field data
+        pd.field_data["active_sh_degree"] = np.array([self.active_sh_degree], dtype=np.int32)
+        pd.field_data["model_type"] = np.array(["VanillaGaussian"])
+
+        return pd
+
+    def setup_from_polydata(self, polydata: pv.PolyData, *args, **kwargs):
+        import numpy as np
+        import torch as _torch
+
+        means = _torch.tensor(np.asarray(polydata.points, dtype=np.float32), dtype=_torch.float)
+
+        # detect sh_degree from shs_rest if available
+        if "shs_rest" in polydata.point_data:
+            shs_rest_dims = polydata.point_data["shs_rest"].shape[1]
+            sh_degree = -1
+            for i in range(4):
+                if shs_rest_dims == (i + 1) ** 2 - 1:
+                    sh_degree = i
+                    break
+            assert sh_degree >= 0, f"cannot determine sh_degree from shs_rest dim={shs_rest_dims}"
+        else:
+            sh_degree = self.config.sh_degree
+
+        n_gaussians = means.shape[0]
+
+        # build property dict with Parameters
+        property_dict: dict = {}
+        property_dict["means"] = nn.Parameter(means.requires_grad_(True))
+
+        # required properties
+        for name in self.property_names:
+            if name == "means":
+                continue
+            if name in polydata.point_data:
+                val = _torch.tensor(np.asarray(polydata.point_data[name], dtype=np.float32), dtype=_torch.float)
+            else:
+                # fill with zeros as fallback
+                shape = list(means.shape)
+                if name == "shs_dc":
+                    shape = [n_gaussians, 1, 3]
+                elif name == "shs_rest":
+                    shape = [n_gaussians, (sh_degree + 1) ** 2 - 1, 3]
+                elif name == "opacities":
+                    shape = [n_gaussians, 1]
+                elif name == "scales":
+                    shape = [n_gaussians, 3]
+                elif name == "rotations":
+                    shape = [n_gaussians, 4]
+                else:
+                    # extra property: try to infer from property_names, use 1D by default
+                    shape = [n_gaussians]
+                val = _torch.zeros(shape, dtype=_torch.float)
+            property_dict[name] = nn.Parameter(val.requires_grad_(True))
+
+        self.set_properties(property_dict)
+
+        # restore active_sh_degree
+        if "active_sh_degree" in polydata.field_data:
+            self.active_sh_degree = int(polydata.field_data["active_sh_degree"][0])
+        else:
+            self.active_sh_degree = sh_degree

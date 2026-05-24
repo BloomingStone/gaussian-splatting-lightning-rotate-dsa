@@ -8,7 +8,7 @@ import viser
 import viser.transforms as vtf
 from queue import Queue
 
-from ..viewer.viewer import Viewer
+from ..web_viewer.viewer import Viewer
 from ..cameras import Cameras
 
 

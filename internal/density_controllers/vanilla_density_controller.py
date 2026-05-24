@@ -6,7 +6,7 @@ from lightning import LightningModule
 from ..models.vanilla_gaussian import VanillaGaussianModel
 from ..utils.general_utils import build_rotation
 from .density_controller import DensityController, DensityControllerImpl
-from . import density_controller_utils as utils
+from . import utils as utils
 
 
 @dataclass

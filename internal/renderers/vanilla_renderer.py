@@ -19,7 +19,7 @@ from .renderer import Renderer
 from ..cameras import Camera
 from ..models.gaussian import GaussianModel
 from ..visualizers import Visualizer, FloatColormapVisualizer, ColorMapName
-from ..utils.sh_utils import eval_sh
+from ..utils.math.sh_utils import eval_sh
 
 
 class VanillaRenderer(Renderer):

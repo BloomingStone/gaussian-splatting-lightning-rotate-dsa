@@ -6,8 +6,8 @@ from jsonargparse._typehints import subclass_spec_as_namespace
 from typing import Optional, Union, List, Literal
 from lightning.pytorch.cli import LightningCLI, LightningArgumentParser
 
-from .utils import fix_lightning_save_hyperparameters
-from .utils import wandb_logger_patch
+from .utils.patches import fix_lightning_save_hyperparameters
+from .utils.patches import wandb_logger_patch
 
 
 def discard_init_args_on_class_path_change(parser_or_action, prev_val, value):
@@ -130,14 +130,14 @@ class CLI(LightningCLI):
         # | |- epoch=xxx-step=yyy
         # | | |- zzz.jpg
         # |- point_cloud
-        # | |- iteration_zzz.ply
+        # | |- iteration_zzz.vtp
         # |- volumes
         # | |- volume__epoch=xxx-step=yyy.nii.gz
         # | |- dxyz_volume__epoch=xxx-step=yyy.nii.gz
         # | lightning_logs
         # |- cameras.json
         # |- cfg_args
-        # |- input.ply
+        # |- input.vtp
         
         output_path = Path(config.output) / config.name
         if config.version is not None:
@@ -252,7 +252,7 @@ class CLI(LightningCLI):
 
 
 def _search_checkpoint(path: Path) -> Path:
-    from internal.utils.gaussian_model_loader import GaussianModelLoader
+    from internal.utils.guassian_utils.gaussian_model_loader import GaussianModelLoader
     
     ckpt_path = GaussianModelLoader.search_load_file(path)
     assert ckpt_path.suffix == ".ckpt", "not a checkpoint can be found in {}".format(path)

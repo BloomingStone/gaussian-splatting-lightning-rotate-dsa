@@ -1,14 +1,16 @@
-from typing import Union, Mapping, List, Dict, Tuple, Optional, Any, Callable
+from __future__ import annotations
+from typing import Union, Mapping, List, Dict, Tuple, Optional, Any, Callable, cast
 from abc import ABC, abstractmethod
 import torch
 from torch import nn
 import lightning
+import pyvista as pv
 
 from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
 from ..instantiate_config import Instantiable
-from ..utils.gaussian_containers import FreezableParameterDict
+from ..utils.guassian_utils.gaussian_containers import FreezableParameterDict
 
 
 class GaussianModel(nn.Module, ABC):
@@ -79,6 +81,39 @@ class GaussianModel(nn.Module, ABC):
 
     def freeze(self):
         self.gaussians = FreezableParameterDict(self.gaussians, new_requires_grad=False)
+
+    # --- VTK / PolyData 序列化接口 ---
+
+    @abstractmethod
+    def to_polydata(self) -> pv.PolyData:
+        """
+        将当前 GS 属性导出为 pv.PolyData。
+        points = means (xyz 坐标)，其余属性作为 point_data arrays。
+        每个子类自行决定导出哪些属性。
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def setup_from_polydata(self, polydata: pv.PolyData, *args, **kwargs):
+        """
+        从 pv.PolyData 初始化 GS 属性。
+        每个子类自行决定读取哪些 point_data 字段。
+        """
+        raise NotImplementedError()
+
+    def save_to_vtp(self, path: str):
+        """保存为 .vtp 文件"""
+        pd = self.to_polydata()
+        pv.save_meshio(path, pd)
+
+    @classmethod
+    def load_polydata_from_vtp(cls, path: str) -> pv.PolyData:
+        """从 .vtp 文件读取 PolyData（不初始化模型）"""
+        point_cloud = pv.read(path)
+        assert isinstance(point_cloud, pv.PolyData), "Loaded data is not a PolyData"
+        return point_cloud
+
+    # --- 初始化接口 ---
 
     @abstractmethod
     def setup_from_pcd(self, xyz, rgb, init_scale: float=1.0, *args, **kwargs):

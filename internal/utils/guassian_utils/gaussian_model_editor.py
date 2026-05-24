@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from ..utils import gaussian_utils
+from . import gaussian_utils
 
 
 class MultipleGaussianModelEditor:
