@@ -1,8 +1,11 @@
 from typing import Any, Optional, Tuple
 from dataclasses import dataclass
+from enum import StrEnum
 
 import torch
 from torch import Tensor
+from torch.optim.optimizer import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 from lightning import LightningModule
 from jaxtyping import Float32
 from xray_gaussian_rasterization_voxelization import (
@@ -10,14 +13,13 @@ from xray_gaussian_rasterization_voxelization import (
     GaussianRasterizer,
 )
 
-from .renderer import Renderer, RendererOutputInfo, RendererOutputTypes
+from .renderer import Renderer, RendererOutputs
 from ..cameras import Camera
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from ..cameras import Camera
 from ..deform_models.coronary_props_deform import HashGridDefromModel, HashGridDeformConfig
-from ..utils.network_factory import NetworkFactory
 from ..utils.general_utils import get_linear_noise_func
-from ..utils.gaussian_utils import GaussianTransformUtils
+from ..visualizers import Visualizer, FloatColormapVisualizer, ColorMapName
 
 
 @dataclass
@@ -29,53 +31,81 @@ class DeformableRendererOptimizationConfig:
     warm_up: int = 0
     enable_ast: bool = True
 
-
 @dataclass
-class RenderRes:
-    gray_image: Float32[Tensor, "1 h w"]
-    gray_coronary: Float32[Tensor, "1 h w"] | None
-    viewspace_points: Float32[Tensor, "n 2"]
-    visibility_filter: Float32[Tensor, "n"]
-    radii: Float32[Tensor, "n"]
+class XrayRendererOuputs(RendererOutputs):
+    class ImageTypes(StrEnum):
+        GRAY = "gray"
+        CORONARY = "coronary"
     
-    d_motion_mean: Tensor
-    d_motion_var: Tensor
+    class MetaTypes(StrEnum):
+        VIEWSPACE_POINTS = "viewspace_points"
+        VISIBILITY_FILTER = "visibility_filter"
+        RADII = "radii"
+        
+        D_MOTION_MEAN = "d_motion_mean"
+        D_MOTION_VAR = "d_motion_var"
+        D_MEANS3D = "d_means3D"
+        D_ROTATION = "d_rotation"
+        D_SCALES = "d_scales"
+        CORONARY_PROPS = "coronary_props"
+        TIME = "time"
     
-    d_means3D: Tensor
-    d_rotation: Tensor
-    d_scales: Tensor
+    images: dict[ImageTypes, tuple[Tensor, Visualizer|None]]
+    meta: dict[MetaTypes, Tensor]
     
-    coronary_props: Tensor
-    time: Tensor
-    
-    in_warm_up: bool
+    is_warm_up: bool
 
-    def __getitem__(self, item):
-        return getattr(self, item)
-    
-    def __contains__(self, item):
-        return hasattr(self, item)
-    
-    def __len__(self):
-        return len(self.__dict__)
-    
-    def __iter__(self):
-        return iter(self.__dict__)
-    
-    def items(self):
-        output_keys = [
-            "viewspace_points",
-            "visibility_filter",
-            "radii",
-        ]
-        for key in output_keys:
-            yield key, getattr(self, key)
-    
-    def get(self, key: str, defualt_value: Tensor|None) -> Tensor|None:
-        if hasattr(self, key):
-            return getattr(self, key)
-        else:
-            return defualt_value
+    @property
+    def gray_image(self) -> Tensor:
+        return self.images[self.ImageTypes.GRAY][0]
+
+    @property
+    def coronary_image(self) -> Tensor:
+        return self.images[self.ImageTypes.CORONARY][0]
+
+    @property
+    def viewspace_points(self) -> Tensor:
+        return self.meta[self.MetaTypes.VIEWSPACE_POINTS]
+
+    @property
+    def visibility_filter(self) -> Tensor:
+        return self.meta[self.MetaTypes.VISIBILITY_FILTER]
+
+    @property
+    def radii(self) -> Tensor:
+        return self.meta[self.MetaTypes.RADII]
+
+    @property
+    def d_motion_mean(self) -> Tensor:
+        return self.meta[self.MetaTypes.D_MOTION_MEAN]
+
+    @property
+    def d_motion_var(self) -> Tensor:
+        return self.meta[self.MetaTypes.D_MOTION_VAR]
+
+    @property
+    def d_means3D(self) -> Tensor:
+        return self.meta[self.MetaTypes.D_MEANS3D]
+
+    @property
+    def d_rotation(self) -> Tensor:
+        return self.meta[self.MetaTypes.D_ROTATION]
+
+    @property
+    def d_scales(self) -> Tensor:
+        return self.meta[self.MetaTypes.D_SCALES]
+
+    @property
+    def coronary_props(self) -> Tensor:
+        return self.meta[self.MetaTypes.CORONARY_PROPS]
+
+    @property
+    def time(self) -> Tensor:
+        return self.meta[self.MetaTypes.TIME]
+
+ImgT = XrayRendererOuputs.ImageTypes
+MetaT = XrayRendererOuputs.MetaTypes
+
 
 class CoronaryDeformableXrayRenderer(Renderer):
     deform_model: HashGridDefromModel
@@ -115,7 +145,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         viewpoint_camera: Camera,
         pc: XrayCoronaryGaussianModel,
         **kwargs,
-    ) -> RenderRes:
+    ) -> XrayRendererOuputs:
         means3D = pc.get_means().detach()
         density = pc.get_density().detach()
         rotation = pc.get_rotations().detach()
@@ -153,15 +183,25 @@ class CoronaryDeformableXrayRenderer(Renderer):
             scales[mask], density[mask]
         )
         
-        res = RenderRes(
-            gray_image, gray_coronary,      # rendered
-            viewspace_points, visibility_filter, radii, # grad meta
-            d_motion_mean, d_motion_var,    # moving mean & var
-            d_xyz, d_rotation, d_scaling,      # deform properties
-            coronary_props.squeeze(), viewpoint_camera.time,
-            in_warm_up=False
+        return XrayRendererOuputs(
+            images={
+                ImgT.GRAY: (gray_image, FloatColormapVisualizer(ColorMapName.GRAY)),
+                ImgT.CORONARY: (gray_coronary, FloatColormapVisualizer(ColorMapName.GRAY)),
+            },
+            meta={
+                MetaT.VIEWSPACE_POINTS: viewspace_points,
+                MetaT.VISIBILITY_FILTER: visibility_filter,
+                MetaT.RADII: radii,
+                MetaT.D_MOTION_MEAN: d_motion_mean,
+                MetaT.D_MOTION_VAR: d_motion_var,
+                MetaT.D_MEANS3D: d_xyz,
+                MetaT.D_ROTATION: d_rotation,
+                MetaT.D_SCALES: d_scaling,
+                MetaT.CORONARY_PROPS: coronary_props.squeeze(),
+                MetaT.TIME: viewpoint_camera.time,
+            },
+            is_warm_up=viewpoint_camera.time.item() <= self.optimization_config.warm_up
         )
-        return res
         
 
     def training_forward(
@@ -171,7 +211,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         viewpoint_camera: Camera, 
         pc: XrayCoronaryGaussianModel,
         **kwargs
-    )-> RenderRes:
+    )-> XrayRendererOuputs:
         # clone properties
         means3D = pc.get_means()
         density = pc.get_density()
@@ -210,15 +250,24 @@ class CoronaryDeformableXrayRenderer(Renderer):
         radii = meta_whole["radii"]
         visibility_filter = radii > 0
 
-        gray_coronary = None
         
-        return RenderRes(
-            gray_image, gray_coronary,      # rendered
-            viewspace_points, visibility_filter, radii, # grad meta
-            d_motion_mean, d_motion_var,    # moving mean & var
-            d_xyz, d_rotation, d_scaling,      # deforms
-            coronary_props.squeeze(), viewpoint_camera.time,
-            in_warm_up=step <= self.optimization_config.warm_up
+        return XrayRendererOuputs(
+            images={
+                ImgT.GRAY: (gray_image, FloatColormapVisualizer(ColorMapName.GRAY)),
+            },
+            meta={
+                MetaT.VIEWSPACE_POINTS: viewspace_points,
+                MetaT.VISIBILITY_FILTER: visibility_filter,
+                MetaT.RADII: radii,
+                MetaT.D_MOTION_MEAN: d_motion_mean,
+                MetaT.D_MOTION_VAR: d_motion_var,
+                MetaT.D_MEANS3D: d_xyz,
+                MetaT.D_ROTATION: d_rotation,
+                MetaT.D_SCALES: d_scaling,
+                MetaT.CORONARY_PROPS: coronary_props.squeeze(),
+                MetaT.TIME: viewpoint_camera.time,
+            },
+            is_warm_up=viewpoint_camera.time.item() <= self.optimization_config.warm_up
         )
     
     def _render(
@@ -275,8 +324,8 @@ class CoronaryDeformableXrayRenderer(Renderer):
         total_steps = lightning_module.trainer.max_steps
         self.smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=total_steps*0.8)
     
-    def training_setup(self, module) -> Tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LRScheduler]]:
-        optimizer = torch.optim.Adam(
+    def training_setup(self, module) -> tuple[list[Optimizer]|None, list[LRScheduler]|None]:
+        optimizer = torch.optim.adam.Adam(
             [{
                 "params": list(self.deform_model.parameters()),
                 "name": "deform",
@@ -294,11 +343,4 @@ class CoronaryDeformableXrayRenderer(Renderer):
             lr_lambda=lr_lmabda_deform,
         )
 
-        return optimizer, scheduler
-
-    def get_available_outputs(self) -> dict:
-        cmap = {"colormap": "gray"}
-        return {
-            "gray_image": RendererOutputInfo("gray_image", RendererOutputTypes.GRAY, other_kwargs=cmap),
-            "gray_coronary": RendererOutputInfo("gray_coronary", RendererOutputTypes.GRAY, other_kwargs=cmap)
-        }
+        return [optimizer], [scheduler]

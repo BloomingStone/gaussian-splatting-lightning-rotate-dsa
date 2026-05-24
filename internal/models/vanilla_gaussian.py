@@ -3,6 +3,8 @@ from typing import List, Dict, Tuple, Union, Optional, Mapping
 import torch
 import numpy as np
 from torch import nn
+from torch.optim.optimizer import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 import lightning
 
 from .gaussian import (
@@ -17,7 +19,7 @@ from ..utils.general_utils import (
     build_scaling_rotation,
     knn,
 )
-from ..optimizers import OptimizerConfig, Adam, SelectiveAdam, SparseGaussianAdam
+from ..optimizers import OptimizerConfig, AdamConfig, SelectiveAdam, SparseGaussianAdam
 from ..schedulers import Scheduler, ExponentialDecayScheduler
 
 @dataclass
@@ -49,7 +51,7 @@ class OptimizationConfig:
 
     sh_degree_up_interval: int = 1_000
 
-    optimizer: OptimizerConfig = field(default_factory=Adam)
+    optimizer: OptimizerConfig = field(default_factory=AdamConfig)
 
 
 @dataclass
@@ -67,6 +69,8 @@ class VanillaGaussianModel(
     HasNewGetters,
     HasVanillaGetters,
 ):
+    _active_sh_degree: torch.Tensor
+    
     def __init__(self, config: VanillaGaussian) -> None:
         super().__init__()
         self.config = config
@@ -92,11 +96,6 @@ class VanillaGaussianModel(
     def before_setup_set_properties_from_pcd(self, xyz: torch.Tensor, rgb: torch.Tensor, property_dict: Mapping[str, torch.Tensor|nn.Parameter], *args, **kwargs):
         pass
 
-    def _add_optimizer_after_backward_hook_if_available(self, optimizer, pl_module):
-        hook = getattr(optimizer, "on_after_backward", None)
-        if hook is None:
-            return
-        pl_module.on_after_backward_hooks.append(hook)
 
     def setup_from_pcd(self, xyz: Union[torch.Tensor, np.ndarray], rgb: Union[torch.Tensor, np.ndarray], init_scale: float=1.0, *args, **kwargs):
         from ..utils.sh_utils import RGB2SH
@@ -150,7 +149,7 @@ class VanillaGaussianModel(
 
         self.active_sh_degree = 0
 
-    def before_setup_set_properties_from_number(self, n: int, property_dict: Dict[str, torch.Tensor], *args, **kwargs):
+    def before_setup_set_properties_from_number(self, n: int, property_dict: Mapping[str, torch.Tensor], *args, **kwargs):
         pass
 
     def setup_from_number(self, n: int, *args, **kwargs):
@@ -235,19 +234,10 @@ class VanillaGaussianModel(
 
         return unused_properties, unmet_properties
 
-    def training_setup(self, module: "lightning.LightningModule") -> Tuple[
-        Optional[Union[
-            List[torch.optim.Optimizer],
-            torch.optim.Optimizer,
-        ]],
-        Optional[Union[
-            List[torch.optim.lr_scheduler.LRScheduler],
-            torch.optim.lr_scheduler.LRScheduler,
-        ]]
-    ]:
+    def training_setup(self, module: "lightning.LightningModule") -> tuple[list[Optimizer], list[LRScheduler]]:
         spatial_lr_scale = self.config.optimization.spatial_lr_scale
         if spatial_lr_scale <= 0:
-            spatial_lr_scale = module.trainer.datamodule.dataparser_outputs.camera_extent
+            spatial_lr_scale = module.trainer.datamodule.dataparser_outputs.camera_extent   # type: ignore
         assert spatial_lr_scale > 0
 
         optimization_config = self.config.optimization
@@ -263,9 +253,8 @@ class VanillaGaussianModel(
             lr=means_lr_init,
             eps=1e-15,
         )
-        self._add_optimizer_after_backward_hook_if_available(means_optimizer, module)
         # TODO: other scheduler may not contain `lr_final`, but does not need to change scheduler currently
-        optimization_config.means_lr_scheduler.lr_final *= spatial_lr_scale
+        optimization_config.means_lr_scheduler.lr_final *= spatial_lr_scale # type: ignore
         means_scheduler = optimization_config.means_lr_scheduler.instantiate().get_scheduler(
             means_optimizer,
             means_lr_init,
@@ -280,7 +269,6 @@ class VanillaGaussianModel(
             {'params': [self.gaussians["rotations"]], 'lr': optimization_config.rotations_lr, "name": "rotations"},
         ]
         constant_lr_optimizer = optimizer_factory.instantiate(l, lr=0.0, eps=1e-15)
-        self._add_optimizer_after_backward_hook_if_available(constant_lr_optimizer, module)
 
         print("spatial_lr_scale={}, learning_rates=".format(spatial_lr_scale))
         print("  means={}->{}".format(means_lr_init, optimization_config.means_lr_scheduler.lr_final))
@@ -310,40 +298,40 @@ class VanillaGaussianModel(
         return self.config.sh_degree
 
     def get_active_sh_degree(self) -> int:
-        return self._active_sh_degree.item()
+        return self._active_sh_degree.item()    # type: ignore
 
     def set_active_sh_degree(self, v):
         self._active_sh_degree.fill_(v)
 
     @property
     def active_sh_degree(self) -> int:
-        return self._active_sh_degree.item()
+        return self._active_sh_degree.item()    # type: ignore
 
     @active_sh_degree.setter
     def active_sh_degree(self, v: int):
         self._active_sh_degree.fill_(v)
 
-    def opacity_activation(self, opacities: torch.Tensor) -> torch.Tensor:
-        return torch.sigmoid(opacities)
+    def opacity_activation(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.sigmoid(x)
 
-    def opacity_inverse_activation(self, opacities: torch.Tensor) -> torch.Tensor:
-        return inverse_sigmoid(opacities)
+    def opacity_inverse_activation(self, x: torch.Tensor) -> torch.Tensor:
+        return inverse_sigmoid(x)
 
-    def scale_activation(self, scales: torch.Tensor) -> torch.Tensor:
-        return torch.exp(scales)
+    def scale_activation(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.exp(x)
 
-    def scale_inverse_activation(self, scales: torch.Tensor) -> torch.Tensor:
-        return torch.log(scales)
+    def scale_inverse_activation(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.log(x)
 
-    def rotation_activation(self, rotations: torch.Tensor) -> torch.Tensor:
-        return torch.nn.functional.normalize(rotations)
+    def rotation_activation(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.nn.functional.normalize(x)
 
-    def rotation_inverse_activation(self, rotations: torch.Tensor) -> torch.Tensor:
-        return rotations
-
+    def rotation_inverse_activation(self, x: torch.Tensor) -> torch.Tensor:
+        return x
+    
     @staticmethod
-    def _return_as_is(v):
-        return v
+    def _return_as_is(x):
+        return x
 
     def _get_shs_from_dict(self) -> torch.Tensor:
         return self.gaussians["shs"]

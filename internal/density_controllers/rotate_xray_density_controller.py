@@ -5,7 +5,7 @@ from typing import override
 
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from .vanilla_density_controller import VanillaDensityControllerImpl, DensityController
-from .density_controller import Utils
+from . import density_controller_utils as utils
 from ..gaussian_splatting import GaussianSplatting
 from ..models.xray_coronary_gaussian import GaussianInits
 
@@ -230,7 +230,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         
         valid_points_mask = ~mask  # `True` to keep
         
-        new_parameters = Utils.prune_properties(valid_points_mask, gaussian_model, optimizers)
+        new_parameters = utils.prune_properties(valid_points_mask, gaussian_model, optimizers)
         gaussian_model.properties = new_parameters
         
         gaussian_model.filter_motion_by_mask(valid_points_mask)
@@ -247,7 +247,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
             density,
             gaussian_model.density_activation(inits.density).to(density.device),
         ))
-        new_parameters = Utils.replace_tensors_to_properties(tensors={
+        new_parameters = utils.replace_tensors_to_properties(tensors={
             "density": density_new,
         }, optimizers=optimizers)
         gaussian_model.update_properties(new_parameters)

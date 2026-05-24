@@ -1,2 +1,2 @@
 from .client import ClientThread
-from .renderer import ViewerRenderer
+from .viewer_renderer import ViewerRenderer

@@ -1,2 +1,2 @@
-from .renderer import RendererOutputTypes, RendererOutputVisualizer, RendererOutputInfo, Renderer, RendererConfig
+from .renderer import RendererOutputTypes, RendererOutputInfo, Renderer, RendererConfig
 from .vanilla_renderer import VanillaRenderer

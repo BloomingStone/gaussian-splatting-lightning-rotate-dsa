@@ -1,11 +1,9 @@
 import sys
 from internal.cli import CLI
-from jsonargparse import lazy_instance
 from lightning.pytorch.cli import ArgsType
 
 from internal.gaussian_splatting import GaussianSplatting
 from internal.dataset import DataModule
-from internal.callbacks import SaveGaussian, KeepRunningIfWebViewerEnabled, StopImageSavingThreads, ProgressBar, ValidateOnTrainEnd, StopDataLoaderCacheThread
 
 
 def cli(args: ArgsType = None):
@@ -18,20 +16,10 @@ def cli(args: ArgsType = None):
             "accelerator": "gpu",
             "strategy": "auto",
             "devices": 1,
-            # "logger": "TensorBoardLogger",
             "num_sanity_val_steps": 10,
-            # "max_epochs": -1,
             "max_steps": 30_000,
             "use_distributed_sampler": False,  # use custom ddp sampler
             "enable_checkpointing": False,
-            "callbacks": [
-                lazy_instance(SaveGaussian),
-                lazy_instance(ValidateOnTrainEnd),
-                lazy_instance(KeepRunningIfWebViewerEnabled),
-                lazy_instance(StopImageSavingThreads),
-                lazy_instance(ProgressBar),
-                lazy_instance(StopDataLoaderCacheThread),
-            ],
         },
         save_config_kwargs={"overwrite": True},
         args=args,

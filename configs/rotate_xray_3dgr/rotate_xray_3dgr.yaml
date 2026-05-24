@@ -3,6 +3,17 @@ save_val: true
 cache_all_images: true
 trainer:
   check_val_every_n_epoch: 10
+  callbacks:
+    - class_path: internal.callbacks.scene_saver.SceneSaver
+    - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
+    - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
+    - class_path: internal.callbacks.save_image.SaveImage
+      init_args:
+        save_val_output: true
+        max_save_val_output: -1
+        max_image_saving_threads: 16
+    - class_path: internal.callbacks.callbacks.ProgressBar
+    - class_path: internal.callbacks.callbacks.StopDataLoaderCacheThread
 data:
   val_max_num_images_to_cache: -1
   test_max_num_images_to_cache: -1
@@ -13,7 +24,6 @@ data:
       mode: reconstruction
       init_point_cloud_mode: uniform
 model:
-  # max_save_val_output: 50
   renderer:
     class_path: internal.renderers.deformable_renderer.DeformableRenderer
     init_args:

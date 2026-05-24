@@ -17,7 +17,7 @@ from internal.cameras import Cameras
 from internal.renderers.vanilla_renderer import VanillaRenderer
 from internal.utils.gaussian_model_loader import GaussianModelLoader
 from internal.utils.gaussian_model_editor import MultipleGaussianModelEditor
-from internal.viewer.renderer import ViewerRenderer
+from internal.viewer.viewer_renderer import ViewerRenderer
 
 
 def initializer_viewer_renderer(

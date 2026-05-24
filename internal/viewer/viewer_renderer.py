@@ -1,7 +1,7 @@
-from typing import Tuple
+from typing import Tuple, Dict
 import torch
-from ..renderers.renderer import Renderer, RendererConfig, RendererOutputInfo, RendererOutputTypes, RendererOutputVisualizer
-from ..utils.visualizers import Visualizers
+from ..renderers.renderer import Renderer, RendererConfig, RendererOutputInfo, RendererOutputTypes
+from ..visualizers import build_viewer_output_visualizers, OutputVisualizer
 
 
 class ViewerRenderer:
@@ -22,10 +22,16 @@ class ViewerRenderer:
         self.depth_map_color_map = "turbo"
 
         # TODO: initial value should get from renderer
-        self.output_info: Tuple[str, RendererOutputInfo, RendererOutputVisualizer] = (
+        self.output_info: Tuple[str, RendererOutputInfo] = (
             "rgb",
             RendererOutputInfo("render"),
-            self.no_processing,
+        )
+        self.output_visualizers: Dict[str, OutputVisualizer] = build_viewer_output_visualizers(
+            {"rgb": self.output_info[1]},
+            max_depth_provider=lambda: self.max_depth,
+            colormap_provider=lambda: self.depth_map_color_map,
+            difix_pipeline_provider=lambda: self.difix,
+            difix_enabled_provider=lambda: self.difix_enabled,
         )
 
         self.difix = None
@@ -37,12 +43,10 @@ class ViewerRenderer:
             self,
             name: str,
             renderer_output_info: RendererOutputInfo,
-            visualizer: RendererOutputVisualizer,
     ):
         self.output_info = (
             name,
             renderer_output_info,
-            visualizer,
         )
 
     def _setup_depth_map_options(self, viewer, server):
@@ -79,31 +83,25 @@ class ViewerRenderer:
         """
         Update properties
         """
-        # toggle depth map option, only enable when type is `gray` and `visualizer` is None
-        self._set_depth_map_option_visibility(renderer_output_info.type == RendererOutputTypes.GRAY and renderer_output_info.visualizer is None)
+        # toggle depth map option, only enable when type is `gray`
+        self._set_depth_map_option_visibility(renderer_output_info.type == RendererOutputTypes.GRAY)
 
-        # set visualizer
-        visualizer = renderer_output_info.visualizer
-        if visualizer is None:
-            if renderer_output_info.type == RendererOutputTypes.RGB:
-                visualizer = self.no_processing
-                if self.difix_enabled:
-                    visualizer = self.difix_processor
-            elif renderer_output_info.type == RendererOutputTypes.GRAY:
-                visualizer = self.depth_map_processor
-            elif renderer_output_info.type == RendererOutputTypes.NORMAL_MAP:
-                visualizer = self.normal_map_processor
-            elif renderer_output_info.type == RendererOutputTypes.FEATURE_MAP:
-                visualizer = self.feature_map_processor
-            else:
-                raise ValueError(f"Unsupported output type `{renderer_output_info.type}`")
+        if name not in self.output_visualizers:
+            raise ValueError(f"Unsupported output name `{name}`")
 
         # update
-        self.set_output_info(name, renderer_output_info, visualizer)
+        self.set_output_info(name, renderer_output_info)
 
     def setup_options(self, viewer, server):
         available_outputs = self.renderer.get_available_outputs()
         first_type_name = list(available_outputs.keys())[0]
+        self.output_visualizers = build_viewer_output_visualizers(
+            available_outputs,
+            max_depth_provider=lambda: self.max_depth,
+            colormap_provider=lambda: self.depth_map_color_map,
+            difix_pipeline_provider=lambda: self.difix,
+            difix_enabled_provider=lambda: self.difix_enabled,
+        )
 
         with server.gui.add_folder("Output"):
             # setup output type dropdown
@@ -154,7 +152,7 @@ class ViewerRenderer:
         self.difix.to(self.gaussian_model.get_means().device)
 
     def get_outputs(self, camera, scaling_modifier: float = 1.):
-        render_type, output_info, output_processor = self.output_info
+        render_type, output_info = self.output_info
 
         render_outputs = self.renderer(
             camera,
@@ -163,39 +161,7 @@ class ViewerRenderer:
             scaling_modifier=scaling_modifier,
             render_types=[render_type],
         )
-        image = output_processor(render_outputs[output_info.key], render_outputs, output_info)
+        image = self.output_visualizers[render_type](render_outputs)
         if image.shape[0] == 1:
             image = image.repeat(3, 1, 1)
         return image
-
-    def depth_map_processor(self, depth_map, *args, **kwargs):
-        # TODO: the pixels not covered by any Gaussian (alpha==0), should be 1. after normalization
-        max_depth = self.max_depth
-        if max_depth == 0:
-            max_depth = depth_map.max()
-        # normalize raw depth_map
-        depth_map = depth_map - torch.minimum(depth_map.min(), torch.tensor(0., dtype=torch.float, device=depth_map.device))  # avoid negative values
-        depth_map = (depth_map / (max_depth + 1e-8)).clamp(max=1.)
-        # apply colormap
-        return Visualizers.float_colormap(depth_map, self.depth_map_color_map)
-
-    def normal_map_processor(self, normal_map, *args, **kwargs):
-        return Visualizers.normal_map_colormap(normal_map)
-
-    def feature_map_processor(self, feature_map, *args, **kwargs):
-        return Visualizers.pca_colormap(feature_map)
-
-    @torch.no_grad()
-    def difix_processor(self, rgb, render_outputs, *args, **kwargs):
-        return self.difix(
-            prompt="remove degradation",
-            image=rgb,
-            # ref_image=ref_image,
-            num_inference_steps=1,
-            timesteps=[199],
-            guidance_scale=0.0,
-            output_type="pt",
-        ).images[0]
-
-    def no_processing(self, i, *args, **kwargs):
-        return i

@@ -1,12 +1,12 @@
-from typing import Tuple, Optional, Union, List, Dict
+from typing import Union, List, Dict
 from dataclasses import dataclass
 import torch
-from torch import nn
 from lightning import LightningModule
 
 from ..models.vanilla_gaussian import VanillaGaussianModel
 from ..utils.general_utils import build_rotation
-from .density_controller import DensityController, DensityControllerImpl, Utils
+from .density_controller import DensityController, DensityControllerImpl
+from . import density_controller_utils as utils
 
 
 @dataclass
@@ -243,7 +243,7 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
         self._prune_points(prune_filter, gaussian_model, optimizers)
 
     def _densification_postfix(self, new_properties: Dict, gaussian_model, optimizers):
-        new_parameters = Utils.cat_tensors_to_properties(new_properties, gaussian_model, optimizers)
+        new_parameters = utils.cat_tensors_to_properties(new_properties, gaussian_model, optimizers)
         gaussian_model.properties = new_parameters
 
         # re-init states
@@ -257,7 +257,7 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
             optimizers
         """
         valid_points_mask = ~mask  # `True` to keep
-        new_parameters = Utils.prune_properties(valid_points_mask, gaussian_model, optimizers)
+        new_parameters = utils.prune_properties(valid_points_mask, gaussian_model, optimizers)
         gaussian_model.properties = new_parameters
 
         # prune states
@@ -270,7 +270,7 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
             gaussian_model.get_opacities(),
             torch.ones_like(gaussian_model.get_opacities()) * 0.01,
         ))
-        new_parameters = Utils.replace_tensors_to_properties(tensors={
+        new_parameters = utils.replace_tensors_to_properties(tensors={
             "opacities": opacities_new,
         }, optimizers=optimizers)
         gaussian_model.update_properties(new_parameters)

@@ -44,8 +44,8 @@ train:
 
   # 这些是对所有run生效的固定覆盖。
   static_overrides:
-    model.saver.init_args.save_phase: 0.5
-    model.saver.init_args.save_ckpt: true
+    trainer.callbacks.0.init_args.saver.init_args.save_phase: 0.5
+    trainer.callbacks.0.init_args.saver.init_args.save_ckpt: true
     pbar_rate: 50
 
 

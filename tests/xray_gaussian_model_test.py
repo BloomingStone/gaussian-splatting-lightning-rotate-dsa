@@ -49,7 +49,6 @@ class TestDeformableXrayRenderAndSaver(unittest.TestCase):
         lightning_module.hparams = {
             "output_path": Path(__file__).parent / "outputs"
         }
-        lightning_module.on_after_backward_hooks = []
         
         gs_model = XrayCoronaryGaussian().instantiate()
         gs_model.setup_from_pcd(xyz=outputs.point_cloud.xyz, rgb=None)

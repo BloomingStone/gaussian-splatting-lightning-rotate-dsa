@@ -1,27 +1,34 @@
-import concurrent.futures
+from typing import NamedTuple
 import json
 import math
 import os.path
 import threading
 import queue
-import shutil
 from concurrent.futures import ThreadPoolExecutor
-from rich.progress import track
-import random
-from typing import Literal, Tuple, Optional, Any
+from typing import Literal, Tuple, Any
 from PIL import Image
 import numpy as np
-import cv2
 import torch.utils.data
 from lightning import LightningDataModule
 from lightning.pytorch.utilities.types import EVAL_DATALOADERS, TRAIN_DATALOADERS
 
-from .cameras import CameraType, Camera
+from .utils.graphics_utils import store_ply
+from .cameras import Camera
 from .dataparsers import DataParserConfig, ImageSet
-from .utils.graphics_utils import store_ply, BasicPointCloud
 
 from tqdm import tqdm
 
+BatchImageT = NamedTuple("BatchImageT", [
+    ("image_name", str),
+    ("gt_image", torch.Tensor),
+    ("masked_pixels", torch.Tensor|None),  # bool mask, True is valid pixel, False is masked pixel
+])
+
+BatchT = NamedTuple("BatchT", [
+    ("camera", Camera),
+    ("image_info", BatchImageT),
+    ("extra_data", Any),
+])
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(
@@ -49,9 +56,9 @@ class Dataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.image_set)
 
-    def get_image(self, index) -> Tuple[str, torch.Tensor|None, torch.Tensor|None]:
+    def get_image(self, index: int) -> BatchImageT:
         if self.image_set.image_paths[index] is None:
-            return self.image_set.image_names[index], None, None
+            raise RuntimeError("The image path of index {} is None. Please check your dataparser and dataset".format(index))
 
         # TODO: resize
         pil_image = Image.open(self.image_set.image_paths[index])
@@ -99,16 +106,15 @@ class Dataset(torch.utils.data.Dataset):
 
         image = image.permute(2, 0, 1).to(self.image_device)  # [channel, height, width]
 
-        return self.image_set.image_names[index], image, mask
+        return BatchImageT(self.image_set.image_names[index], image, mask)
 
     def get_extra_data(self, index):
         assert self.image_set.extra_data_processor is not None, "extra_data_processor must be provided in image_set when extra_data is not None"
         assert self.image_set.extra_data is not None, "extra_data must be provided in image_set when extra_data_processor is not None"
         return self.image_set.extra_data_processor(self.image_set.extra_data[index])
 
-    def __getitem__(self, index) -> Tuple[Camera, Tuple, Any]:
-        return self.image_cameras[index], self.get_image(index), self.get_extra_data(index)
-
+    def __getitem__(self, index: int) -> BatchT:
+        return BatchT(self.image_cameras[index], self.get_image(index), self.get_extra_data(index))
 
 class CacheDataLoader(torch.utils.data.DataLoader):
     def __init__(
@@ -349,15 +355,6 @@ class DataModule(LightningDataModule):
 
         # write some files that SIBR_viewer required
         if self.global_rank == 0 and stage == "fit":
-            # write appearance group id
-            if self.dataparser_outputs.appearance_group_ids is not None:
-                torch.save(
-                    self.dataparser_outputs.appearance_group_ids,
-                    os.path.join(output_path, "appearance_group_ids.pth"),
-                )
-                with open(os.path.join(output_path, "appearance_group_ids.json"), "w") as f:
-                    json.dump(self.dataparser_outputs.appearance_group_ids, f, indent=4, ensure_ascii=False)
-
             # write cameras.json
             camera_to_world = torch.linalg.inv(
                 torch.transpose(self.dataparser_outputs.train_set.cameras.world_to_camera, 1, 2)

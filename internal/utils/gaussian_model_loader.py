@@ -1,5 +1,4 @@
-import os
-import glob
+from pathlib import Path
 import torch
 from typing import Tuple
 
@@ -30,38 +29,42 @@ class GaussianModelLoader:
     }
 
     @staticmethod
-    def search_load_file(model_path: str) -> str:
+    def search_load_file(model_path: Path) -> Path:
         # if a directory path is provided, auto search checkpoint or ply
-        if os.path.isdir(model_path) is False:
+        if model_path.is_file():
             return model_path
         # search checkpoint
-        checkpoint_dir = os.path.join(model_path, "checkpoints")
+        checkpoint_dir = model_path / "checkpoints"
         # find checkpoint with max iterations
         load_from = None
         previous_checkpoint_iteration = -1
-        for i in glob.glob(os.path.join(checkpoint_dir, "*.ckpt")):
+        for p in checkpoint_dir.glob("*.ckpt"):
             try:
-                checkpoint_iteration = int(i[i.rfind("=") + 1:i.rfind(".")])
+                # try to parse iteration from checkpoint name, the name should contain "epoch=xxx-step=yyy.ckpt"
+                name = p.name
+                l = name.rfind("=") + 1
+                r = name.rfind(".")
+                checkpoint_iteration = int(name[l:r])   # parse step (yyy) as iteration
             except Exception as err:
-                print("error occurred when parsing iteration from {}: {}".format(i, err))
+                print("error occurred when parsing iteration from {}: {}".format(p, err))
                 continue
             if checkpoint_iteration > previous_checkpoint_iteration:
                 previous_checkpoint_iteration = checkpoint_iteration
-                load_from = i
+                load_from = p
 
         # not a checkpoint can be found, search point cloud
         if load_from is None:
             previous_point_cloud_iteration = -1
-            for i in glob.glob(os.path.join(model_path, "point_cloud", "iteration_*")):
+            for p in (model_path / "point_cloud").glob("iteration_*"):
                 try:
-                    point_cloud_iteration = int(os.path.basename(i).replace("iteration_", ""))
+                    # try to parse iteration from directory name, the name should be "iteration_xxx"
+                    point_cloud_iteration = int(p.name.replace("iteration_", ""))
                 except Exception as err:
-                    print("error occurred when parsing iteration from {}: {}".format(i, err))
+                    print("error occurred when parsing iteration from {}: {}".format(p, err))
                     continue
-
                 if point_cloud_iteration > previous_point_cloud_iteration:
                     previous_point_cloud_iteration = point_cloud_iteration
-                    load_from = os.path.join(i, "point_cloud.ply")
+                    load_from = p / "point_cloud.ply"
 
         assert load_from is not None, "not a checkpoint or point cloud can be found"
 
@@ -136,7 +139,7 @@ class GaussianModelLoader:
     @classmethod
     def initialize_model_and_renderer_from_checkpoint_file(
             cls,
-            checkpoint_path: str,
+            checkpoint_path: Path,
             device,
             eval_mode: bool = True,
             pre_activate: bool = True,

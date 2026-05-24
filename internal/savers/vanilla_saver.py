@@ -2,9 +2,8 @@ from dataclasses import dataclass
 import os
 import torch
 
-from . import Saver, SaverModule
+from .saver import Saver, SaverModule
 from lightning import LightningModule
-from ..mp_strategy import MPStrategy
 from ..utils.sh_utils import eval_sh
 from ..utils.graphics_utils import store_ply
 from ..utils.gaussian_utils import GaussianPlyUtils
@@ -12,6 +11,8 @@ from ..utils.gaussian_utils import GaussianPlyUtils
 
 @dataclass
 class VanillaSaver(Saver):
+    save_ply: bool = True
+
     def instantiate(self, *args, **kwargs) -> "VanillaSaverModule":
         return VanillaSaverModule(self)
 
@@ -22,11 +23,10 @@ class VanillaSaverModule(SaverModule):
     
     
     def save(self, pl_module: LightningModule):
-        is_mp_strategy = isinstance(pl_module.trainer.strategy, MPStrategy)
-        if pl_module.trainer.global_rank != 0 and is_mp_strategy is False:
+        if pl_module.trainer.global_rank != 0:
             return
 
-        if pl_module.hparams["save_ply"] is True:
+        if self.config.save_ply is True:
             # save ply file
             filename = "point_cloud.ply"
             # if self.trainer.global_rank != 0:
@@ -42,14 +42,10 @@ class VanillaSaverModule(SaverModule):
             print("Gaussians saved to {}".format(output_path))
 
         # save checkpoint
-        checkpoint_name_suffix = ""
-        if is_mp_strategy is True:
-            checkpoint_name_suffix = f"-rank={pl_module.global_rank}"
-
         checkpoint_path = os.path.join(
             pl_module.hparams["output_path"],
             "checkpoints",
-            "epoch={}-step={}{}.ckpt".format(pl_module.trainer.current_epoch, pl_module.trainer.global_step, checkpoint_name_suffix),
+            f"epoch={pl_module.trainer.current_epoch}-step={pl_module.trainer.global_step}.ckpt",
         )
         os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
         pl_module.trainer.save_checkpoint(checkpoint_path)
@@ -59,6 +55,6 @@ class VanillaSaverModule(SaverModule):
             store_ply(os.path.join(
                 pl_module.hparams["output_path"],
                 "checkpoints",
-                "epoch={}-step={}{}-xyz_rgb.ply".format(pl_module.trainer.current_epoch, pl_module.trainer.global_step, checkpoint_name_suffix),
+                f"epoch={pl_module.trainer.current_epoch}-step={pl_module.trainer.global_step}-xyz_rgb.ply",
             ), xyz.cpu().numpy(), ((rgb + 0.5).clamp(min=0., max=1.) * 255).to(torch.int).cpu().numpy())
         print("Checkpoint saved to {}".format(checkpoint_path))

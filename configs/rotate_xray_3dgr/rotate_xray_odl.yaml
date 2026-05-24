@@ -4,8 +4,26 @@ cache_all_images: true
 trainer:
   check_val_every_n_epoch: 10
   precision: 16-mixed
-
-save_iterations: [10000]
+  callbacks:
+    - class_path: internal.callbacks.scene_saver.SceneSaver
+      init_args:
+        save_iterations: [10000]
+        saver:
+          class_path: internal.savers.x_ray_saver.XRaySaver
+          init_args:
+            save_ckpt: false
+            save_ply: false
+            save_nii: true
+            save_phase: 0.5
+    - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
+    - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
+    - class_path: internal.callbacks.save_image.SaveImage
+      init_args:
+        save_val_output: false
+        max_save_val_output: 2
+        max_image_saving_threads: 16
+    - class_path: internal.callbacks.callbacks.ProgressBar
+    - class_path: internal.callbacks.callbacks.StopDataLoaderCacheThread
 
 
 data:
@@ -22,7 +40,6 @@ data:
       init_point_cloud_mode: FBP
       init_point_cloud_fbp_phase_max: 0.2
 model:
-  max_save_val_output: 2
   renderer:
     class_path: internal.renderers.deformabel_xray_renderer.CoronaryDeformableXrayRenderer
     init_args:
@@ -62,10 +79,3 @@ model:
   renderer_output_types: 
     - gray_image
     - gray_coronary
-  saver:
-    class_path: internal.savers.x_ray_saver.XRaySaver
-    init_args:
-      save_ckpt: false
-      save_ply: false
-      save_nii: true
-      save_phase: 0.5

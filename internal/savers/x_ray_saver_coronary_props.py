@@ -13,9 +13,8 @@ from xray_gaussian_rasterization_voxelization import (
     GaussianVoxelizer,
 )
 
-from . import Saver, SaverModule
+from .saver import Saver, SaverModule
 from ..gaussian_splatting import GaussianSplatting
-from ..mp_strategy import MPStrategy
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from ..renderers.deformabel_xray_renderer_coronary_props import CoronaryDeformableXrayRenderer
 from ..deform_models import DeformModel
@@ -224,8 +223,7 @@ class XRaySaverModule(SaverModule):
         self._save_executor.shutdown(wait=False)
     
     def save(self, pl_module: GaussianSplatting):
-        is_mp_strategy = isinstance(pl_module.trainer.strategy, MPStrategy)
-        if pl_module.trainer.global_rank != 0 and not is_mp_strategy:
+        if pl_module.trainer.global_rank != 0:
             return
 
         epoch = pl_module.trainer.current_epoch
@@ -235,9 +233,8 @@ class XRaySaverModule(SaverModule):
         ckpt_dir = output_root / "checkpoints"
         ckpt_dir.mkdir(exist_ok=True)
         
-        ckpt_suffix = f"-rank={pl_module.global_rank}" if is_mp_strategy else ""
         if self.config.save_ckpt:
-            ckpt_path = ckpt_dir / f"epoch={epoch}-step={step}{ckpt_suffix}.ckpt"
+            ckpt_path = ckpt_dir / f"epoch={epoch}-step={step}.ckpt"
             
             pl_module.trainer.save_checkpoint(ckpt_path)
         
@@ -264,7 +261,9 @@ class XRaySaverModule(SaverModule):
         ply_payload: PlySavePayload | None = None
 
         if self.config.save_ply:
-            ply_path = ckpt_dir / f"epoch={epoch}-step={step}{ckpt_suffix}.ply"
+            ply_dir = output_root / "point_cloud"
+            ply_dir.mkdir(parents=True, exist_ok=True)
+            ply_path = ply_dir / f"iteration_{step}.ply"
             gray = torch.exp(-density)
             sh0 = gray[..., None].repeat(1, 1, 3)
             ply_payload = PlySavePayload(
@@ -288,8 +287,10 @@ class XRaySaverModule(SaverModule):
             coronary_affine_save = np.array(coronary_affine, copy=True)
             torch.cuda.empty_cache()  # avoid CUDA OOM
             
-            volume_nii_path = ckpt_dir / f"volume__epoch={epoch}-step={step}{ckpt_suffix}.nii.gz"
-            dxyz_volume_nii_path = ckpt_dir / f"dxyz_volume__epoch={epoch}-step={step}{ckpt_suffix}.nii.gz"
+            volume_dir = output_root / "volumes"
+            volume_dir.mkdir(parents=True, exist_ok=True)
+            volume_nii_path = volume_dir / f"volume__epoch={epoch}-step={step}.nii.gz"
+            dxyz_volume_nii_path = volume_dir / f"dxyz_volume__epoch={epoch}-step={step}.nii.gz"
             nifti_payload = NiftiSavePayload(
                 volume_path=volume_nii_path,
                 dxyz_volume_path=dxyz_volume_nii_path,

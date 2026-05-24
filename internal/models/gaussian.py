@@ -4,6 +4,9 @@ import torch
 from torch import nn
 import lightning
 
+from torch.optim.optimizer import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
+
 from ..instantiate_config import Instantiable
 from ..utils.gaussian_containers import FreezableParameterDict
 
@@ -96,16 +99,7 @@ class GaussianModel(nn.Module, ABC):
         pass
 
     @abstractmethod
-    def training_setup(self, module: "lightning.LightningModule") -> Tuple[
-        Optional[Union[
-            List[torch.optim.Optimizer],
-            torch.optim.Optimizer,
-        ]],
-        Optional[Union[
-            List[torch.optim.lr_scheduler.LRScheduler],
-            torch.optim.lr_scheduler.LRScheduler,
-        ]]
-    ]:
+    def training_setup(self, module: "lightning.LightningModule") -> tuple[list[Optimizer], list[LRScheduler]]:
         pass
 
     def on_train_batch_end(self, step: int, module: "lightning.LightningModule"):

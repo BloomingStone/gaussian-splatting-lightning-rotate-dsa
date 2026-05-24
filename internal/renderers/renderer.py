@@ -1,45 +1,20 @@
 from dataclasses import dataclass
 import lightning
+
 import torch
-from typing import Any, Union, List, Tuple, Optional, Dict, Callable
+from typing import Any
+from torch.optim.optimizer import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
+
 from ..instantiate_config import Instantiable
 from ..cameras import Camera
 from ..models.gaussian import GaussianModel
-
-
-class RendererOutputTypes:
-    RGB: int = 1
-    GRAY: int = 2
-    NORMAL_MAP: int = 3
-    FEATURE_MAP: int = 4
-    OTHER: int = 65535  # must provide a visualizer
-
-
-RendererOutputVisualizer = Callable[[torch.Tensor, Dict, "RendererOutputInfo"], torch.Tensor]
-
+from ..visualizers import Visualizer
 
 @dataclass
-class RendererOutputInfo:
-    key: str
-    """The key used to retrieve value from the dictionary returned by `forward()`"""
-
-    type: int = RendererOutputTypes.RGB
-    """One defined in `RendererOutputTypes` above"""
-
-    visualizer: RendererOutputVisualizer|None = None
-    """
-    The first parameter is the value retrieved from the dict returned by `forward()`. 
-    The second parameter is the dict returned by `forward()`. 
-    The Third one is a `RendererOutputInfo` instance.
-    """
-    
-    other_kwargs: dict | None = None
-
-    def __post_init__(self):
-        if self.type == RendererOutputTypes.OTHER and self.visualizer is None:
-            raise ValueError("Visualizer must be provided when `type` is `OTHER`")
-
-        # TODO: set visualizer automatically if it is None
+class RendererOutputs:
+    images: dict[str, tuple[torch.Tensor, Visualizer|None]]
+    meta: dict[str, torch.Tensor]
 
 
 class Renderer(torch.nn.Module):
@@ -48,11 +23,9 @@ class Renderer(torch.nn.Module):
             viewpoint_camera: Camera,
             pc: GaussianModel,
             bg_color: torch.Tensor,
-            scaling_modifier=1.0,
-            render_types: list|None = None,
-            **kwargs,
-    ) -> Any:
-        pass
+            scaling_modifier=1.0
+    ) -> RendererOutputs:
+        raise NotImplementedError
 
     def training_forward(
             self,
@@ -61,15 +34,11 @@ class Renderer(torch.nn.Module):
             viewpoint_camera: Camera,
             pc: GaussianModel,
             bg_color: torch.Tensor,
-            render_types: list|None = None,
-            **kwargs,
-    ):
+    ) -> RendererOutputs:
         return self(
             viewpoint_camera=viewpoint_camera,
             pc=pc,
             bg_color=bg_color,
-            render_types=render_types,
-            **kwargs,
         )
 
     def before_training_step(
@@ -89,16 +58,7 @@ class Renderer(torch.nn.Module):
     def setup(self, stage: str, *args: Any, **kwargs: Any) -> Any:
         pass
 
-    def training_setup(self, module: lightning.LightningModule) -> Tuple[
-        Optional[Union[
-            List[torch.optim.Optimizer],
-            torch.optim.Optimizer,
-        ]],
-        Optional[Union[
-            List[torch.optim.lr_scheduler.LRScheduler],
-            torch.optim.lr_scheduler.LRScheduler,
-        ]]
-    ]:
+    def training_setup(self, module: lightning.LightningModule) -> tuple[list[Optimizer]|None, list[LRScheduler]|None]:
         return None, None
 
     def on_load_checkpoint(self, module, checkpoint):
@@ -106,11 +66,6 @@ class Renderer(torch.nn.Module):
 
     def setup_web_viewer_tabs(self, viewer, server, tabs):
         pass
-
-    def get_available_outputs(self) -> Dict[str, RendererOutputInfo]:
-        return {
-            "rgb": RendererOutputInfo("render")
-        }
 
 
 @dataclass

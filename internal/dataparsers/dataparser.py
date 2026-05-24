@@ -1,5 +1,7 @@
-from typing import Tuple, Optional, Callable
+from pathlib import Path
+from typing import Tuple, Optional, Callable, Any
 from dataclasses import dataclass
+from torch import Tensor
 
 import numpy as np
 import torch
@@ -10,23 +12,23 @@ from ..instantiate_config import Instantiable
 
 @dataclass
 class ImageSet:
-    image_names: list
+    image_names: list[str]
 
-    image_paths: list
+    image_paths: list[Path]
     """ Full path to the image file """
 
     cameras: Cameras
     """ Camera intrinscis and extrinsics """
 
-    depth_paths: Optional[list] = None
+    depth_paths: Optional[list[Path]] = None
     """ Full path to the depth file """
 
-    mask_paths: Optional[list] = None
+    mask_paths: Optional[list[Path]] = None
     """ Full path to the mask file """
 
-    extra_data: Optional[list] = None
+    extra_data: Optional[list[Any]] = None
 
-    extra_data_processor: Optional[Callable] = None
+    extra_data_processor: Optional[Callable[[Any], Tensor]] = None
 
     def __len__(self):
         return len(self.image_names)
@@ -38,14 +40,6 @@ class ImageSet:
     def __iter__(self):
         for i in range(len(self)):
             yield self[i]
-
-    def __post_init__(self):
-        if self.mask_paths is None:
-            self.mask_paths = [None for _ in range(len(self.image_paths))]
-        if self.extra_data is None:
-            self.extra_data = [None for _ in range(len(self.image_paths))]
-        if self.extra_data_processor is None:
-            self.extra_data_processor = ImageSet._return_input
 
     @staticmethod
     def _return_input(i):
@@ -68,10 +62,6 @@ class DataParserOutputs:
     test_set: ImageSet
 
     point_cloud: PointCloud
-
-    # ply_path: str
-
-    appearance_group_ids: Optional[dict] = None
 
     camera_extent: Optional[float] = None
 

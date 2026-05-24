@@ -8,9 +8,10 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 from ..utils.ssim import ssim
 from .metric import Metric, MetricImpl
-from ..renderers.deformabel_xray_renderer_coronary_props import RenderRes
+from ..renderers.deformabel_xray_renderer_coronary_props import ImgT, MetaT, XrayRendererOuputs
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from ..gaussian_splatting import GaussianSplatting
+from ..dataset import BatchT
 
 @dataclass
 class RotateXrayMetrics(Metric):
@@ -61,6 +62,7 @@ def motion(d_xyz: torch.Tensor, d_scale: torch.Tensor, d_rotation: torch.Tensor)
     motion = torch.cat((d_xyz, d_scale, d_angle), dim=-1)
     return motion
 
+
 class RotateXrayMetricsImpl(MetricImpl):
     config:  RotateXrayMetrics
     
@@ -75,8 +77,6 @@ class RotateXrayMetricsImpl(MetricImpl):
         def adapter(pred, gt):
             return fused_ssim(pred.unsqueeze(0), gt.unsqueeze(0))
         return adapter
-
-
     def setup(self, stage: str, pl_module):
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.no_state_dict_models["lpips"] = LearnedPerceptualImagePatchSimilarity(normalize=True, net_type=self.config.lpips_net_type)
@@ -97,13 +97,10 @@ class RotateXrayMetricsImpl(MetricImpl):
         self, 
         pl_module: GaussianSplatting, 
         gaussian_model: XrayCoronaryGaussianModel, 
-        batch, 
-        outputs: RenderRes
+        batch: BatchT, 
+        outputs: XrayRendererOuputs
     ):
-        image_info: Tuple[str, torch.Tensor, torch.Tensor]
-        _, image_info, _ = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
-        _, gt_image, _ = image_info
-        gt_image = gt_image[0:1]
+        gt_image = batch.image_info.gt_image[0:1]
         
         gray_loss = self.rgb_diff_loss_fn(outputs.gray_image, gt_image)
         
@@ -193,7 +190,14 @@ class RotateXrayMetricsImpl(MetricImpl):
             "loss_corr": True,
         }
     
-    def get_train_metrics(self, pl_module, gaussian_model, step: int, batch, outputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:
+    def get_train_metrics(
+        self, 
+        pl_module: GaussianSplatting, 
+        gaussian_model: XrayCoronaryGaussianModel, 
+        step: int, 
+        batch: BatchT, 
+        outputs: XrayRendererOuputs
+    ) -> Tuple[Dict[str, Any], Dict[str, bool]]:
         return self._get_basic_metrics(
             pl_module=pl_module,
             gaussian_model=gaussian_model,
@@ -201,13 +205,9 @@ class RotateXrayMetricsImpl(MetricImpl):
             outputs=outputs,
         )
     
-    def get_validate_metrics(self, pl_module, gaussian_model, batch, outputs: RenderRes) -> Tuple[Dict[str, Any], Dict[str, bool]]:
+    def get_validate_metrics(self, pl_module: GaussianSplatting, gaussian_model: XrayCoronaryGaussianModel, batch: BatchT, outputs: XrayRendererOuputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:
         metrics, prog_bar = self._get_basic_metrics(pl_module, gaussian_model, batch, outputs)
-
-        image_info: Tuple[str, torch.Tensor, torch.Tensor]
-        _, image_info, _ = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
-        _, gt_image, masked_pixels = image_info
-        gt_image = gt_image[0:1]
+        gt_image = batch.image_info.gt_image[0:1]
 
         metrics["psnr"] = self.psnr(outputs.gray_image, gt_image)
         prog_bar["psnr"] = True
