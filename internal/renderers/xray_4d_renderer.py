@@ -42,6 +42,8 @@ class Xray4DRender(CoronaryDeformableXrayRenderer):
         mask = (gs.density > torch.quantile(gs.density, 0.90)).squeeze()
         if not torch.any(mask):
             mask = torch.ones_like(mask, dtype=torch.bool)
+
+        density_std = pc.get_density_std(do_activate=True)
         
         gray_coronary, _ = self._render(
             viewpoint_camera,
@@ -49,12 +51,12 @@ class Xray4DRender(CoronaryDeformableXrayRenderer):
                 xyz=gs.xyz[mask],
                 rotation=gs.rotation[mask],
                 scaling=gs.scaling[mask],
-                density=gs.density[mask],
+                density=density_std[mask],
             )
         )
         
-        deforms_mean = pc.deforms_recorder.get_deforms_mean().detach()
-        deforms_var = pc.deforms_recorder.get_deforms_var().detach()
+        deforms_mean = pc.deforms_recorder.get_deforms_mean()
+        deforms_var = pc.deforms_recorder.get_deforms_var()
         
         res = RenderRes(
             gray_image, gray_coronary,                  # rendered
@@ -104,8 +106,8 @@ class Xray4DRender(CoronaryDeformableXrayRenderer):
             gs = self.deform_model.deform(gs, deforms)
             deforms_mean, deforms_var = pc.deforms_recorder.update(deforms)
         else:
-            deforms_mean = pc.get_deforms_mean().detach()
-            deforms_var = pc.get_deforms_var().detach()
+            deforms_mean = pc.deforms_recorder.get_deforms_mean()
+            deforms_var = pc.deforms_recorder.get_deforms_var()
 
         gray_image, meta_whole = self._render(viewpoint_camera, gs)
 

@@ -83,7 +83,7 @@ class Xray4DMetricsImpl(MetricImpl):
         ssim_metric = self.ssim(outputs.gray_image, gt_image)
         ssim_loss = 1.0 - ssim_metric
 
-        d_xyz_var = outputs.deforms_var[outputs.density_mask, :3].mean()
+        d_xyz_var = outputs.deforms_var["d_xyz"][outputs.density_mask].mean()
         
         gaussian_model = cast(Xray4DGaussianModel, gaussian_model)
         density_var_mean = gaussian_model.get_density_res_energy()[outputs.density_mask].mean()

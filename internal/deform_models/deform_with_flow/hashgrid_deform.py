@@ -128,7 +128,10 @@ class HashGridDefromModel(DeformWithFlowModel):
             nn.Tanh(),      # w = |\vec{v}| <= \sqrt(1+1+1) = 1.73 rad = 99.2 degree  
         )
         
-        self.density_warp = _linear(self.cfg.combine_W, 1)
+        self.density_warp = nn.Sequential(
+            _linear(self.cfg.combine_W, 1),
+            Scale(0.001),    # limit the density to match original scale of density, which is around 0.001 for x-ray observation
+        )
         
 
     def forward(

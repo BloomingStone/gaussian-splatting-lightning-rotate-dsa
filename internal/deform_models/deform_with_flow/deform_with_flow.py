@@ -11,8 +11,21 @@ from internal.utils.gaussian_utils import GaussianTransformUtils
 class DeformsWithFlow(Deforms):
     d_density: torch.Tensor
     
-    cat_together_ch = 3 + 3 + 1 + 1   # [d_xyz, d_scale, d_rotation(quat_angle), d_density]
+    @override
+    @classmethod
+    def cat_together_ch(cls) -> int:
+        return 3 + 3 + 1 + 1   # [d_xyz, d_scale, d_rotation(quat_angle), d_density]
     
+    @override
+    @classmethod
+    def ch_schema(cls) -> dict[str, tuple[int, int]]:
+        return {
+            "d_xyz": (0, 3),
+            "d_rotation": (3, 6),
+            "d_scaling": (6, 7),
+            "d_density": (7, 8),
+    }
+
     @override
     def cat_together(self) -> torch.Tensor:
         """ Concatenate the deforms into a single tensor for easier processing. The order is [d_xyz, d_scale, d_rotation(quat_angle), d_density].
@@ -28,7 +41,7 @@ class DeformsWithFlow(Deforms):
         d_rotation_norm = d_rotation_norm.clamp(-1 + 1e-6, 1 - 1e-6)
         d_angle = 2 * torch.acos(d_rotation_norm[:, 0]).unsqueeze(-1)
         deform = torch.cat((d_xyz, d_scale, d_angle, d_density), dim=-1)
-        assert deform.shape[-1] == self.cat_together_ch
+        assert deform.shape[-1] == self.cat_together_ch()
         return deform
 
 @dataclass
@@ -58,6 +71,6 @@ class DeformWithFlowModel(DeformModel):
 
         assert isinstance(deforms, DeformsWithFlow), "DeformWithFlowModel requires deforms to be of type DeformsWithFlow"
         
-        density = nn.Softplus()(source.density + deforms.d_density)
+        density = source.density + deforms.d_density
 
         return GSParam(xyz=xyz, rotation=rotation, scaling=scaling, density=density)

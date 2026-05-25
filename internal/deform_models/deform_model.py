@@ -13,7 +13,17 @@ class Deforms:
     d_rotation: torch.Tensor
     d_scaling: torch.Tensor
     
-    cat_together_ch = 3 + 3 + 1   # [d_xyz, d_scale, d_rotation(quat_angle)]
+    @classmethod
+    def cat_together_ch(cls) -> int:
+        return 3 + 3 + 1   # [d_xyz, d_scale, d_rotation(quat_angle)]
+    
+    @classmethod
+    def ch_schema(cls) -> dict[str, tuple[int, int]]:
+        return {
+            "d_xyz": (0, 3),
+            "d_rotation": (3, 6),
+            "d_scaling": (6, 7),
+        }
         
     def cat_together(self) -> torch.Tensor:
         """ Concatenate the deforms into a single tensor for easier processing. The order is [d_xyz, d_scale, d_rotation(quat_angle), d_density].
@@ -29,7 +39,7 @@ class Deforms:
         d_rotation_norm = d_rotation_norm.clamp(-1 + 1e-6, 1 - 1e-6)
         d_angle = 2 * torch.acos(d_rotation_norm[:, 0]).unsqueeze(-1)
         deform = torch.cat((d_xyz, d_scale, d_angle), dim=-1)
-        assert deform.shape[-1] == self.cat_together_ch
+        assert deform.shape[-1] == self.cat_together_ch()
         return deform
 
 
@@ -39,14 +49,31 @@ class DeformsMARecoder(nn.Module):
     
     def __init__(self, deforms_type: type[Deforms]=Deforms, ema_lambda: float = 0.95):
         super().__init__()
-        self.deforms_ch = deforms_type.cat_together_ch
+        self.deforms_ch = deforms_type.cat_together_ch()
+        self.schema = deforms_type.ch_schema()
         self.ema_lambda = ema_lambda
     
     def setup(self, n_gaussians: int, device: torch.device):
+        """ Setup the buffers for recording the mean and variance of the deforms. This should be called before training starts."""
         self.register_buffer("deforms_mean", torch.zeros(n_gaussians, self.deforms_ch, device=device, requires_grad=False))
         self.register_buffer("deforms_2_mean", torch.zeros(n_gaussians, self.deforms_ch, device=device, requires_grad=False))
     
-    def update(self, new_deforms: Deforms):
+    def update(self, new_deforms: Deforms) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        """
+        Update the mean and variance MA of the deforms.
+        Args:
+            new_deforms (Deforms): The new deforms to update the MA with. 
+            The deforms will be concatenated into a single tensor using the `cat_together()` method
+        Returns:
+            tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]: A tuple containing two dictionaries, each with
+            the mean and variance of each deform component. The keys are the same as the keys in the `self.schema`, 
+            and the values are tensors of shape (n_gaussians, ch) where ch is the number of channels for that deform component. 
+            
+            The mean and variance are calculated using an exponential moving average with the `ema_lambda` parameter.
+            
+            The the old means and means of squares are detached, but the new deforms and results are not, allows the 
+            gradients to flow through the input deforms and therefore the deform model, but not through the MA recording itself.
+        """
         assert self.deforms_mean is not None and self.deforms_2_mean is not None, "DeformsMARecoder not setup yet. Call setup() before update()."
         d = new_deforms.cat_together()   # shape = (n_gaussians, 3+3+1+1)
         
@@ -60,20 +87,57 @@ class DeformsMARecoder(nn.Module):
 
         deforms_var = deforms_2_mean - torch.square(deforms_mean)
         
-        return deforms_mean, deforms_var
+        deforms_mean_dict = {
+            key: deforms_mean[:, slice(*idx_range)] for key, idx_range in self.schema.items()
+        }
+        deforms_var_dict = {
+            key: deforms_var[:, slice(*idx_range)] for key, idx_range in self.schema.items()
+        }
+        
+        return deforms_mean_dict, deforms_var_dict
     
-    def forward(self, deforms: Deforms):
+    def forward(self, deforms: Deforms) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         return self.update(deforms)
     
-    def get_deforms_var(self) -> torch.Tensor:
+    def get_deforms_var(self) -> dict[str, torch.Tensor]:
+        """ 
+        Get the variance of the deforms. The variance is calculated as E[X^2] - (E[X])^2.
+        Returns:
+            dict[str, torch.Tensor]: A dictionary containing the variance of each deform component. The keys
+            are the same as the keys in the `self.schema`, and the values are tensors of shape (n_gaussians, ch) 
+            where ch is the number of channels for that deform component.
+            The result always returns a detached tensor, which is not tracked by autograd.
+        """
+        
         assert self.deforms_mean is not None and self.deforms_2_mean is not None, "DeformsMARecoder not setup yet. Call setup() before update()."
-        return self.deforms_2_mean - torch.square(self.deforms_mean)
+        var = self.deforms_2_mean - torch.square(self.deforms_mean)
+        var = var.detach()
+        return {
+            key: var[:, slice(*idx_range)] for key, idx_range in self.schema.items()
+        }
     
-    def get_deforms_mean(self) -> torch.Tensor:
+    def get_deforms_mean(self) -> dict[str, torch.Tensor]:
+        """
+        Get the mean of the deforms.
+        Returns:
+            dict[str, torch.Tensor]: A dictionary containing the mean of each deform component. The keys
+            are the same as the keys in the `self.schema`, and the values are tensors of shape (n_gaussians, ch) 
+            where ch is the number of channels for that deform component.
+            The result always returns a detached tensor, which is not tracked by autograd.
+        """
+        
         assert self.deforms_mean is not None and self.deforms_2_mean is not None, "DeformsMARecoder not setup yet. Call setup() before update()."
-        return self.deforms_mean
+        deforms_mean = self.deforms_mean.detach()
+        return {
+            key: deforms_mean[:, slice(*idx_range)] for key, idx_range in self.schema.items()
+        }
     
     def clone_deforms_by_mask(self, mask: torch.Tensor, repeats: int):
+        """ 
+        Clone the deforms mean and var by the given mask and repeats. 
+        This is useful for handling the case where the number of gaussians changes due to pruning or other reasons. 
+        The new deforms mean and var will be appended to the existing ones.
+        """
         assert self.deforms_mean is not None and self.deforms_2_mean is not None, "DeformsMARecoder not setup yet. Call setup() before update()."
         new_deforms_mean = self.deforms_mean[mask].repeat(repeats, 1)
         new_deforms_2_mean = self.deforms_2_mean[mask].repeat(repeats, 1)
@@ -90,6 +154,11 @@ class DeformsMARecoder(nn.Module):
         assert self.deforms_mean.shape[0] == self.deforms_2_mean.shape[0]
     
     def filter_deforms_by_mask(self, valid_mask: torch.Tensor):
+        """
+        Filter the deforms by the given mask.
+        This is useful for handling the case where some gaussians are pruned or masked out due to other reasons.
+        The deforms mean and var will be filtered by the valid_mask, and the invalid ones will be removed from the MA recording.
+        """
         assert self.deforms_mean is not None and self.deforms_2_mean is not None, "DeformsMARecoder not setup yet. Call setup() before update()."
         self.deforms_mean = self.deforms_mean[valid_mask].detach()
         self.deforms_2_mean = self.deforms_2_mean[valid_mask].detach()

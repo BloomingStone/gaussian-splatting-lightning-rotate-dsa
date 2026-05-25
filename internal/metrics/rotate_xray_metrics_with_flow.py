@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Tuple, Dict, Literal, Any, cast
+from typing import Tuple, Dict, Literal, Any
 
 import torch
 import torch.nn.functional as F
@@ -10,7 +10,6 @@ from pytorch_lightning import LightningModule
 from internal.utils.ssim import ssim
 from internal.metrics.metric import Metric, MetricImpl
 from internal.renderers.deformabel_xray_renderer import RenderRes
-from internal.models.xray_coronary_gaussian_with_flow import XrayCoronaryGaussianModel
 
 
 @dataclass
@@ -18,7 +17,7 @@ class RotateXrayMetrics(Metric):
     w_gray_loss: float = 1.0
     w_ssim_loss: float = 1.0
     
-    w_density_var: float = 0.0
+    w_d_density: float = 0.0
     w_xyz_var: float = 0.0
 
     rgb_diff_loss: Literal["l1", "l2"] = "l1"
@@ -83,10 +82,17 @@ class RotateXrayMetricsImpl(MetricImpl):
         ssim_metric = self.ssim(outputs.gray_image, gt_image)
         ssim_loss = 1.0 - ssim_metric
         
-        deforms_var = outputs.deforms_var[outputs.density_mask]
-
-        d_xyz_var = outputs.deforms_var[:, :3].mean()
-        density_var_mean = deforms_var[:, -1].mean()
+        # regularization losses on deforms variance
+        d_xyz_var = outputs.deforms_var["d_xyz"]
+        d_density_std = outputs.deforms_var["d_density"].sqrt()[outputs.density_mask]
+        d_density_mean = outputs.deforms_mean["d_density"].abs()[outputs.density_mask]
+        d_xyz_var_avg = d_xyz_var[outputs.density_mask].mean()
+        
+        # use mean + 2*std as the uncertainty-aware density, which is roughly the upper bound of density with 95% confidence if 
+        # we assume the deforms follow a normal distribution. 
+        # This is to avoid under-estimate the density for points with high uncertainty.
+        d_density_upper= d_density_mean + 2 * d_density_std
+        d_density_upper_avg = d_density_upper.mean()
 
         loss = (
             # image loss
@@ -94,8 +100,8 @@ class RotateXrayMetricsImpl(MetricImpl):
             self.config.w_ssim_loss * ssim_loss + 
             
             # regularization loss
-            self.config.w_density_var * density_var_mean +
-            self.config.w_xyz_var * d_xyz_var
+            self.config.w_d_density * d_density_upper_avg + 
+            self.config.w_xyz_var * d_xyz_var_avg
         )
 
 
@@ -105,8 +111,10 @@ class RotateXrayMetricsImpl(MetricImpl):
             "loss": loss,
             "gray_loss": gray_loss,
             "ssim_loss": ssim_loss,
-            "density_var": density_var_mean,
-            "xyz_var": d_xyz_var
+            "d_density_upper": d_density_upper_avg,
+            "d_density_mean": d_density_mean.mean(),
+            "d_density_std": d_density_std.mean(),
+            "xyz_var": d_xyz_var_avg
         }
 
 
@@ -114,7 +122,9 @@ class RotateXrayMetricsImpl(MetricImpl):
             "loss": True,
             "gray_loss": True,
             "ssim_loss": True,
-            "density_var": True,
+            "d_density_upper": True,
+            "d_density_mean": False,
+            "d_density_std": False,
             "xyz_var": True,
         }
         return metrics, prog_bar

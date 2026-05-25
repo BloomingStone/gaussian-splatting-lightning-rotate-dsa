@@ -18,12 +18,12 @@ data:
       init_point_cloud_mode: random
       init_point_cloud_num: 100_000
       train_ratio: 0.8
-      base_name: contrast_frames
+      base_name: rotate_dsa
 
 model:
   max_save_val_output: 10
   renderer:
-    class_path: internal.renderers.deformabel_xray_renderer.CoronaryDeformableXrayRenderer
+    class_path: internal.renderers.deformabel_xray_renderer_with_flow.DeformableXrayRendererWithFlow
     init_args:
       optimization_config:
         enable_ast: true
@@ -41,6 +41,7 @@ model:
       fused_ssim: true
       w_gray_loss: 1.0
       w_ssim_loss: 1.0
+      w_d_density: 10.0
   gaussian:
     class_path: internal.models.xray_coronary_gaussian_with_flow.XrayCoronaryGaussianWithFlow
     init_args:

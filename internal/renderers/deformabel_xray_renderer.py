@@ -12,11 +12,8 @@ from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 
 from .renderer import Renderer, RendererOutputInfo, RendererOutputTypes
 from ..cameras import Camera
-from ..cameras import Camera
 from ..deform_models import DeformModel, DefromModelConfig, Deforms, GSParam
-from ..utils.network_factory import NetworkFactory
 from ..utils.general_utils import get_linear_noise_func
-from ..utils.gaussian_utils import GaussianTransformUtils
 
 
 @dataclass
@@ -29,6 +26,7 @@ class DeformableRendererOptimizationConfig:
     enable_ast: bool = True
     log_gradients: bool = True
     grad_log_interval: int = 100
+    density_ramp_steps: int = 2000
 
 
 @dataclass
@@ -39,8 +37,8 @@ class RenderRes:
     visibility_filter: Tensor
     radii: Tensor
     
-    deforms_mean: Tensor
-    deforms_var: Tensor
+    deforms_mean: dict[str, Tensor]
+    deforms_var: dict[str, Tensor]
     
     deforms: Deforms
     
@@ -129,8 +127,8 @@ class CoronaryDeformableXrayRenderer(Renderer):
             )
         )
         
-        deforms_mean = pc.deforms_recorder.get_deforms_mean().detach()
-        deforms_var = pc.deforms_recorder.get_deforms_var().detach()
+        deforms_mean = pc.deforms_recorder.get_deforms_mean()
+        deforms_var = pc.deforms_recorder.get_deforms_var()
         
         res = RenderRes(
             gray_image, gray_coronary,                  # rendered
@@ -173,13 +171,27 @@ class CoronaryDeformableXrayRenderer(Renderer):
             pass
         
         deforms = self.deform_model(gs.xyz.detach(), time.detach())
+        
+        # apply density amplitude ramp for models that output d_density (with_flow)
+        ramp_steps = getattr(self.optimization_config, "density_ramp_steps", 2000)
+        warm_up = self.optimization_config.warm_up
+        if ramp_steps > 0:
+            alpha = float(max(0.0, min(1.0, (step - warm_up) / ramp_steps)))
+        else:
+            alpha = 1.0
+        if hasattr(deforms, "d_density"):
+            try:
+                deforms.d_density = deforms.d_density * alpha
+            except Exception:
+                pass
+
         if step > self.optimization_config.warm_up:
             # update means3D, rotation, scales
             gs = self.deform_model.deform(gs, deforms)
             deforms_mean, deforms_var = pc.deforms_recorder.update(deforms)
         else:
-            deforms_mean = pc.get_deforms_mean().detach()
-            deforms_var = pc.get_deforms_var().detach()
+            deforms_mean = pc.deforms_recorder.get_deforms_mean()
+            deforms_var = pc.deforms_recorder.get_deforms_var()
 
         gray_image, meta_whole = self._render(viewpoint_camera, gs)
 
@@ -190,6 +202,8 @@ class CoronaryDeformableXrayRenderer(Renderer):
         gray_coronary = None
         
         mask = (gs.density > torch.quantile(gs.density, 0.90)).squeeze()
+        if not torch.any(mask):
+            mask = torch.ones_like(mask, dtype=torch.bool)
         
         return RenderRes(
             gray_image, gray_coronary,                  # rendered

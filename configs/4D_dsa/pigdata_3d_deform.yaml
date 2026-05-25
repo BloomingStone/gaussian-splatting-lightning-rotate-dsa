@@ -18,7 +18,7 @@ data:
       init_point_cloud_mode: random
       init_point_cloud_num: 100_000
       train_ratio: 0.8
-      base_name: contrast_frames
+      base_name: rotate_dsa
 
 model:
   max_save_val_output: 10

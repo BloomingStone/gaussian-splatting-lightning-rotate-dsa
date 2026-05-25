@@ -89,7 +89,7 @@ class RotatedXRay(DataParserConfig):
     train_ratio: ratio of images to use for training, only used when mode is render-new-views
     seed: random seed for data splitting and point cloud initialization
     """
-    base_name: str = "contrast_frames"
+    base_name: str = "rotate_dsa"
     mode: Literal["reconstruction", "render-new-views"] = "reconstruction"
     init_point_cloud_mode: Literal["uniform", "random", "random-ball", "FBP", "DL", "label", "central-line"] = "uniform"
     init_point_cloud_num: int = 100_000
@@ -319,7 +319,7 @@ class RotatedXRayDataParser(DataParser):
                 axes = [np.linspace(-0.5 * b, 0.5 * b, size) for b in bounds]
                 xyz = np.array(np.meshgrid(*axes, indexing="ij")).reshape(3, -1).T
             case "random":
-                xyz = np.random.rand(self.params.init_point_cloud_num, 3) * bounds - 0.5 * bounds
+                xyz = np.random.rand(self.params.init_point_cloud_num, 3) * bounds - bounds * 0.5
             case "random-ball":
                 rng = np.random.default_rng(self.params.seed)
                 phi = rng.uniform(0, 2 * np.pi, self.params.init_point_cloud_num)

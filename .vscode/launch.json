@@ -100,7 +100,7 @@
                 "fit",
                 "--config", "configs/4D_dsa/pigdata_deform_with_flow.yaml",
                 "--data.path", "data/pigdata",
-                "-n", "pigdata-4d-recon-deform-with-flow"
+                "-n", "pigdata-4d-recon"
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "${config:gs.debug.cudaVisibleDevices}"
