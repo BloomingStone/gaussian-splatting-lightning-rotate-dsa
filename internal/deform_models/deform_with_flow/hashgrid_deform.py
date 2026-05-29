@@ -57,6 +57,13 @@ class HashGridDeformConfig(DeformWithFlowConfig):
     D: int = 2  # deepth for each layer of MLP
     
     t_multires: int = 6
+    phase_multires: int|None = None
+    
+    # If True, the t and phase branches will be combined in the same MLP to output `h``
+    # Otherwise: 
+    #   x_emb + t_emb -> h_flow -> d_density;
+    #   x_emb + phase_emb -> h_mov -> d_xyz, d_rot, d_scale;
+    t_phase_combined: bool = True
     
     combine_layers: int = 4
     combine_W: int = 128
@@ -97,6 +104,16 @@ class HashGridDefromModel(DeformWithFlowModel):
         )
         emb_t_ch = self.embed_t_fn.get_output_n_channels()
         
+        if self.cfg.phase_multires is not None:
+            self.embed_phase_fn = VectorPositionalEncoding(
+                input_channels=1,
+                n_frequencies=self.cfg.phase_multires,
+            )
+            emb_phase_ch = self.embed_phase_fn.get_output_n_channels()
+        else:
+            self.embed_phase_fn = None
+            emb_phase_ch = 0
+        
         def _mlp(W: int, layers: int, input_ch: int):
             return MLP(
                 D           =   self.cfg.D,
@@ -107,11 +124,25 @@ class HashGridDefromModel(DeformWithFlowModel):
                 net_factory =   self.network_factory,
             )
         
-        self.combine_mlp = _mlp(
-            W=self.cfg.combine_W, 
-            layers=self.cfg.combine_layers, 
-            input_ch = (emb_t_ch + emb_x_ch)
-        )
+        if self.cfg.t_phase_combined:
+            self.combine_mlp = _mlp(
+                W=self.cfg.combine_W, 
+                layers=self.cfg.combine_layers, 
+                input_ch = (emb_x_ch + emb_t_ch + emb_phase_ch)
+            )
+            self.combine_phase_mlp = None
+        else:
+            assert self.embed_phase_fn is not None, "phase_multires must be set to a positive integer to enable phase encoding branch."
+            self.combine_mlp = _mlp(
+                W=self.cfg.combine_W, 
+                layers=self.cfg.combine_layers, 
+                input_ch = (emb_t_ch + emb_x_ch)
+            )
+            self.combine_phase_mlp = _mlp(
+                W=self.cfg.combine_W,
+                layers=self.cfg.combine_layers,
+                input_ch = (emb_phase_ch + emb_x_ch),
+            )
         
         _linear = self.network_factory.get_linear
         self.coronary_props_warp = _linear(emb_x_ch, 1)
@@ -149,22 +180,41 @@ class HashGridDefromModel(DeformWithFlowModel):
             d_xyz: [n, 3] \\in R^3, the translation for each point
             d_scaling: [n, 3] \\in [-1, 1], the scaling change for each point, where the new scaling will be scaling * (1 + d_scaling)
             d_rotation: [n, 4] \\in [-0.1*\\sqrt{3}, 0.1*\\sqrt{3}], the rotation for each point in quaternion format (w, x, y, z), where the new rotation will be rotation * d_rotation
+            d_density: [n, 1], the density change for each point, where the new density will be density + d_density
         """
-        t_emb = self.embed_t_fn(t)
         x_emb = self.embed_fn(xyz)
-        
         assert not torch.any(torch.isnan(x_emb)), "NaN detected in x_emb"
         
-        h_combine = self.combine_mlp(torch.cat([x_emb, t_emb], dim=-1))
+        t_emb = self.embed_t_fn(t)
         
-        d_xyz = self.xyz_warp(h_combine)
-        d_scaling = self.scaling_warp(h_combine)
+        if phase is None:
+            if self.embed_phase_fn is not None:
+                import warnings
+                warnings.simplefilter("once", category=UserWarning)
+                warnings.warn("phase is not provided but phase_multires is set. The phase encoder branch will be disabled.")
+            h = self.combine_mlp(torch.cat([x_emb, t_emb], dim=-1))
+            h_mov = h
+            h_flow = h
+        else:
+            assert self.embed_phase_fn is not None, "phase is provided but phase_multires is not set. Please set phase_multires to a positive integer to enable phase encoding."
+            phase_emb = self.embed_phase_fn(phase)
+            if self.combine_phase_mlp is not None:
+                h_flow = self.combine_mlp(torch.cat([x_emb, t_emb], dim=-1))
+                h_mov = self.combine_phase_mlp(torch.cat([x_emb, phase_emb], dim=-1))   # cadiac motion is related to the cardiac phase
+            else:
+                h = self.combine_mlp(torch.cat([x_emb, t_emb, phase_emb], dim=-1))
+                h_mov = h
+                h_flow = h
+        
+        
+        d_xyz = self.xyz_warp(h_mov)
+        d_scaling = self.scaling_warp(h_mov)
         
         # \omega = |\vec{v}|
         # q = (\cos(\omega/2), \frac{\vec{v}}{\omega} \cdot \sin(\omega/2))
         #   = (\cos(\omega/2), vec{v}/2 \cdot \text{sinc}(\frac{\omega}{2\pi}))
         # torch.sinc(x) = sin(pi*x)/(pi*x)
-        axial_angle: torch.Tensor = self.axial_angle_warp(h_combine).float()
+        axial_angle: torch.Tensor = self.axial_angle_warp(h_mov).float()
         omega = torch.sqrt(torch.sum(axial_angle**2, dim=-1, keepdim=True) + 1e-10)
         q_w = torch.cos(omega / 2.)
         q_v = axial_angle / 2. * torch.sinc(omega / (2. * torch.pi))
@@ -172,6 +222,6 @@ class HashGridDefromModel(DeformWithFlowModel):
         d_rotation = torch.cat([q_w, q_v], dim=-1).to(xyz)
         d_rotation = torch.nn.functional.normalize(d_rotation)
         
-        d_density = self.density_warp(h_combine)
+        d_density = self.density_warp(h_flow)
 
         return DeformsWithFlow(d_xyz=d_xyz, d_scaling=d_scaling, d_rotation=d_rotation, d_density=d_density)

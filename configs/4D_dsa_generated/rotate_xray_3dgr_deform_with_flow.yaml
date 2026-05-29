@@ -1,0 +1,60 @@
+# 在原有3D形变场的基础上增加density 变化，命名用 with_flow 来区分原来的3D形变场模型
+max_steps: 10000
+save_val: true
+cache_all_images: true
+trainer:
+  check_val_every_n_epoch: 5
+  precision: 16-mixed
+
+save_iterations: [1000, 5000, 10000]
+
+data:
+  parser: 
+    class_path: internal.dataparsers.rotated_xray_dataparser.RotatedXRay
+    init_args:
+      mode: render-new-views
+      init_point_cloud_mode: random
+      init_point_cloud_num: 100_000
+      train_ratio: 0.8
+
+model:
+  max_save_val_output: 10
+  renderer:
+    class_path: internal.renderers.deformabel_xray_renderer_with_flow.DeformableXrayRendererWithFlow
+    init_args:
+      optimization_config:
+        enable_ast: true
+        log_gradients: true
+        grad_log_interval: 50
+      deform_model_config:
+        class_path: internal.deform_models.deform_with_flow.HashGridDeformConfig
+        init_args:
+          phase_multires: 6
+          x_multires: 13
+          log2_hashmap_size: 19
+          max_resolution: 2048
+  metric:
+    class_path: internal.metrics.rotate_xray_metrics_with_flow.RotateXrayMetrics
+    init_args:
+      fused_ssim: true
+      w_gray_loss: 1.0
+      w_ssim_loss: 1.0
+      w_d_density: 10.0
+  gaussian:
+    class_path: internal.models.xray_coronary_gaussian_with_flow.XrayCoronaryGaussianWithFlow
+    init_args:
+      optimization:
+        log_gradients: true
+        grad_log_interval: 50
+  density:
+    class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
+  renderer_output_types: 
+    - gray_image
+    - gray_coronary
+  saver:
+    class_path: internal.savers.x_ray_saver_with_flow.XRaySaver
+    init_args:
+      save_ckpt: false
+      save_ply: false
+      save_nii: true
+      save_phase: 0.

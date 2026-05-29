@@ -6,16 +6,18 @@ from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 
 from ..cameras import Camera
 from ..deform_models import GSParam
-from ..deform_models.deform_with_flow import DeformsWithFlow, DeformWithFlowConfig
+from ..deform_models.deform_with_flow import DeformsWithFlow, DeformWithFlowConfig, DeformWithFlowModel
 
 from .deformabel_xray_renderer import DeformableRendererOptimizationConfig, RenderRes, CoronaryDeformableXrayRenderer
 
 class DeformableXrayRendererWithFlow(CoronaryDeformableXrayRenderer):
+    deform_model: DeformWithFlowModel   # type: ignore
+    
     @override
     def __init__(
         self,
         optimization_config: DeformableRendererOptimizationConfig,
-        deform_model_config: DeformWithFlowConfig
+        deform_model_config: DeformWithFlowConfig,
     ):
         super().__init__(optimization_config, deform_model_config)
         self.deform_model_config = deform_model_config
@@ -39,7 +41,8 @@ class DeformableXrayRendererWithFlow(CoronaryDeformableXrayRenderer):
         )
         
         time = viewpoint_camera.time.unsqueeze(0).expand(gs.xyz.shape[0], -1)
-        deforms: DeformsWithFlow = self.deform_model(gs.xyz.detach(), time.detach())
+        phase = viewpoint_camera.phase.unsqueeze(0).expand(gs.xyz.shape[0], -1)
+        deforms: DeformsWithFlow = self.deform_model(gs.xyz.detach(), time.detach(), phase.detach())
         gs = self.deform_model.deform(gs, deforms)
         gray_image, meta_whole = self._render(viewpoint_camera, gs)
 

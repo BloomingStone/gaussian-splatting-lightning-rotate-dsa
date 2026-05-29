@@ -2,13 +2,9 @@ from dataclasses import dataclass
 from typing import Tuple, Dict, Literal, Any
 
 import torch
-import torch.nn.functional as F
-from torchmetrics.image import PeakSignalNoiseRatio
-from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from pytorch_lightning import LightningModule
 
-from internal.utils.ssim import ssim
-from internal.metrics.metric import Metric, MetricImpl
+from internal.metrics.metric import Metric, MetricImpl, CommonImageMetricImpl
 from internal.renderers.deformabel_xray_renderer import RenderRes
 
 
@@ -35,35 +31,6 @@ class RotateXrayMetrics(Metric):
 
 class RotateXrayMetricsImpl(MetricImpl):
     config:  RotateXrayMetrics
-    
-    def __init__(self, config: RotateXrayMetrics, *args, **kwargs) -> None:
-        super().__init__(config, *args, **kwargs)
-
-        self.no_state_dict_models = {}
-
-    @staticmethod
-    def _create_fused_ssim_adapter():
-        from fused_ssim import fused_ssim
-        def adapter(pred, gt):
-            return fused_ssim(pred.unsqueeze(0), gt.unsqueeze(0))
-        return adapter
-
-
-    def setup(self, stage: str, pl_module):
-        self.psnr = PeakSignalNoiseRatio(data_range=1.0)
-        self.no_state_dict_models["lpips"] = LearnedPerceptualImagePatchSimilarity(normalize=True, net_type=self.config.lpips_net_type)
-
-        
-        self.rgb_diff_loss_fn = self._l1_loss
-        if self.config.rgb_diff_loss == "l2":
-            print("Use L2 loss")
-            self.rgb_diff_loss_fn = self._l2_loss
-
-        self.ssim = ssim
-        if self.config.fused_ssim:
-            print("Fused SSIM enabled")
-            self.ssim = self._create_fused_ssim_adapter()
-    
 
     def _get_basic_metrics(
         self, 

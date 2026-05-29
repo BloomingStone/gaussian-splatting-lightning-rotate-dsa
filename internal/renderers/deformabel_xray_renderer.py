@@ -105,7 +105,8 @@ class CoronaryDeformableXrayRenderer(Renderer):
         )
         
         time = viewpoint_camera.time.unsqueeze(0).expand(gs.xyz.shape[0], -1)
-        deforms: Deforms = self.deform_model(gs.xyz.detach(), time.detach())
+        phase = viewpoint_camera.phase.unsqueeze(0).expand(gs.xyz.shape[0], -1)
+        deforms: Deforms = self.deform_model(gs.xyz.detach(), time.detach(), phase.detach())
         gs = self.deform_model.deform(gs, deforms)
         gray_image, meta_whole = self._render(viewpoint_camera, gs)
 
@@ -161,16 +162,15 @@ class CoronaryDeformableXrayRenderer(Renderer):
 
         N = gs.xyz.shape[0]
         time = viewpoint_camera.time.unsqueeze(0).expand(N, -1)
+        phase = viewpoint_camera.phase.unsqueeze(0).expand(N, -1)
         
         if self.optimization_config.enable_ast:     # add AST noise
             time_interval = 1 / ((step % self.train_set_length) + 1)
             ast_noise = torch.randn(1, 1, device=gs.xyz.device).expand(N, -1) * time_interval * self.smooth_term(step)
             time = time + ast_noise
-
-        if module.global_step == 144:
-            pass
+            phase = phase + ast_noise
         
-        deforms = self.deform_model(gs.xyz.detach(), time.detach())
+        deforms = self.deform_model(gs.xyz.detach(), time.detach(), phase.detach())
         
         # apply density amplitude ramp for models that output d_density (with_flow)
         ramp_steps = getattr(self.optimization_config, "density_ramp_steps", 2000)

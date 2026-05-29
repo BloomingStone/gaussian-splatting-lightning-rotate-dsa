@@ -25,8 +25,9 @@
             "args": [
                 "fit",
                 "--config", "configs/rotate_xray_3dgr/rotate_xray_3dgr_static.yaml",
-                "--data.path", "/media/data3/sj/Code/Gen4D/test/output/static_intergration_full/static_volume_reader_multipli_contrast_LCA",
-                "-n", "rotate-xcat-static"
+                "--data.path", "data/rbf_reader_flow_contrast_LCA",
+                "-n", "rotate-xray__static",
+                "-v", "debug"
             ]
         },
         {
@@ -100,10 +101,28 @@
                 "fit",
                 "--config", "configs/4D_dsa/pigdata_deform_with_flow.yaml",
                 "--data.path", "data/pigdata",
-                "-n", "pigdata-4d-recon"
+                "-n", "pigdata-4d-recon",
+                "-v", "debug"
             ],
             "env": {
-                "CUDA_VISIBLE_DEVICES": "${config:gs.debug.cudaVisibleDevices}"
+                "CUDA_VISIBLE_DEVICES": "0"
+            }
+        },
+        {
+            "name": "rotate dsa[deform with flow]",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "fit",
+                "--config", "configs/4D_dsa_generated/rotate_xray_3dgr_deform_with_flow.yaml",
+                "--data.path", "data/rbf_reader_flow_contrast_LCA",
+                "-n", "rotate-xray__deformable-with-flow",
+                "-v", "debug"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
             }
         }
     ]
