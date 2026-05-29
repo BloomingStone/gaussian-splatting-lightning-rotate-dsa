@@ -52,6 +52,7 @@ pytest = ">=9.0.3,<10"
 cyclopts = ">=4.10.1,<5"
 cupy = ">=13.0.0"
 tifffile = ">=2026.3.3,<2027"
+rich = ">=14.0.0,<15"
 
 [tool.pixi.pypi-options]
 no-build-isolation = [
@@ -75,11 +76,11 @@ lightning = { version = ">=2.5.5,<3", extras = ["pytorch-extra"] }
 [tool.pixi.feature.vanilla-gs-rasterization.pypi-dependencies]
 diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gaussian-rasterization.git", branch = "main" }
 
-[tool.pixi.feature.x-gs-rasterization.pypi-dependencies]
-diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gaussian-rasterization.git", branch = "X-Gaussian" }
-
-[tool.pixi.feature.gsplat-v0.pypi-dependencies]
-gsplat = { git = "https://github.com/yzslab/gsplat.git" }
+# [tool.pixi.feature.x-gs-rasterization.pypi-dependencies]
+# diff_gaussian_rasterization = { git = "https://github.com/BloomingStone/diff-gaussian-rasterization.git", branch = "X-Gaussian" }
+# 
+# [tool.pixi.feature.gsplat-v0.pypi-dependencies]
+# gsplat = { git = "https://github.com/yzslab/gsplat.git" }
 
 [tool.pixi.feature.gsplat-v1.pypi-dependencies]
 gsplat = { git = "https://github.com/nerfstudio-project/gsplat.git", tag = "v1.5.3" }
@@ -94,8 +95,6 @@ default = [
     "default",
     "gsplat-v1",
     "r2-gaussian",
-] # 实际上 gs-rasterization 和 gsplat 应该是互斥的，但目前先这样
-x-gs = ["x-gs-rasterization", "default", "gsplat-v1"]
-gsplat-v0 = ["vanilla-gs-rasterization", "default", "gsplat-v0"]
+]
 
 [tool.pixi.tasks]

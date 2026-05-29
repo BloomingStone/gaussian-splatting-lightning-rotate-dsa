@@ -1,12 +1,12 @@
 # 在原有3D形变场的基础上增加density 变化，命名用 with_flow 来区分原来的3D形变场模型
-max_steps: 20000
+max_steps: 10000
 save_val: true
 cache_all_images: true
 trainer:
   check_val_every_n_epoch: 5
   precision: 16-mixed
 
-save_iterations: [20000]
+save_iterations: [1000, 5000, 10000]
 
 data:
   val_max: null
@@ -32,6 +32,7 @@ model:
       deform_model_config:
         class_path: internal.deform_models.deform_with_flow.HashGridDeformConfig
         init_args:
+          phase_multires: 6
           x_multires: 13
           log2_hashmap_size: 19
           max_resolution: 2048
@@ -54,9 +55,9 @@ model:
     - gray_image
     - gray_coronary
   saver:
-    class_path: internal.savers.x_ray_saver.XRaySaver
+    class_path: internal.savers.x_ray_saver_with_flow.XRaySaver
     init_args:
       save_ckpt: false
       save_ply: false
       save_nii: true
-      save_phase: 0.5
+      save_phase: 0.

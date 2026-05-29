@@ -144,12 +144,6 @@ class CLI(LightningCLI):
         config.model.save_val_output = config.save_val
         config.data.val_on_train = config.val_train
 
-        # set number of cached images
-        if config.cache_all_images is True:
-            config.data.train_max_num_images_to_cache = -1
-            config.data.val_max_num_images_to_cache = -1
-            config.data.test_max_num_images_to_cache = -1
-
         # set refresh rate of the progress bar
         if config.pbar_rate is not None:
             for i in self.trainer_defaults["callbacks"]:

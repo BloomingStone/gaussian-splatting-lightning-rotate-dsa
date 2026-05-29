@@ -11,6 +11,7 @@ import wandb
 import csv
 from lightning.pytorch import LightningModule
 from lightning.pytorch.utilities.types import LRSchedulerPLType, STEP_OUTPUT
+from jsonargparse.typing import lazy_instance
 import lightning.pytorch.loggers
 
 from .viewer.training_viewer import TrainingViewer
@@ -21,8 +22,9 @@ from .renderers import Renderer, VanillaRenderer, RendererConfig
 from .metrics import Metric, VanillaMetrics
 from .density_controllers.density_controller import DensityController
 from .density_controllers.vanilla_density_controller import VanillaDensityController
-from jsonargparse import lazy_instance
+from .datasets.gs_dataset import BatchT
 
+from .cameras import Camera
 from .utils.image_utils import save_tensor_image
 from .savers import Saver
 from .savers.vanilla_saver import VanillaSaver
@@ -223,12 +225,14 @@ class GaussianSplatting(LightningModule):
             step=self.trainer.global_step,
         )
 
-    def transfer_batch_to_device(self, batch: Any, device: torch.device, dataloader_idx: int) -> Any:
-        if batch[0].device != self.device:
+    def transfer_batch_to_device(self, batch: BatchT, device: torch.device, dataloader_idx: int) -> Any:
+        if batch[0].R.device != self.device:
             return super().transfer_batch_to_device(batch, device, dataloader_idx)
 
         camera, image_info, extra_data = batch
         image_name, gt_image, masked_pixels = image_info
+        
+        camera = camera.to(device)
 
         if extra_data is not None:
             extra_data = super().transfer_batch_to_device(extra_data, device, dataloader_idx)
@@ -239,7 +243,7 @@ class GaussianSplatting(LightningModule):
 
         return camera, (image_name, gt_image, masked_pixels), extra_data
 
-    def forward(self, camera):
+    def forward(self, camera: Camera):
         if self.training is True:
             return self.renderer.training_forward(
                 self.trainer.global_step,
@@ -316,7 +320,7 @@ class GaussianSplatting(LightningModule):
         for i in self.on_train_start_hooks:
             i(self.gaussian_model, self)
 
-    def on_train_batch_start(self, batch: Any, batch_idx: int):
+    def on_train_batch_start(self, batch: BatchT, batch_idx: int):
         if self.web_viewer is not None:
             self.web_viewer.training_step(
                 self.gaussian_model,
@@ -326,9 +330,8 @@ class GaussianSplatting(LightningModule):
             )
         return super().on_train_batch_start(batch, batch_idx)
 
-    def training_step(self, batch, batch_idx):
-        camera, image_info, _ = batch
-        # image_name, gt_image, masked_pixels = image_info
+    def training_step(self, batch: BatchT, batch_idx: int):
+        camera, _, _ = batch
 
         global_step = self.trainer.global_step + 1  # must start from 1 to prevent densify at the beginning
 
@@ -407,7 +410,7 @@ class GaussianSplatting(LightningModule):
         for i in self.on_after_backward_hooks:
             i(outputs, batch, self.gaussian_model, global_step, self)
 
-    def on_train_batch_end(self, outputs: STEP_OUTPUT, batch: Any, batch_idx: int) -> None:
+    def on_train_batch_end(self, outputs: STEP_OUTPUT, batch: BatchT, batch_idx: int) -> None:
         # the value of `trainer.global_step` here
         # is the same as the local variable `global_step` in training_step
         global_step = self.trainer.global_step
@@ -421,7 +424,7 @@ class GaussianSplatting(LightningModule):
 
         super().on_train_batch_end(outputs, batch, batch_idx)
 
-    def on_validation_batch_start(self, batch: Any, batch_idx: int, dataloader_idx: int = 0) -> None:
+    def on_validation_batch_start(self, batch: BatchT, batch_idx: int, dataloader_idx: int = 0) -> None:
         super().on_validation_batch_start(batch, batch_idx, dataloader_idx)
         if self.web_viewer is not None:
             self.web_viewer.validation_step(
@@ -431,7 +434,7 @@ class GaussianSplatting(LightningModule):
                 batch_idx,
             )
 
-    def validation_step(self, batch, batch_idx, name: str = "val"):
+    def validation_step(self, batch: BatchT, batch_idx: int, name: str = "val"):
         camera, image_info, _ = batch
         gt_image = image_info[1]
 
@@ -549,10 +552,10 @@ class GaussianSplatting(LightningModule):
                 break
 
             try:
-                image_list = [item["gt_image"]]
+                image_list: list[torch.Tensor] = [item["gt_image"]]  # list[Float[B, C, H, W]]
                 for i in item["output_images"]:
                     image_list.append(i)
-                image = torch.concat(image_list, dim=-1)
+                image = torch.concat(image_list, dim=-1).squeeze()  # (C, H, W*n)
 
                 if self.log_image is not None:
                     grid = torchvision.utils.make_grid(image)
@@ -578,7 +581,7 @@ class GaussianSplatting(LightningModule):
             except:
                 traceback.print_exc()
 
-    def test_step(self, batch, batch_idx):
+    def test_step(self, batch: BatchT, batch_idx):
         return self.validation_step(batch, batch_idx, name="test")
 
     def configure_optimizers(self):
@@ -635,7 +638,6 @@ class GaussianSplatting(LightningModule):
         datamodule = getattr(self.trainer, "datamodule", None)
         if datamodule is None:
             return
-        datamodule.set_device(device)
 
     def _on_device_updated(self):
         self.metric.on_parameter_move(device=self.device)

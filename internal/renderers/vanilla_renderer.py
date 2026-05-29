@@ -10,8 +10,14 @@
 #
 
 import math
-from .renderer import *
+from typing import Any, Dict, Optional
+
+import torch
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
+
+from .renderer import Renderer, RendererOutputInfo, RendererOutputTypes
+from ..models.gaussian import GaussianModel
+from ..cameras import Camera
 from ..utils.sh_utils import eval_sh
 
 
@@ -29,7 +35,7 @@ class VanillaRenderer(Renderer):
             bg_color: torch.Tensor,
             scaling_modifier=1.0,
             override_color=None,
-            render_types: list = None,
+            render_types: list|None = None,
     ):
         """
         Render the scene.
@@ -136,7 +142,7 @@ class VanillaRenderer(Renderer):
             rotations: Optional[torch.Tensor],
             features: Optional[torch.Tensor],  # shs
             active_sh_degree: int,
-            viewpoint_camera,
+            viewpoint_camera: Camera,
             bg_color: torch.Tensor,
             scaling_modifier=1.0,
             colors_precomp: Optional[torch.Tensor] = None,

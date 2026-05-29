@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import tifffile as tiff
 
-from ..dataparsers.dataparser import DataParser, DataParserConfig, DataParserOutputs, ImageSet, PointCloud
+from ..dataparsers.dataparser import DataParser, DataParserConfig, DataParserOutputs, PointCloud
 from .rotated_xray_dataparser import (
     RotatedXRay,
     RotatedXRayDataParser,
@@ -18,6 +18,7 @@ from .rotated_xray_dataparser import (
     _get_cameras,
     init_point_cloud_from_label,
 )
+from ..datasets.tiff_dataset import TiffDataset, TiffDatasetConfig
 
 
 def _resolve_tiff_path(data_root: Path, base_name: str) -> Path:
@@ -34,6 +35,7 @@ def _resolve_tiff_path(data_root: Path, base_name: str) -> Path:
 
 @dataclass
 class TiffDataParserConfig(RotatedXRay):
+    dataset_config: TiffDatasetConfig
     
     def instantiate(self, path: str, output_path: str, global_rank: int) -> DataParser:
         return TiffDataParser(path=path, output_path=output_path, global_rank=global_rank, params=self)
@@ -83,40 +85,26 @@ class TiffDataParser(RotatedXRayDataParser):
         self.roi = data.get("roi", None)
 
         n_images = len(data["frames"])
-        image_names = [i for i in range(n_images)]
-        image_paths = [tiff_path for _ in range(n_images)]
 
         if self.params.mode == "reconstruction":
-            train_set = ImageSet(
-                image_names=image_names,
-                image_paths=image_paths,
-                depth_paths=None,
-                mask_paths=None,
+            train_set = TiffDataset(
                 cameras=_get_cameras(data),
-                extra_data=None,
-                extra_data_processor=None,
+                cfg=self.params.dataset_config,
+                tiff_path=tiff_path,
             )
             valid_set = train_set
             test_set = train_set
         elif self.params.mode == "render-new-views":
             train_indices, valid_indices = self._random_split(n_images)
-            train_set = ImageSet(
-                image_names=[image_names[i] for i in train_indices],
-                image_paths=[image_paths[i] for i in train_indices],
-                depth_paths=None,
-                mask_paths=None,
+            train_set = TiffDataset(
                 cameras=_get_cameras(data, train_indices),
-                extra_data=None,
-                extra_data_processor=None,
+                cfg=self.params.dataset_config,
+                tiff_path=tiff_path,
             )
-            valid_set = ImageSet(
-                image_names=[image_names[i] for i in valid_indices],
-                image_paths=[image_paths[i] for i in valid_indices],
-                depth_paths=None,
-                mask_paths=None,
+            valid_set = TiffDataset(
                 cameras=_get_cameras(data, valid_indices),
-                extra_data=None,
-                extra_data_processor=None,
+                cfg=self.params.dataset_config,
+                tiff_path=tiff_path,
             )
             test_set = valid_set
         else:

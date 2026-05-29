@@ -1,7 +1,7 @@
 import sys
 from internal.cli import CLI
-from internal.datasets.vanilla_dataset import DataModule
-from jsonargparse import lazy_instance
+from internal.datamodule import DataModule
+from jsonargparse.typing import lazy_instance
 from lightning.pytorch.cli import ArgsType
 
 from internal.gaussian_splatting import GaussianSplatting

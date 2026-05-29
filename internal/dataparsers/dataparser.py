@@ -1,55 +1,11 @@
-from typing import Tuple, Optional, Callable
 from dataclasses import dataclass
+from typing import Generic
 
 import numpy as np
 import torch
 
-from ..cameras import Cameras
 from ..instantiate_config import Instantiable
-
-
-@dataclass
-class ImageSet:
-    image_names: list
-
-    image_paths: list
-    """ Full path to the image file """
-
-    cameras: Cameras
-    """ Camera intrinscis and extrinsics """
-
-    depth_paths: Optional[list] = None
-    """ Full path to the depth file """
-
-    mask_paths: Optional[list] = None
-    """ Full path to the mask file """
-
-    extra_data: Optional[list] = None
-
-    extra_data_processor: Optional[Callable] = None
-
-    def __len__(self):
-        return len(self.image_names)
-
-    def __getitem__(self, index):
-        assert self.mask_paths is not None and self.extra_data is not None
-        return self.image_names[index], self.image_paths[index], self.mask_paths[index], self.cameras[index], self.extra_data[index]
-
-    def __iter__(self):
-        for i in range(len(self)):
-            yield self[i]
-
-    def __post_init__(self):
-        if self.mask_paths is None:
-            self.mask_paths = [None for _ in range(len(self.image_paths))]
-        if self.extra_data is None:
-            self.extra_data = [None for _ in range(len(self.image_paths))]
-        if self.extra_data_processor is None:
-            self.extra_data_processor = ImageSet._return_input
-
-    @staticmethod
-    def _return_input(i):
-        return i
+from ..datasets.gs_dataset import GSImageDataset, GSImageDatasetConfig, DatasetCfgT
 
 
 @dataclass
@@ -61,19 +17,15 @@ class PointCloud:
 
 @dataclass
 class DataParserOutputs:
-    train_set: ImageSet
+    train_set: GSImageDataset
 
-    val_set: ImageSet
+    val_set: GSImageDataset
 
-    test_set: ImageSet
+    test_set: GSImageDataset
 
     point_cloud: PointCloud
 
-    # ply_path: str
-
-    appearance_group_ids: Optional[dict] = None
-
-    camera_extent: Optional[float] = None
+    camera_extent: None|float = None
 
     def __post_init__(self):
         if self.camera_extent is None:
@@ -94,7 +46,9 @@ class DataParser:
 
 
 @dataclass
-class DataParserConfig(Instantiable):
+class DataParserConfig(Instantiable, Generic[DatasetCfgT]):
+    dataset_config: DatasetCfgT
+    
     def instantiate(self, path: str, output_path: str, global_rank: int) -> DataParser:
         
         raise NotImplementedError

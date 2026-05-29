@@ -27,3 +27,5 @@ scripts/logs/
 scripts/metrics_3D/output
 
 *.log
+
+tests/output/

@@ -1,48 +1,47 @@
-max_steps: 40000
-save_val: true
+max_steps: 10000
+save_val: false
 cache_all_images: true
 trainer:
   check_val_every_n_epoch: 10
+  precision: 16-mixed
+
+save_iterations: [10000]
+
+
 data:
-  val_max_num_images_to_cache: -1
-  test_max_num_images_to_cache: -1
-  image_uint8: true
-  image_on_cpu: false
   parser: 
     class_path: internal.dataparsers.rotated_xray_dataparser.RotatedXRay
     init_args:
-      mode: reconstruction
-      init_point_cloud_mode: central-line
+      mode: render-new-views
+      init_point_cloud_mode: random
+      init_point_cloud_num: 100_000
+      train_ratio: 0.8
 model:
-  # max_save_val_output: 50
+  max_save_val_output: 2
   renderer:
-    class_path: internal.renderers.deformabel_xray_renderer.CoronaryDeformableXrayRenderer
+    class_path: internal.renderers.xray_renderer.XrayRenderer
     init_args:
-      deform_network:
-        tcnn: true
-      time_encoding:
-        n_frequencies: 6
-        n_layers: 2
-        n_neurons: 256
-      optimization:
+      optimization_config:
         enable_ast: true
-      reverse_gray_scale: true    # DSA image usually has reverse gray scale
+        log_gradients: true
+        grad_log_interval: 50
   metric:
     class_path: internal.metrics.rotate_xray_metrics.RotateXrayMetrics
-    init_args:
-      enable_deform_tv_loss: false
-      w_deform_tv_loss: 0.0
-      deform_tv_num_patches: 1
-      deform_tv_patch_grid_size: 8
-      deform_tv_patch_extent_ratio: 0.2
-      deform_tv_norm: l1
-      deform_tv_eps: 1.0e-6
   gaussian:
     class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
+    init_args:
+      optimization:
+        log_gradients: true
+        grad_log_interval: 50
   density:
     class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
-    init_args:
-      absgrad: true
   renderer_output_types: 
-    - gray_image_coronary
-    - gray_image_whole
+    - gray_image
+    - gray_coronary
+  saver:
+    class_path: internal.savers.x_ray_saver.XRaySaver
+    init_args:
+      save_ckpt: false
+      save_ply: false
+      save_nii: true
+      save_phase: 0.5

@@ -203,6 +203,22 @@ Rounding mode is specified by `--data.parser.down_sample_rounding_mode`. Availab
 
   * Take a look at <a href="#221-taming-3dgs">Taming 3DGS (2.21.)</a> for further acceleration
 
+## Testing / Running under Pixi
+
+This repository is configured with Pixi in `pyproject.toml`. To run tests or Python scripts inside the Pixi-managed environment use:
+
+```bash
+pixi run pytest
+pixi run python -m pytest   # explicit module invocation
+
+# Run the training entrypoint inside Pixi
+pixi run python main.py fit \
+    --data.path DATASET_PATH \
+    -n EXPERIMENT_NAME
+```
+
+Using `pixi run` ensures the same dependency set and CUDA/tooling as specified in `pyproject.toml`.
+
 ### 2.3. Use <a href="https://github.com/nerfstudio-project/gsplat">nerfstudio-project/gsplat</a>
 
 ```bash

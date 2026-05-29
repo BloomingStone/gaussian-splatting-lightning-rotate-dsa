@@ -1,5 +1,10 @@
 {
     "python-envs.defaultEnvManager": "renan-r-santos.pixi-code:pixi",
     "python-envs.defaultPackageManager": "renan-r-santos.pixi-code:pixi",
-    "gs.debug.cudaVisibleDevices": "1"
+    "gs.debug.cudaVisibleDevices": "0",
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true
 }

@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Generic
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,8 +8,11 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from ..dataparsers.dataparser import DataParserConfig, DataParser, DataParserOutputs, ImageSet, PointCloud
+from internal.datasets.gs_dataset import DatasetCfgT
+
+from ..dataparsers.dataparser import DataParserConfig, DataParser, DataParserOutputs, PointCloud
 from ..cameras import Cameras
+from ..datasets.images_dataset import ImagesDataset, ImagesDatasetConfig
 
 # ref: DiffDRR at diffdrr/pose.py
 def _axis_angle_rotation(axis: str, angle: torch.Tensor) -> torch.Tensor:
@@ -73,7 +76,7 @@ def euler_angles_to_matrix(euler_angles: torch.Tensor, convention: str) -> torch
 
 
 @dataclass
-class RotatedXRay(DataParserConfig):
+class RotatedXRay(DataParserConfig, Generic[DatasetCfgT]):
     """
     rotated x ray parser
     mode:
@@ -89,6 +92,9 @@ class RotatedXRay(DataParserConfig):
     train_ratio: ratio of images to use for training, only used when mode is render-new-views
     seed: random seed for data splitting and point cloud initialization
     """
+    dataset_config: DatasetCfgT
+    
+    
     base_name: str = "rotate_dsa"
     mode: Literal["reconstruction", "render-new-views"] = "reconstruction"
     init_point_cloud_mode: Literal["uniform", "random", "random-ball", "FBP", "DL", "label", "central-line"] = "uniform"
@@ -158,20 +164,22 @@ def _get_cameras(json_data: dict, indices: list[int] | None = None) -> Cameras:
     time_range = time_all.max() - time_all.min()
     time = (time - time_all.min()) / time_range  # normalize to [0, 1] for better training
 
+    indices_tensor = torch.tensor(indices) if indices is not None else torch.arange(n_camras)
     
-    return Cameras(
+    return Cameras.build(
+        idx = indices_tensor,
         R = R_w2c,
         T = T_w2c,
-        fx = torch.ones(n_camras) * fx,
-        fy = torch.ones(n_camras) * fy,
-        cx = torch.ones(n_camras) * cx,
-        cy = torch.ones(n_camras) * cy,
-        width = torch.ones(n_camras) * width,
-        height = torch.ones(n_camras) * height,
-        camera_type=torch.zeros(n_camras),
+        fx = fx,
+        fy = fy,
+        cx = cx,
+        cy = cy,
+        width = width,
+        height = height,
         time=time,
         phase=phase,
-        zfar=1e5
+        zfar=1e5,
+        znear=1e-3,
     )
 
 
@@ -185,6 +193,7 @@ def _filter_points_visible(
     points_ = torch.from_numpy(points)
     device = torch.device('cpu')
     N = points.shape[0]
+    cameras = cameras.to(device)
     full_projection = cameras.full_projection
     M = full_projection.shape[0]
 
@@ -277,36 +286,35 @@ class RotatedXRayDataParser(DataParser):
         
         image_paths = [f.absolute() for f in sorted(images_dir.glob("*.png"))]
         label_paths = [f.absolute() for f in sorted(label_dir.glob("*.png"))]
-        image_names = [f.name for f in image_paths]
+        
+        def get_depth_closure(index: int) -> dict[str, torch.Tensor]:
+            return {"depth": torch.from_numpy(depth_npy[index]).float()}
         
         if self.params.mode == "reconstruction":
-            train_set = ImageSet(
-                image_names=image_names,
-                image_paths=image_paths,
-                mask_paths=label_paths,
+            train_set = ImagesDataset(
                 cameras=_get_cameras(data),
-                extra_data=depth_npy,
-                extra_data_processor=torch.from_numpy
+                cfg=self.params.dataset_config,
+                image_paths=image_paths,
+                masks_paths=label_paths,
+                other_data_closure=get_depth_closure,
             )
             valid_set = train_set
             test_set = train_set
         elif self.params.mode == "render-new-views":
             train_indices, valid_indices = self._random_split(len(image_paths))
-            train_set = ImageSet(
-                image_names=[image_names[i] for i in train_indices],
-                image_paths=[image_paths[i] for i in train_indices],
-                mask_paths=[label_paths[i] for i in train_indices],
+            train_set = ImagesDataset(
                 cameras=_get_cameras(data, train_indices),
-                extra_data=depth_npy[train_indices],
-                extra_data_processor=torch.from_numpy
+                cfg=self.params.dataset_config,
+                image_paths=[image_paths[i] for i in train_indices],
+                masks_paths=[label_paths[i] for i in train_indices],
+                other_data_closure=get_depth_closure,
             )
-            valid_set = ImageSet(
-                image_names=[image_names[i] for i in valid_indices],
-                image_paths=[image_paths[i] for i in valid_indices],
-                mask_paths=[label_paths[i] for i in valid_indices],
+            valid_set = ImagesDataset(
                 cameras=_get_cameras(data, valid_indices),
-                extra_data=depth_npy[valid_indices],
-                extra_data_processor=torch.from_numpy
+                cfg=self.params.dataset_config,
+                image_paths=[image_paths[i] for i in valid_indices],
+                masks_paths=[label_paths[i] for i in valid_indices],
+                other_data_closure=get_depth_closure,
             )
             test_set = valid_set
         else:
