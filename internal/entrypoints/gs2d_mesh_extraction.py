@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import os
+from pathlib import Path
 import torch
 import open3d as o3d
 from jsonargparse import CLI
@@ -83,11 +84,15 @@ def main():
         dataparser_config = Colmap()
 
     # load dataset
-    dataparser_outputs = dataparser_config.instantiate(
-        path=dataset_path,
-        output_path=os.getcwd(),
-        global_rank=0,
-    ).get_outputs()
+    if hasattr(dataparser_config, "instantiate"):
+        dataparser = dataparser_config.instantiate(
+            path=dataset_path,
+            output_path=os.getcwd(),
+            global_rank=0,
+        )
+        dataparser_outputs = dataparser.get_outputs()
+    else:
+        dataparser_outputs = dataparser_config.get_outputs(Path(dataset_path))
     cameras = [i.to_device(device) for i in dataparser_outputs.train_set.cameras]
 
     # set the active_sh to 0 to export only diffuse texture

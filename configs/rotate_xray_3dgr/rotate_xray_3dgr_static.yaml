@@ -10,10 +10,27 @@ save_iterations: [10000]
 
 data:
   parser: 
-    class_path: internal.dataparsers.rotated_xray_dataparser.RotatedXRay
+    class_path: internal.dataparsers.xray_dataparser.parser.XRayDataParser
     init_args:
-      mode: render-new-views
-      init_point_cloud_mode: random
+      meta_loader:
+        class_path: internal.dataparsers.xray_dataparser.meta.XRayMetaLoader
+      cloud_parser:
+        class_path: internal.dataparsers.xray_dataparser.cloud_parsers.RandomCloudParser
+        init_args:
+          num_points: 100_000
+      spliter:
+        class_path: internal.dataparsers.xray_dataparser.splitters.RenderNewViewsSpliter
+        init_args:
+          train_ratio: 0.8
+      cameras_builder:
+        class_path: internal.dataparsers.xray_dataparser.cameras_builder.RotateXRayCamerasBuilder
+      dataset_builder:
+        class_path: internal.dataparsers.xray_dataparser.datasets.ImagesDatasetBuilder
+        init_args:
+          dataset_config:
+            class_path: internal.dataparsers.xray_dataparser.datasets.ImagesDatasetConfig
+            init_args:
+              image_uint8: true
       init_point_cloud_num: 100_000
       train_ratio: 0.8
 model:

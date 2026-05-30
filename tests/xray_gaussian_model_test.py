@@ -16,25 +16,38 @@ from internal.renderers.deformabel_xray_renderer import (
 )
 from internal.deform_models import HashGridDeformConfig
 
-from internal.dataparsers.rotated_xray_dataparser import RotatedXRay
-from internal.datasets.vanilla_dataset import Dataset
+from internal.dataparsers.xray_dataparser import XRayDataParser
+from internal.dataparsers.xray_dataparser.cameras_builder import RotateXRayCamerasBuilder
+from internal.dataparsers.xray_dataparser.cloud_parsers import RandomCloudParser
+from internal.dataparsers.xray_dataparser.datasets import ImagesDatasetBuilder, ImagesDatasetConfig
+from internal.dataparsers.xray_dataparser.meta import XRayMetaLoader
+from internal.dataparsers.xray_dataparser.splitters import RenderNewViewsSpliter
+from torch.utils.data import DataLoader
+from internal.dataparsers.dataparser import collate_fn
 from internal.savers.x_ray_saver import XRaySaver
 
 class TestDeformableXrayRenderAndSaver(unittest.TestCase):
     def setUp(self):
-        parser = RotatedXRay(
-            init_point_cloud_mode="random"
-        ).instantiate(
-            path="data/volume_dvf_reader_multipli_contrast_LCA",
-            output_path="outputs/temp",
-            global_rank=0
+        parser = XRayDataParser(
+            meta_loader=XRayMetaLoader(),
+            cloud_parser=RandomCloudParser(num_points=100_000),
+            spliter=RenderNewViewsSpliter(train_ratio=0.8),
+            cameras_builder=RotateXRayCamerasBuilder(),
+            dataset_builder=ImagesDatasetBuilder(
+                dataset_config=ImagesDatasetConfig(
+                    camera_cache_device="cpu",
+                    image_cache_device="cpu",
+                    image_uint8=False,
+                )
+            ),
+            filter_visible_points=False,
         )
         
-        outputs = parser.get_outputs()
+        outputs = parser.get_outputs(Path("data/volume_dvf_reader_multipli_contrast_LCA"))
         
-        self.device = torch.device("cuda:0")
-        dataset = Dataset(image_set=outputs.train_set, camera_device=self.device, image_device=self.device)
-        self.batch = next(iter(dataset))
+        self.device = torch.device("cpu")
+        loader = DataLoader(outputs.train_set, batch_size=1, shuffle=False, num_workers=0, collate_fn=collate_fn)
+        self.batch = next(iter(loader))
 
         lightning_module = MagicMock()
         lightning_module.trainer = MagicMock()

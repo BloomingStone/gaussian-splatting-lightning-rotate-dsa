@@ -6,7 +6,7 @@ from pytorch_lightning import LightningModule
 
 from internal.metrics.metric import Metric, MetricImpl, CommonImageMetricImpl
 from internal.renderers.deformabel_xray_renderer import RenderRes
-from internal.datasets.gs_dataset import BatchT
+from internal.dataparsers.dataparser import BatchT
 
 
 @dataclass

@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from pytorch_lightning import LightningModule
 
-from ..datasets.gs_dataset import BatchT
+from ..dataparsers.dataparser import BatchT
 from .metric import Metric, MetricImpl, CommonImageMetricImpl
 from ..renderers.deformabel_xray_renderer import RenderRes
 

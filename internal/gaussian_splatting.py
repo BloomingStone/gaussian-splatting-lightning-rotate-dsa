@@ -22,7 +22,7 @@ from .renderers import Renderer, VanillaRenderer, RendererConfig
 from .metrics import Metric, VanillaMetrics
 from .density_controllers.density_controller import DensityController
 from .density_controllers.vanilla_density_controller import VanillaDensityController
-from .datasets.gs_dataset import BatchT
+from .dataparsers.dataparser import BatchT
 
 from .cameras import Camera
 from .utils.image_utils import save_tensor_image

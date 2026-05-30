@@ -1,2 +1,2 @@
-from .dataparser import DataParserConfig, DataParser, DataParserOutputs
-from .tiff_dataparser import TiffDataParserConfig, TiffDataParser
+from .dataparser import DataParser, DataParserOutputs
+from .xray_dataparser import XRayDataParser

@@ -5,7 +5,7 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 from ..utils.ssim import ssim
 
-from ..datasets.gs_dataset import BatchT
+from ..dataparsers.dataparser import BatchT
 from ..instantiate_config import Instantiable
 
 

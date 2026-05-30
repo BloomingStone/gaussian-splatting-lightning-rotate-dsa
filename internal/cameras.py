@@ -262,3 +262,26 @@ class Cameras:
             znear=torch.stack([camera.znear for camera in camera_list]),
             zfar=torch.stack([camera.zfar for camera in camera_list]),
         )
+    
+    def get_from_indices(self, indices: list[int]) -> "Cameras":
+        return Cameras(
+            R=self.R[indices],
+            T=self.T[indices],
+            fx=self.fx[indices],
+            fy=self.fy[indices],
+            fov_x=self.fov_x[indices],
+            fov_y=self.fov_y[indices],
+            cx=self.cx[indices],
+            cy=self.cy[indices],
+            width=self.width[indices],
+            height=self.height[indices],
+            time=self.time[indices],
+            phase=self.phase[indices],
+            world_to_camera=self.world_to_camera[indices],
+            projection=self.projection[indices],
+            full_projection=self.full_projection[indices],
+            camera_center=self.camera_center[indices],
+            idx=self.idx[indices],
+            znear=self.znear[indices],
+            zfar=self.zfar[indices],
+        )
