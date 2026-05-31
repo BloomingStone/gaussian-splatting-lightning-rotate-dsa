@@ -5,7 +5,7 @@ from torch import nn
 
 from .deform_model import DeformModel, DefromModelConfig, Deforms, GSParam
 from ..encodings.vector_positional_encoding import VectorPositionalEncoding
-from internal.utils.gaussian_utils import GaussianTransformUtils
+from internal.utils.guassian_utils.gaussian_utils import GaussianTransformUtils
 
 
 class SafeExponential(nn.Module):
@@ -19,7 +19,7 @@ class SafeExponential(nn.Module):
 @dataclass
 class ControlPointDeformConfig(DefromModelConfig):
     grid_resolution: tuple[int, int, int] = (10, 10, 10)
-    t_n_frequencies: int = 1
+    t_multires: int = 1
     interpolation_method: str = "bspline"
     bounds_padding_ratio: float = 0.05
     xyz_min: tuple[float, float, float] | None = None
@@ -37,7 +37,7 @@ class ControlPointDeformModel(DeformModel):
 
         self.embed_t_fn = VectorPositionalEncoding(
             input_channels=1,
-            n_frequencies=cfg.t_n_frequencies,
+            n_frequencies=cfg.t_multires,
         )
         self.n_t_basis = self.embed_t_fn.get_output_n_channels()
 

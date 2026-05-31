@@ -10,16 +10,18 @@
 #
 
 import math
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 import torch
+from torch import Tensor
+
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 
-from .renderer import Renderer, RendererOutputInfo, RendererOutputTypes
-from ..models.gaussian import GaussianModel
+from .renderer import Renderer
 from ..cameras import Camera
-from ..utils.sh_utils import eval_sh
-
+from ..models.gaussian import GaussianModel
+from ..visualizers import Visualizer, FloatColormapVisualizer, ColorMapName
+from ..utils.math.sh_utils import eval_sh
 
 class VanillaRenderer(Renderer):
     def __init__(self, compute_cov3D_python: bool = False, convert_SHs_python: bool = False):
@@ -127,6 +129,8 @@ class VanillaRenderer(Renderer):
 
         # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
         # They will be excluded from value updates used in the splitting criteria.
+        
+        # TODO output typing is wrong for now, fix it
         return {
             rendered_image_key: rendered_image,
             "viewspace_points": screenspace_points,

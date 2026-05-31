@@ -4,7 +4,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 
 import numpy as np
 import torch
-from gsplat.exporter import export_splats
+import pyvista as pv
 import nibabel as nib
 from nibabel import loadsave as nib_io
 from nibabel.nifti1 import Nifti1Image
@@ -13,8 +13,9 @@ from xray_gaussian_rasterization_voxelization import (
     GaussianVoxelizer,
 )
 
-from . import Saver, SaverModule
-from ..mp_strategy import MPStrategy
+from .saver import Saver, SaverModule
+from ..gaussian_splatting import GaussianSplatting
+from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from ..renderers.deformabel_xray_renderer import CoronaryDeformableXrayRenderer
 from ..deform_models import DeformModel, Deforms, GSParam
 
@@ -148,7 +149,7 @@ def gaussians_to_volume_by_Rasterizer(
 @dataclass
 class XRaySaver(Saver):
     save_ckpt: bool = True
-    save_ply: bool = True
+    save_vtp: bool = True
     save_nii: bool = True
     save_phase: float = 0.0
     def instantiate(self, *args, **kwargs) -> "XRaySaverModule":
@@ -156,13 +157,12 @@ class XRaySaver(Saver):
 
 
 @dataclass
-class PlySavePayload:
+class VtpSavePayload:
     path: Path
-    means: torch.Tensor
-    scales: torch.Tensor
-    quats: torch.Tensor
-    opacities: torch.Tensor
-    sh0: torch.Tensor
+    means: np.ndarray
+    scales: np.ndarray
+    rotations: np.ndarray
+    density: np.ndarray
 
 
 @dataclass
@@ -177,7 +177,7 @@ class NiftiSavePayload:
 
 @dataclass
 class SaveOutputsPayload:
-    ply: PlySavePayload | None = None
+    vtp: VtpSavePayload | None = None
     nifti: NiftiSavePayload | None = None
 
 class XRaySaverModule(SaverModule):
@@ -191,22 +191,13 @@ class XRaySaverModule(SaverModule):
     def _save_outputs(
         payload: SaveOutputsPayload,
     ) -> None:
-        if payload.ply is not None:
-            export_splats(
-                means=payload.ply.means,
-                scales=payload.ply.scales,
-                quats=payload.ply.quats,
-                opacities=payload.ply.opacities.squeeze(),
-                sh0=payload.ply.sh0,
-                shN=torch.zeros(
-                    payload.ply.opacities.shape[0],
-                    0,
-                    3,
-                    dtype=payload.ply.sh0.dtype,
-                    device=payload.ply.sh0.device,
-                ),
-                save_to=str(payload.ply.path),
-            )
+        if payload.vtp is not None:
+            pd = pv.PolyData(payload.vtp.means)
+            pd.point_data["density"] = payload.vtp.density
+            pd.point_data["scales"] = payload.vtp.scales
+            pd.point_data["rotations"] = payload.vtp.rotations
+            pd.field_data["model_type"] = np.array(["XrayCoronaryGaussian"])
+            pv.save_meshio(str(payload.vtp.path), pd)
 
         if payload.nifti is not None:
             nib_io.save(
@@ -221,9 +212,8 @@ class XRaySaverModule(SaverModule):
     def __del__(self):
         self._save_executor.shutdown(wait=False)
     
-    def save(self, pl_module):
-        is_mp_strategy = isinstance(pl_module.trainer.strategy, MPStrategy)
-        if pl_module.trainer.global_rank != 0 and not is_mp_strategy:
+    def save(self, pl_module: GaussianSplatting):
+        if pl_module.trainer.global_rank != 0:
             return
 
         epoch = pl_module.trainer.current_epoch
@@ -233,9 +223,8 @@ class XRaySaverModule(SaverModule):
         ckpt_dir = output_root / "checkpoints"
         ckpt_dir.mkdir(exist_ok=True)
         
-        ckpt_suffix = f"-rank={pl_module.global_rank}" if is_mp_strategy else ""
         if self.config.save_ckpt:
-            ckpt_path = ckpt_dir / f"epoch={epoch}-step={step}{ckpt_suffix}.ckpt"
+            ckpt_path = ckpt_dir / f"epoch={epoch}-step={step}.ckpt"
             
             pl_module.trainer.save_checkpoint(ckpt_path)
         
@@ -259,19 +248,18 @@ class XRaySaverModule(SaverModule):
         )
         means3D, rotation, scales = source_deformed.xyz, source_deformed.rotation, source_deformed.scaling
         
-        ply_payload: PlySavePayload | None = None
+        vtp_payload: VtpSavePayload | None = None
 
-        if self.config.save_ply:
-            ply_path = ckpt_dir / f"epoch={epoch}-step={step}{ckpt_suffix}.ply"
-            gray = torch.exp(-density)
-            sh0 = gray[..., None].repeat(1, 1, 3)
-            ply_payload = PlySavePayload(
-                path=ply_path,
-                means=means3D.detach().cpu(),
-                scales=pc.scale_(scales).detach().cpu(),
-                quats=pc.scale_inverse_activation(rotation).detach().cpu(),
-                opacities=gray.detach().cpu(),
-                sh0=sh0.detach().cpu(),
+        if self.config.save_vtp:
+            vtp_dir = output_root / "point_cloud"
+            vtp_dir.mkdir(parents=True, exist_ok=True)
+            vtp_path = vtp_dir / f"iteration_{step}.vtp"
+            vtp_payload = VtpSavePayload(
+                path=vtp_path,
+                means=means3D.detach().cpu().numpy().astype(np.float32),
+                scales=pc.scale_inverse_activation(scales).detach().cpu().numpy().astype(np.float32),
+                rotations=pc.rotation_inverse_activation(rotation).detach().cpu().numpy().astype(np.float32),
+                density=density.detach().cpu().numpy().astype(np.float32),
             )
 
         nifti_payload: NiftiSavePayload | None = None
@@ -286,8 +274,10 @@ class XRaySaverModule(SaverModule):
             coronary_affine_save = np.array(coronary_affine, copy=True)
             torch.cuda.empty_cache()  # avoid CUDA OOM
             
-            volume_nii_path = ckpt_dir / f"volume__epoch={epoch}-step={step}{ckpt_suffix}.nii.gz"
-            dxyz_volume_nii_path = ckpt_dir / f"dxyz_volume__epoch={epoch}-step={step}{ckpt_suffix}.nii.gz"
+            volume_dir = output_root / "volumes"
+            volume_dir.mkdir(parents=True, exist_ok=True)
+            volume_nii_path = volume_dir / f"volume__epoch={epoch}-step={step}.nii.gz"
+            dxyz_volume_nii_path = volume_dir / f"dxyz_volume__epoch={epoch}-step={step}.nii.gz"
             nifti_payload = NiftiSavePayload(
                 volume_path=volume_nii_path,
                 dxyz_volume_path=dxyz_volume_nii_path,
@@ -300,6 +290,6 @@ class XRaySaverModule(SaverModule):
         if self._pending_save is not None and not self._pending_save.done():
             self._pending_save.result()
 
-        payload = SaveOutputsPayload(ply=ply_payload, nifti=nifti_payload)
+        payload = SaveOutputsPayload(vtp=vtp_payload, nifti=nifti_payload)
         self._pending_save = self._save_executor.submit(self._save_outputs, payload)
         

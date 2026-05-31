@@ -15,18 +15,18 @@ sweeps:
       model.renderer.init_args.deform_model_config.class_path: internal.deform_models.HashGridDeformConfig
       model.renderer.init_args.deform_model_config.init_args.t_multires: 6
       model.renderer.init_args.deform_model_config.init_args.x_multires: 8
-      model.renderer.init_args.deform_model_config.init_args.max_resolution: 512
+      model.renderer.init_args.deform_model_config.init_args.max_resolution: 1024
       data.parser.init_args.random_loader_mode: random-start
       data.parser.init_args.train_ratio: 0.5
     grid: {}
 
   - name: q3_B_tv
-    mode: grid
+    mode: single-variable
     fixed:
       model.renderer.init_args.deform_model_config.class_path: internal.deform_models.HashGridDeformConfig
       model.renderer.init_args.deform_model_config.init_args.t_multires: 6
       model.renderer.init_args.deform_model_config.init_args.x_multires: 8
-      model.renderer.init_args.deform_model_config.init_args.max_resolution: 512
+      model.renderer.init_args.deform_model_config.init_args.max_resolution: 1024
       data.parser.init_args.random_loader_mode: random-start
       data.parser.init_args.train_ratio: 0.5
       model.metric.init_args.enable_deform_tv_loss: true
@@ -34,12 +34,12 @@ sweeps:
       model.metric.init_args.w_deform_tv_loss: [0.01, 0.1, 1.0]
 
   - name: q3_C_frangi
-    mode: grid
+    mode: single-variable
     fixed:
       model.renderer.init_args.deform_model_config.class_path: internal.deform_models.HashGridDeformConfig
       model.renderer.init_args.deform_model_config.init_args.t_multires: 6
       model.renderer.init_args.deform_model_config.init_args.x_multires: 8
-      model.renderer.init_args.deform_model_config.init_args.max_resolution: 512
+      model.renderer.init_args.deform_model_config.init_args.max_resolution: 1024
       data.parser.init_args.random_loader_mode: random-start
       data.parser.init_args.train_ratio: 0.5
       model.metric.init_args.enable_frangi_loss: true
@@ -52,7 +52,7 @@ sweeps:
       model.renderer.init_args.deform_model_config.class_path: internal.deform_models.HashGridDeformConfig
       model.renderer.init_args.deform_model_config.init_args.t_multires: 6
       model.renderer.init_args.deform_model_config.init_args.x_multires: 8
-      model.renderer.init_args.deform_model_config.init_args.max_resolution: 512
+      model.renderer.init_args.deform_model_config.init_args.max_resolution: 1024
       data.parser.init_args.random_loader_mode: random-start
       data.parser.init_args.train_ratio: 0.5
       model.metric.init_args.enable_deform_tv_loss: true

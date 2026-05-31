@@ -3,6 +3,8 @@ from dataclasses import dataclass
 
 import torch
 from torch import Tensor
+from torch.optim.optimizer import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 from lightning import LightningModule
 from xray_gaussian_rasterization_voxelization import (
     GaussianRasterizationSettings,
@@ -10,10 +12,12 @@ from xray_gaussian_rasterization_voxelization import (
 )
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 
-from .renderer import Renderer, RendererOutputInfo, RendererOutputTypes
+from .renderer import Renderer
 from ..cameras import Camera
 from ..deform_models import DeformModel, DefromModelConfig, Deforms, GSParam
 from ..utils.general_utils import get_linear_noise_func
+from ..visualizers import FloatColormapVisualizer, ColorMapName
+from .deformabel_xray_renderer_coronary_props import XrayRendererOuputs, ImgT, MetaT
 
 
 @dataclass
@@ -95,7 +99,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         scaling_modifier=1.0,
         render_types: list|None = None,
         **kwargs,
-    ) -> RenderRes:
+    ) -> XrayRendererOuputs:
         pc = cast(XrayCoronaryGaussianModel, pc)
         gs = GSParam(
             xyz=pc.get_means().detach(),
@@ -131,15 +135,25 @@ class CoronaryDeformableXrayRenderer(Renderer):
         deforms_mean = pc.deforms_recorder.get_deforms_mean()
         deforms_var = pc.deforms_recorder.get_deforms_var()
         
-        res = RenderRes(
-            gray_image, gray_coronary,                  # rendered
-            viewspace_points, visibility_filter, radii, # grad meta
-            deforms_mean, deforms_var, deforms,         # deforms and mean & var
-            viewpoint_camera.time, mask,                 # other info     
-            in_warm_up=False
+        return XrayRendererOuputs(
+            images={
+                ImgT.GRAY: (gray_image, FloatColormapVisualizer(ColorMapName.GRAY)),
+                ImgT.CORONARY: (gray_coronary, FloatColormapVisualizer(ColorMapName.GRAY))
+            },
+            meta={
+                MetaT.VIEWSPACE_POINTS: viewspace_points,
+                MetaT.VISIBILITY_FILTER: visibility_filter,
+                MetaT.RADII: radii,
+                MetaT.D_MOTION_MEAN: deforms_mean,
+                MetaT.D_MOTION_VAR: deforms_var,
+                MetaT.D_MEANS3D: deforms.d_xyz,
+                MetaT.D_ROTATION: deforms.d_rotation,
+                MetaT.D_SCALES: deforms.d_scaling,
+                MetaT.TIME: viewpoint_camera.time
+            },
+            is_warm_up=False
         )
-        return res
-        
+
 
     def training_forward(
         self, 
@@ -150,7 +164,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         bg_color: torch.Tensor,
         render_types: list|None = None,
         **kwargs
-    )-> RenderRes:
+    )-> XrayRendererOuputs:
         pc = cast(XrayCoronaryGaussianModel, pc)
         # clone properties
         gs = GSParam(
@@ -198,19 +212,23 @@ class CoronaryDeformableXrayRenderer(Renderer):
         viewspace_points = meta_whole["viewspace_points"]
         radii = meta_whole["radii"]
         visibility_filter = radii > 0
-
-        gray_coronary = None
         
-        mask = (gs.density > torch.quantile(gs.density, 0.90)).squeeze()
-        if not torch.any(mask):
-            mask = torch.ones_like(mask, dtype=torch.bool)
-        
-        return RenderRes(
-            gray_image, gray_coronary,                  # rendered
-            viewspace_points, visibility_filter, radii, # grad meta
-            deforms_mean, deforms_var, deforms,         # deforms and mean & var
-            viewpoint_camera.time, mask,                 # other info     
-            in_warm_up=False
+        return XrayRendererOuputs(
+            images={
+                ImgT.GRAY: (gray_image, FloatColormapVisualizer(ColorMapName.GRAY)),
+            },
+            meta={
+                MetaT.VIEWSPACE_POINTS: viewspace_points,
+                MetaT.VISIBILITY_FILTER: visibility_filter,
+                MetaT.RADII: radii,
+                MetaT.D_MOTION_MEAN: deforms_mean,
+                MetaT.D_MOTION_VAR: deforms_var,
+                MetaT.D_MEANS3D: deforms.d_xyz,
+                MetaT.D_ROTATION: deforms.d_rotation,
+                MetaT.D_SCALES: deforms.d_scaling,
+                MetaT.TIME: viewpoint_camera.time
+            },
+            is_warm_up=viewpoint_camera.time.item() <= self.optimization_config.warm_up
         )
     
     def _render(
@@ -265,8 +283,8 @@ class CoronaryDeformableXrayRenderer(Renderer):
         total_steps = lightning_module.trainer.max_steps
         self.smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=total_steps*0.8)
     
-    def training_setup(self, module) -> Tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LRScheduler]]:
-        optimizer = torch.optim.Adam(
+    def training_setup(self, module) -> tuple[list[Optimizer]|None, list[LRScheduler]|None]:
+        optimizer = torch.optim.adam.Adam(
             [{
                 "params": list(self.deform_model.parameters()),
                 "name": "deform",
@@ -284,11 +302,4 @@ class CoronaryDeformableXrayRenderer(Renderer):
             lr_lambda=lr_lmabda_deform,
         )
 
-        return optimizer, scheduler
-
-    def get_available_outputs(self) -> dict:
-        cmap = {"colormap": "gray"}
-        return {
-            "gray_image": RendererOutputInfo("gray_image", RendererOutputTypes.GRAY, other_kwargs=cmap),
-            "gray_coronary": RendererOutputInfo("gray_coronary", RendererOutputTypes.GRAY, other_kwargs=cmap)
-        }
+        return [optimizer], [scheduler]

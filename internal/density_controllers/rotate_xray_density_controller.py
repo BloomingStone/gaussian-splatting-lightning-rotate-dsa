@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import override, cast
 
 from .vanilla_density_controller import VanillaDensityControllerImpl, DensityController
-from .density_controller import Utils
+from . import utils as utils
 from ..models.xray_coronary_gaussian import GaussianInits, XrayCoronaryGaussianModel
 
 @dataclass
@@ -19,13 +19,14 @@ class RotateXrayDensityController(DensityController):
     density_reset_interval: int = 2000
 
     densify_from_iter: int = 500
-
-    densify_grad_threshold: float = 100.0
     
     densify_until_frac: float = 0.8
-
-    cull_density_threshold: float = 1e-3
     
+    densify_grad_percentile: float = 0.98
+
+    cull_density_threshold: float = 5e-4
+    
+    max_n_gaussians: float = 1e6
 
     camera_extent_factor: float = 1.
 
@@ -59,8 +60,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
 
         self.density_reset_at = -32768
         self._grad_threshold: float|None = None
-        self._do_percentile_update: bool = True
-        self._recent_grad_p9: deque[float] = deque(maxlen=5)
+        self._recent_grad_percentile: deque[float] = deque(maxlen=5)
     
         
     @override
@@ -80,11 +80,13 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
             self.update_states(outputs)
 
             # densify and pruning
+            # avoid densifying right after density reset
             if (
                 global_step > self.config.densify_from_iter\
                 and global_step % self.config.densification_interval == 0\
-                and global_step % self.config.density_reset_interval >= self.config.densification_interval
-            ): # avoid densifying right after density reset
+                and global_step % self.config.density_reset_interval >= self.config.densification_interval\
+                and gaussian_model.n_gaussians < self.config.max_n_gaussians
+            ): 
                 size_threshold = 20 if global_step > self.config.density_reset_interval else None
                 self._densify_and_prune(
                     max_screen_size=size_threshold,
@@ -109,15 +111,15 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
 
-        # Dynamic threshold: max p95 of recent 5 density-control steps.
+        # Dynamic threshold: max percentile of grad in recent 5 density-control steps.
         grad_norm = grads.norm(dim=-1)
         valid_grad_norm = grad_norm[torch.isfinite(grad_norm)]
         if valid_grad_norm.numel() > 0:
-            grad_p9 = float(torch.quantile(valid_grad_norm, 0.98).item())
-            self._recent_grad_p9.append(grad_p9)
-            self._grad_threshold = max(self._recent_grad_p9)
+            grad_percentile = float(torch.quantile(valid_grad_norm, self.config.densify_grad_percentile).item())
+            self._recent_grad_percentile.append(grad_percentile)
+            self._grad_threshold = max(self._recent_grad_percentile)
         elif self._grad_threshold is None:
-            self._grad_threshold = self.config.densify_grad_threshold
+            self._grad_threshold = float(torch.quantile(valid_grad_norm, self.config.densify_grad_percentile).item())
 
         # densify
         self._densify_and_clone(grads, gaussian_model, optimizers)
@@ -141,8 +143,9 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         scene_extent = self.cameras_extent
 
         grad_norm = grads.norm(dim=-1)
+        valid_grad_norm = grad_norm[torch.isfinite(grad_norm)]
 
-        grad_threshold = self._grad_threshold if self._grad_threshold is not None else self.config.densify_grad_threshold
+        grad_threshold = self._grad_threshold if self._grad_threshold is not None else float(torch.quantile(valid_grad_norm, self.config.densify_grad_percentile).item())
 
         selected_pts_mask = grad_norm >= grad_threshold
         # Exclude big Gaussians
@@ -174,7 +177,9 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         padded_grad = torch.zeros((n_init_points,), device=device)
         padded_grad[:grads.shape[0]] = grads.squeeze()
         
-        grad_threshold = self._grad_threshold if self._grad_threshold is not None else self.config.densify_grad_threshold
+        valid_grad_norm = padded_grad[torch.isfinite(padded_grad)]
+        
+        grad_threshold = self._grad_threshold if self._grad_threshold is not None else float(torch.quantile(valid_grad_norm, self.config.densify_grad_percentile).item())
         
         # Extract points that satisfy the gradient condition
         selected_pts_mask = (padded_grad >= grad_threshold)
@@ -225,7 +230,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         
         valid_points_mask = ~mask  # `True` to keep
         
-        new_parameters = Utils.prune_properties(valid_points_mask, gaussian_model, optimizers)
+        new_parameters = utils.prune_properties(valid_points_mask, gaussian_model, optimizers)
         gaussian_model.properties = new_parameters
         
         gaussian_model.deforms_recorder.filter_deforms_by_mask(valid_points_mask)
@@ -242,7 +247,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
             density,
             gaussian_model.density_activation(inits.density).to(density.device),
         ))
-        new_parameters = Utils.replace_tensors_to_properties(tensors={
+        new_parameters = utils.replace_tensors_to_properties(tensors={
             "density": density_new,
         }, optimizers=optimizers)
         gaussian_model.update_properties(new_parameters)

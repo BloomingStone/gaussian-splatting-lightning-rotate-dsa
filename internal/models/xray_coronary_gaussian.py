@@ -1,3 +1,4 @@
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import override, Mapping, Callable, Any
 from abc import ABC
@@ -6,7 +7,10 @@ import numpy as np
 import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
+from torch.optim.optimizer import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 from lightning import LightningModule
+import pyvista as pv
 
 from .gaussian import (
     Gaussian, 
@@ -21,10 +25,11 @@ from ..utils.general_utils import (
     inverse_sigmoid,
     strip_symmetric,
     build_scaling_rotation,
+    knn,
 )
 from ..deform_models.deform_model import DeformsMARecoder
 from ..schedulers import ExponentialDecayScheduler
-from ..optimizers import OptimizerConfig, Adam
+from ..optimizers import OptimizerConfig, AdamConfig
 
 @dataclass
 class XrayExponentialDecayScheduler(ExponentialDecayScheduler):
@@ -49,7 +54,7 @@ class OptimizationConfig:
     log_gradients: bool = False
     grad_log_interval: int = 100
 
-    optimizer: OptimizerConfig = field(default_factory=Adam)
+    optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     
     def get_lr(self, key: str) -> float:
         return getattr(self, f"{key}_lr")
@@ -73,6 +78,7 @@ class GaussianInits:
 @dataclass
 class XrayCoronaryGaussian(Gaussian):
     optimization: OptimizationConfig = field(default_factory=lambda: OptimizationConfig())
+    save_motion: bool = True  # 是否在 to_polydata 时保存 motion 统计量
 
     def instantiate(self, *args, **kwargs) -> "XrayCoronaryGaussianModel":
         return XrayCoronaryGaussianModel(self)
@@ -167,6 +173,7 @@ class XrayCoronaryGaussianModel(
     def setup_from_pcd(
             self, xyz: Tensor|np.ndarray, 
             rgb: Any, 
+            init_scale: float = 1.0,
             *args, 
             **kwargs 
         ):
@@ -180,9 +187,10 @@ class XrayCoronaryGaussianModel(
         
         fused_point_cloud = xyz_coronary
 
-        from simple_knn._C import distCUDA2
-        dist2 = torch.clamp_min(distCUDA2(fused_point_cloud.cuda()), 0.0000001).to(fused_point_cloud.device)
-        scales = torch.log(torch.sqrt(dist2))[..., None].repeat(1, 3)
+        # Initialize the GS size to be the average dist of the 3 nearest neighbors
+        dist2_avg = (knn(fused_point_cloud, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
+        dist_avg = torch.sqrt(dist2_avg)
+        scales = torch.log(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
 
         n_gaussians = fused_point_cloud.shape[0]
         inits = GaussianInits(n_gaussians)
@@ -222,12 +230,7 @@ class XrayCoronaryGaussianModel(
         raise NotImplementedError()
     
     @override
-    def training_setup(self, module: LightningModule) -> tuple[
-        list[torch.optim.Optimizer] | torch.optim.Optimizer | None,
-        list[torch.optim.lr_scheduler.LRScheduler] | torch.optim.lr_scheduler.LRScheduler | None
-    ]:
-        self._register_grad_monitor_hook(module)
-
+    def training_setup(self, module: LightningModule) -> tuple[list[Optimizer], list[LRScheduler]]:
         # ---- adaptively scaled according to the camera distribution radius
         spatial_lr_scale = self.config.optimization.spatial_lr_scale
         if spatial_lr_scale <= 0:
@@ -237,18 +240,12 @@ class XrayCoronaryGaussianModel(
         
         if optimization_config.means_lr_scheduler.lr_final is not None:
             optimization_config.means_lr_scheduler.lr_final *= spatial_lr_scale
-        
-        # --- init optimizer and scheduler for means
-        def _add_optimizer_after_backward_hook_if_available(optimizer, pl_module):
-            hook = getattr(optimizer, "on_after_backward", None)
-            if hook is None:
-                return
-            pl_module.on_after_backward_hooks.append(hook)
+
             
         optimizer_factory = self.config.optimization.optimizer
         
-        opt_list: list[torch.optim.Optimizer] = []
-        schedule_list: list[torch.optim.lr_scheduler.LRScheduler] = []
+        opt_list: list[Optimizer] = []
+        schedule_list: list[LRScheduler] = []
         
         name = "means"
         lr = optimization_config.means_lr_init
@@ -262,7 +259,6 @@ class XrayCoronaryGaussianModel(
             lr=lr,
             eps=1e-15,
         )
-        _add_optimizer_after_backward_hook_if_available(means_optimizer, module)
         
         means_scheduler = optimization_config.means_lr_scheduler.instantiate().get_scheduler(
             means_optimizer, lr,
@@ -282,7 +278,6 @@ class XrayCoronaryGaussianModel(
                 "name": key,
             })
         constant_lr_optimizer = optimizer_factory.instantiate(params, lr=0.0, eps=1e-15)
-        _add_optimizer_after_backward_hook_if_available(constant_lr_optimizer, module)
         opt_list.append(constant_lr_optimizer)
         
         print(f"spatial_lr_scale={spatial_lr_scale}, learning_rates=")
@@ -381,68 +376,76 @@ class XrayCoronaryGaussianModel(
         else:
             return self.properties
 
-    
-    @staticmethod
-    def _grad_stats(parameters: list[torch.Tensor]) -> dict[str, float]:
-        total_sq_norm = 0.0
-        max_abs = 0.0
-        nan_count = 0.0
-        inf_count = 0.0
-        grad_param_count = 0.0
-        grad_elem_count = 0.0
+    # --- VTK / PolyData 序列化 ---
 
-        for p in parameters:
-            g = p.grad
-            if g is None:
+    def to_polydata(self) -> pv.PolyData:
+        props = self.get_non_pre_activated_properties()
+
+        # means → points
+        means_np = props["means"].detach().cpu().numpy().astype(np.float32)
+        pd = pv.PolyData(means_np)
+
+        # store each property as point_data
+        for name in self.property_names:
+            if name == "means":
                 continue
-            grad_param_count += 1.0
-            grad_elem_count += float(g.numel())
-            g32 = g.detach().float()
-            nan_count += float(torch.isnan(g32).sum().item())
-            inf_count += float(torch.isinf(g32).sum().item())
-            total_sq_norm += float(torch.square(g32).sum().item())
-            max_abs = max(max_abs, float(g32.abs().max().item()))
+            val = props[name].detach().cpu().numpy().astype(np.float32)
+            pd.point_data[name] = val
 
-        return {
-            "l2": total_sq_norm ** 0.5,
-            "max_abs": max_abs,
-            "nan_count": nan_count,
-            "inf_count": inf_count,
-            "grad_param_count": grad_param_count,
-        }
+        # optionally save motion buffers
+        if self.config.save_motion and hasattr(self, "d_motion_mean") and self.d_motion_mean is not None:
+            pd.point_data["d_motion_mean"] = self.d_motion_mean.detach().cpu().numpy().astype(np.float32)
+            pd.point_data["d_motion_2_mean"] = self.d_motion_2_mean.detach().cpu().numpy().astype(np.float32)
 
-    def _register_grad_monitor_hook(self, module: LightningModule):
-        if self._grad_hook_registered:
-            return
+        pd.field_data["model_type"] = np.array(["XrayCoronaryGaussian"])
 
-        def _log_gradients(outputs, batch, gaussian_model, global_step: int, pl_module: LightningModule):
-            optimization_config = self.config.optimization
-            if optimization_config.log_gradients is False:
-                return
-            if optimization_config.grad_log_interval <= 0:
-                return
-            if global_step % optimization_config.grad_log_interval != 0:
-                return
-            if pl_module.global_rank != 0:
-                return
-            if pl_module.logger is None:
-                return
+        return pd
 
-            metrics_to_log: dict[str, float] = {}
-            for key in self._keys:
-                stats = self._grad_stats([self.gaussians[key]])
-                metrics_to_log[f"stats/gs_grad/{key}/l2"] = stats["l2"]
-                metrics_to_log[f"stats/gs_grad/{key}/max_abs"] = stats["max_abs"]
-                metrics_to_log[f"stats/gs_grad/{key}/nan_count"] = stats["nan_count"]
-                metrics_to_log[f"stats/gs_grad/{key}/inf_count"] = stats["inf_count"]
+    def setup_from_polydata(self, polydata: pv.PolyData, *args, **kwargs):
+        import numpy as np
+        import torch as _torch
 
-            all_stats = self._grad_stats([self.gaussians[k] for k in self._keys])
-            metrics_to_log["stats/gs_grad/all/l2"] = all_stats["l2"]
-            metrics_to_log["stats/gs_grad/all/max_abs"] = all_stats["max_abs"]
-            metrics_to_log["stats/gs_grad/all/nan_count"] = all_stats["nan_count"]
-            metrics_to_log["stats/gs_grad/all/inf_count"] = all_stats["inf_count"]
-            metrics_to_log["stats/gs_grad/all/param_count"] = all_stats["grad_param_count"]
-            pl_module.logger.log_metrics(metrics_to_log, step=pl_module.trainer.global_step)
+        means = _torch.tensor(np.asarray(polydata.points, dtype=np.float32), dtype=_torch.float)
+        n_gaussians = means.shape[0]
+        device = means.device
 
-        module.on_after_backward_hooks.append(_log_gradients)
-        self._grad_hook_registered = True
+        # build property dict
+        property_dict: dict = {}
+        property_dict["means"] = nn.Parameter(means.requires_grad_(True))
+
+        for name in self.property_names:
+            if name == "means":
+                continue
+            if name in polydata.point_data:
+                val = _torch.tensor(np.asarray(polydata.point_data[name], dtype=np.float32), dtype=_torch.float)
+            else:
+                # fallback to defaults
+                if name == "density":
+                    val = _torch.ones(n_gaussians, 1, dtype=_torch.float)
+                elif name == "scales":
+                    val = _torch.zeros(n_gaussians, 3, dtype=_torch.float)
+                elif name == "rotations":
+                    val = _torch.zeros(n_gaussians, 4, dtype=_torch.float)
+                    val[:, 0] = 1.0
+                else:
+                    val = _torch.zeros(n_gaussians, 1, dtype=_torch.float)
+            property_dict[name] = nn.Parameter(val.requires_grad_(True))
+
+        self.set_properties(property_dict)
+
+        # try to restore motion buffers; fallback to zeros if not present
+        try:
+            d_motion_mean_np = np.asarray(polydata.point_data["d_motion_mean"], dtype=np.float32)
+            d_motion_2_mean_np = np.asarray(polydata.point_data["d_motion_2_mean"], dtype=np.float32)
+            self.register_buffer(
+                "d_motion_mean",
+                _torch.tensor(d_motion_mean_np, dtype=_torch.float, device=device, requires_grad=False),
+            )
+            self.register_buffer(
+                "d_motion_2_mean",
+                _torch.tensor(d_motion_2_mean_np, dtype=_torch.float, device=device, requires_grad=False),
+            )
+            self.motion_ch = self.d_motion_mean.shape[-1]
+        except KeyError:
+            # motion data not in polydata → initialize to zeros
+            self._init_motions(n_gaussians, device=device)

@@ -41,16 +41,16 @@ class PointCloud:
             raise ValueError("Feature does not have 3 channels, cannot be interpreted as RGB.")
 
 
+Stage = Literal["train", "val", "test"]
+
+
 class CloudParser(Protocol[MetaT_contra]):
     num_points: int
     
     """Protocol for point cloud parsers."""
-    def get_point_cloud(self, data_dir: Path, meta: MetaT_contra) -> PointCloud:
+    def get_point_cloud(self, data_dir: Path, meta: MetaT_contra, splits: None|dict[Stage, list[int]]=None) -> PointCloud:
         """Parse the data directory and return a point cloud."""
         ...
-
-
-Stage = Literal["train", "val", "test"]
 
 
 class Spliter(Protocol[MetaT_contra]):
@@ -120,8 +120,6 @@ class DataParserOutputs(Generic[MetaT]):
 
     point_cloud: PointCloud
 
-    appearance_group_ids: None | list[int] = None
-
     camera_extent: None|float = None
 
     def __post_init__(self):
@@ -185,8 +183,8 @@ class DataParser(Generic[MetaT, DatasetT]):
         :return: [training set, validation set, point cloud]
         """
         meta = self.meta_loader.load(data_dir)
-        point_cloud = self.cloud_parser.get_point_cloud(data_dir, meta)
         splits = self.spliter.split(data_dir, meta)
+        point_cloud = self.cloud_parser.get_point_cloud(data_dir, meta, splits)
         cameras = self.cameras_builder.build_cameras(meta)
         
         if self.filter_visible_points:

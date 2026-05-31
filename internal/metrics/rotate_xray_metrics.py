@@ -7,6 +7,7 @@ from pytorch_lightning import LightningModule
 from internal.metrics.metric import Metric, MetricImpl, CommonImageMetricImpl
 from internal.renderers.xray_4d_renderer import RenderRes
 from internal.dataparsers.dataparser import BatchT
+from ..renderers.deformabel_xray_renderer_coronary_props import XrayRendererOuputs
 
 
 @dataclass
@@ -21,7 +22,8 @@ class RotateXrayMetrics(Metric):
     the vanilla 3DGS uses 'vgg', but 'alex' is faster
     """
 
-    fused_ssim: bool = False
+    # 目前如果将 fused_ssim 设为 False 会导致 loss 无法正常下降， 可能是因为 pytorch 实现的ssim处理半精度时有问题
+    fused_ssim: bool = True
 
     def instantiate(self, *args, **kwargs) -> MetricImpl:
         return RotateXrayMetricsImpl(self)
@@ -35,7 +37,7 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
         pl_module: LightningModule, 
         gaussian_model, 
         batch: BatchT, 
-        outputs: RenderRes
+        outputs: XrayRendererOuputs
     ):
         _, image_info, _ = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
         _, gt_image, _ = image_info
@@ -71,7 +73,7 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
         return metrics, prog_bar
     
 
-    def get_train_metrics(self, pl_module, gaussian_model, step: int, batch, outputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:
+    def get_train_metrics(self, pl_module, gaussian_model, step: int, batch: BatchT, outputs: XrayRendererOuputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:    # type: ignore
         return self._get_basic_metrics(
             pl_module=pl_module,
             gaussian_model=gaussian_model,
@@ -79,7 +81,7 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             outputs=outputs
         )
     
-    def get_validate_metrics(self, pl_module, gaussian_model, batch, outputs: RenderRes) -> Tuple[Dict[str, Any], Dict[str, bool]]:
+    def get_validate_metrics(self, pl_module, gaussian_model, batch: BatchT, outputs: XrayRendererOuputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:
         metrics, prog_bar = self._get_basic_metrics(
             pl_module,
             gaussian_model,

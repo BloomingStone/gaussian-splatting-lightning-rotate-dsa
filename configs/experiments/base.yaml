@@ -4,9 +4,9 @@ defaults:
 study_name: BASE
 
 train:
-  data_root: /media/data3/sj/Data/gen4d_outputs/ASOCA_samples
+  data_root: /media/F/sj/Data/gen4d_outputs/ASOCA_samples
   base_config: configs/rotate_xray_3dgr/rotate_xray_3dgr_deformable_xray_render.yaml
-  results_root: outputs/experiments_asoca
+  results_root: /media/F/sj/Data/ASOCA_recon
   runner: pixi run python
   # 单进程模式：每次只跑一个case，避免并发导致显存峰值叠加。
   gpu: "0"
@@ -30,6 +30,8 @@ train:
     use_fragi_filter: false
   retries: 0
   dry_run: false
+  # true: 只有当 sweep 配置生成的 run 名集合与结果目录中的 run_summary 集合完全一致时，才执行 summary。
+  summary_require_exact_sweep_match: false
   # true: 若已有checkpoint，则跳过所有fit，仅对有checkpoint的case重跑test和指标计算。
   eval_only: false
   # true: 若已有checkpoint，则整案跳过（不重训、不重测、不重算指标）。
@@ -44,13 +46,9 @@ train:
   static_overrides:
     data.parser.init_args.spliter.class_path: internal.dataparsers.xray_dataparser.splitters.RenderNewViewsSpliter
     data.parser.init_args.spliter.init_args.train_ratio: 0.8
-    model.metric.init_args.enable_deform_tv_loss: false
-    model.metric.init_args.w_deform_tv_loss: 0.0
-    model.metric.init_args.enable_frangi_loss: false
-    model.metric.init_args.w_frangi_loss: 0.0
 
-    model.saver.init_args.save_phase: 0.5
-    model.saver.init_args.save_ckpt: true
+    trainer.callbacks.0.init_args.saver.init_args.save_phase: 0.5
+    trainer.callbacks.0.init_args.saver.init_args.save_ckpt: true
     pbar_rate: 50
 
 

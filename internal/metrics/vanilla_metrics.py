@@ -3,7 +3,7 @@ from typing import Tuple, Dict, Literal, Any
 import torch
 from torchmetrics.image import PeakSignalNoiseRatio
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
-from ..utils.ssim import ssim
+from .ssim import ssim
 
 from .metric import Metric, MetricImpl
 from ..instantiate_config import Instantiable

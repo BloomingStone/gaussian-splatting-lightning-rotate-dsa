@@ -4,7 +4,7 @@ from typing import Any
 import torch
 from torch import nn
 
-from internal.utils.gaussian_utils import GaussianTransformUtils
+from internal.utils.guassian_utils.gaussian_utils import GaussianTransformUtils
 from internal.instantiate_config import Instantiable
 
 @dataclass

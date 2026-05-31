@@ -4,10 +4,26 @@ cache_all_images: true
 trainer:
   check_val_every_n_epoch: 10
   precision: 16-mixed
-
-save_iterations: [10000]
-
-
+  callbacks:
+    - class_path: internal.callbacks.scene_saver.SceneSaver
+      init_args:
+        save_iterations: [10000]
+        saver:
+          class_path: internal.savers.x_ray_saver.XRaySaver
+          init_args:
+            save_ckpt: true
+            save_ply: true
+            save_nii: true
+            save_phase: 0.
+    - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
+    - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
+    - class_path: internal.callbacks.save_image.SaveImage
+      init_args:
+        save_val_output: true
+        max_save_val_output: -1
+        max_image_saving_threads: 16
+    - class_path: internal.callbacks.callbacks.ProgressBar
+    - class_path: internal.callbacks.callbacks.StopDataLoaderCacheThread
 data:
   parser: 
     class_path: internal.dataparsers.xray_dataparser.parser.XRayDataParser
@@ -34,7 +50,6 @@ data:
       init_point_cloud_num: 100_000
       train_ratio: 0.8
 model:
-  max_save_val_output: 2
   renderer:
     class_path: internal.renderers.xray_renderer.XrayRenderer
     init_args:

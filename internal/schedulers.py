@@ -1,8 +1,8 @@
 from typing import Literal, Optional, Any
 from dataclasses import dataclass, field
 from internal.instantiate_config import Instantiable
-from torch.optim import Optimizer, lr_scheduler
-from torch.optim.lr_scheduler import LRScheduler
+from torch.optim.optimizer import Optimizer
+from torch.optim.lr_scheduler import LRScheduler, LambdaLR
 import numpy as np
 
 
@@ -83,5 +83,5 @@ class ExponentialDecaySchedulerImpl(SchedulerImpl):
                 lr = np.exp(np.log(lr_init) * (1 - t) + np.log(lr_final) * t)
             return lr / lr_init  # divided by lr_init because the multiplier is with the initial learning rate
 
-        scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=func)
+        scheduler = LambdaLR(optimizer, lr_lambda=func)
         return scheduler

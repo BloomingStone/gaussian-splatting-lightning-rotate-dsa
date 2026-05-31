@@ -1,9 +1,13 @@
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Union, Optional, Mapping
 import torch
 import numpy as np
 from torch import nn
+from torch.optim.optimizer import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 import lightning
+import pyvista as pv
 
 from .gaussian import (
     Gaussian,
@@ -15,8 +19,9 @@ from ..utils.general_utils import (
     inverse_sigmoid,
     strip_symmetric,
     build_scaling_rotation,
+    knn,
 )
-from ..optimizers import OptimizerConfig, Adam, SelectiveAdam, SparseGaussianAdam
+from ..optimizers import OptimizerConfig, AdamConfig, SelectiveAdam, SparseGaussianAdam
 from ..schedulers import Scheduler, ExponentialDecayScheduler
 
 @dataclass
@@ -48,7 +53,7 @@ class OptimizationConfig:
 
     sh_degree_up_interval: int = 1_000
 
-    optimizer: OptimizerConfig = field(default_factory=Adam)
+    optimizer: OptimizerConfig = field(default_factory=AdamConfig)
 
 
 @dataclass
@@ -66,6 +71,8 @@ class VanillaGaussianModel(
     HasNewGetters,
     HasVanillaGetters,
 ):
+    _active_sh_degree: torch.Tensor
+    
     def __init__(self, config: VanillaGaussian) -> None:
         super().__init__()
         self.config = config
@@ -91,14 +98,9 @@ class VanillaGaussianModel(
     def before_setup_set_properties_from_pcd(self, xyz: torch.Tensor, rgb: torch.Tensor, property_dict: Mapping[str, torch.Tensor|nn.Parameter], *args, **kwargs):
         pass
 
-    def _add_optimizer_after_backward_hook_if_available(self, optimizer, pl_module):
-        hook = getattr(optimizer, "on_after_backward", None)
-        if hook is None:
-            return
-        pl_module.on_after_backward_hooks.append(hook)
 
-    def setup_from_pcd(self, xyz: Union[torch.Tensor, np.ndarray], rgb: Union[torch.Tensor, np.ndarray], *args, **kwargs):
-        from ..utils.sh_utils import RGB2SH
+    def setup_from_pcd(self, xyz: Union[torch.Tensor, np.ndarray], rgb: Union[torch.Tensor, np.ndarray], init_scale: float=1.0, *args, **kwargs):
+        from ..utils.math.sh_utils import RGB2SH
 
         if isinstance(xyz, np.ndarray):
             xyz = torch.tensor(xyz)
@@ -114,13 +116,11 @@ class VanillaGaussianModel(
         shs = torch.zeros((n_gaussians, 3, (self.config.sh_degree + 1) ** 2)).float()
         shs[:, :3, 0] = fused_color
         shs[:, 3:, 1:] = 0.0
-
-        # scales
-        # TODO: replace `simple_knn`
-        from simple_knn._C import distCUDA2
-        # the parameter device may be "cpu", so tensor must move to cuda before calling distCUDA2()
-        dist2 = torch.clamp_min(distCUDA2(fused_point_cloud.cuda()), 0.0000001).to(fused_point_cloud.device)
-        scales = torch.log(torch.sqrt(dist2))[..., None].repeat(1, 3)
+        
+        # Initialize the GS size to be the average dist of the 3 nearest neighbors
+        dist2_avg = (knn(fused_point_cloud, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
+        dist_avg = torch.sqrt(dist2_avg)
+        scales = torch.log(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
 
         # rotations
         rots = torch.zeros((fused_point_cloud.shape[0], 4))
@@ -151,7 +151,7 @@ class VanillaGaussianModel(
 
         self.active_sh_degree = 0
 
-    def before_setup_set_properties_from_number(self, n: int, property_dict: Dict[str, torch.Tensor], *args, **kwargs):
+    def before_setup_set_properties_from_number(self, n: int, property_dict: Mapping[str, torch.Tensor], *args, **kwargs):
         pass
 
     def setup_from_number(self, n: int, *args, **kwargs):
@@ -236,19 +236,10 @@ class VanillaGaussianModel(
 
         return unused_properties, unmet_properties
 
-    def training_setup(self, module: "lightning.LightningModule") -> Tuple[
-        Optional[Union[
-            List[torch.optim.Optimizer],
-            torch.optim.Optimizer,
-        ]],
-        Optional[Union[
-            List[torch.optim.lr_scheduler.LRScheduler],
-            torch.optim.lr_scheduler.LRScheduler,
-        ]]
-    ]:
+    def training_setup(self, module: "lightning.LightningModule") -> tuple[list[Optimizer], list[LRScheduler]]:
         spatial_lr_scale = self.config.optimization.spatial_lr_scale
         if spatial_lr_scale <= 0:
-            spatial_lr_scale = module.trainer.datamodule.dataparser_outputs.camera_extent
+            spatial_lr_scale = module.trainer.datamodule.dataparser_outputs.camera_extent   # type: ignore
         assert spatial_lr_scale > 0
 
         optimization_config = self.config.optimization
@@ -264,9 +255,8 @@ class VanillaGaussianModel(
             lr=means_lr_init,
             eps=1e-15,
         )
-        self._add_optimizer_after_backward_hook_if_available(means_optimizer, module)
         # TODO: other scheduler may not contain `lr_final`, but does not need to change scheduler currently
-        optimization_config.means_lr_scheduler.lr_final *= spatial_lr_scale
+        optimization_config.means_lr_scheduler.lr_final *= spatial_lr_scale # type: ignore
         means_scheduler = optimization_config.means_lr_scheduler.instantiate().get_scheduler(
             means_optimizer,
             means_lr_init,
@@ -281,7 +271,6 @@ class VanillaGaussianModel(
             {'params': [self.gaussians["rotations"]], 'lr': optimization_config.rotations_lr, "name": "rotations"},
         ]
         constant_lr_optimizer = optimizer_factory.instantiate(l, lr=0.0, eps=1e-15)
-        self._add_optimizer_after_backward_hook_if_available(constant_lr_optimizer, module)
 
         print("spatial_lr_scale={}, learning_rates=".format(spatial_lr_scale))
         print("  means={}->{}".format(means_lr_init, optimization_config.means_lr_scheduler.lr_final))
@@ -311,40 +300,40 @@ class VanillaGaussianModel(
         return self.config.sh_degree
 
     def get_active_sh_degree(self) -> int:
-        return self._active_sh_degree.item()
+        return self._active_sh_degree.item()    # type: ignore
 
     def set_active_sh_degree(self, v):
         self._active_sh_degree.fill_(v)
 
     @property
     def active_sh_degree(self) -> int:
-        return self._active_sh_degree.item()
+        return self._active_sh_degree.item()    # type: ignore
 
     @active_sh_degree.setter
     def active_sh_degree(self, v: int):
         self._active_sh_degree.fill_(v)
 
-    def opacity_activation(self, opacities: torch.Tensor) -> torch.Tensor:
-        return torch.sigmoid(opacities)
+    def opacity_activation(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.sigmoid(x)
 
-    def opacity_inverse_activation(self, opacities: torch.Tensor) -> torch.Tensor:
-        return inverse_sigmoid(opacities)
+    def opacity_inverse_activation(self, x: torch.Tensor) -> torch.Tensor:
+        return inverse_sigmoid(x)
 
-    def scale_activation(self, scales: torch.Tensor) -> torch.Tensor:
-        return torch.exp(scales)
+    def scale_activation(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.exp(x)
 
-    def scale_inverse_activation(self, scales: torch.Tensor) -> torch.Tensor:
-        return torch.log(scales)
+    def scale_inverse_activation(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.log(x)
 
-    def rotation_activation(self, rotations: torch.Tensor) -> torch.Tensor:
-        return torch.nn.functional.normalize(rotations)
+    def rotation_activation(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.nn.functional.normalize(x)
 
-    def rotation_inverse_activation(self, rotations: torch.Tensor) -> torch.Tensor:
-        return rotations
-
+    def rotation_inverse_activation(self, x: torch.Tensor) -> torch.Tensor:
+        return x
+    
     @staticmethod
-    def _return_as_is(v):
-        return v
+    def _return_as_is(x):
+        return x
 
     def _get_shs_from_dict(self) -> torch.Tensor:
         return self.gaussians["shs"]
@@ -434,3 +423,88 @@ class VanillaGaussianModel(
             scaling_modifier,
             self.get_rotations(),
         )
+
+    # --- VTK / PolyData 序列化 ---
+
+    def to_polydata(self) -> pv.PolyData:
+        props = self.get_non_pre_activated_properties()
+
+        # means → points
+        means_np = props["means"].detach().cpu().numpy().astype(np.float32)
+
+        # build point_data dict from remaining properties
+        point_data = {}
+        for name in self.property_names:
+            if name == "means":
+                continue
+            val = props[name].detach().cpu().numpy().astype(np.float32)
+            # squeeze any trailing dim=1 so arrays like [N, 1] or [N, 1, 3] are clean
+            # but don't squeeze the channel dim for shs
+            point_data[name] = val
+
+        pd = pv.PolyData(means_np)
+        for name, arr in point_data.items():
+            pd.point_data[name] = arr
+
+        # store active_sh_degree as field data
+        pd.field_data["active_sh_degree"] = np.array([self.active_sh_degree], dtype=np.int32)
+        pd.field_data["model_type"] = np.array(["VanillaGaussian"])
+
+        return pd
+
+    def setup_from_polydata(self, polydata: pv.PolyData, *args, **kwargs):
+        import numpy as np
+        import torch as _torch
+
+        means = _torch.tensor(np.asarray(polydata.points, dtype=np.float32), dtype=_torch.float)
+
+        # detect sh_degree from shs_rest if available
+        if "shs_rest" in polydata.point_data:
+            shs_rest_dims = polydata.point_data["shs_rest"].shape[1]
+            sh_degree = -1
+            for i in range(4):
+                if shs_rest_dims == (i + 1) ** 2 - 1:
+                    sh_degree = i
+                    break
+            assert sh_degree >= 0, f"cannot determine sh_degree from shs_rest dim={shs_rest_dims}"
+        else:
+            sh_degree = self.config.sh_degree
+
+        n_gaussians = means.shape[0]
+
+        # build property dict with Parameters
+        property_dict: dict = {}
+        property_dict["means"] = nn.Parameter(means.requires_grad_(True))
+
+        # required properties
+        for name in self.property_names:
+            if name == "means":
+                continue
+            if name in polydata.point_data:
+                val = _torch.tensor(np.asarray(polydata.point_data[name], dtype=np.float32), dtype=_torch.float)
+            else:
+                # fill with zeros as fallback
+                shape = list(means.shape)
+                if name == "shs_dc":
+                    shape = [n_gaussians, 1, 3]
+                elif name == "shs_rest":
+                    shape = [n_gaussians, (sh_degree + 1) ** 2 - 1, 3]
+                elif name == "opacities":
+                    shape = [n_gaussians, 1]
+                elif name == "scales":
+                    shape = [n_gaussians, 3]
+                elif name == "rotations":
+                    shape = [n_gaussians, 4]
+                else:
+                    # extra property: try to infer from property_names, use 1D by default
+                    shape = [n_gaussians]
+                val = _torch.zeros(shape, dtype=_torch.float)
+            property_dict[name] = nn.Parameter(val.requires_grad_(True))
+
+        self.set_properties(property_dict)
+
+        # restore active_sh_degree
+        if "active_sh_degree" in polydata.field_data:
+            self.active_sh_degree = int(polydata.field_data["active_sh_degree"][0])
+        else:
+            self.active_sh_degree = sh_degree
