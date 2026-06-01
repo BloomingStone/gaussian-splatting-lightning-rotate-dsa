@@ -71,6 +71,6 @@ model:
     class_path: internal.savers.xray_4d_saver.XRaySaver
     init_args:
       save_ckpt: true
-      save_ply: false
+      save_vtp: false
       save_nii: true
       save_phase: 0.5

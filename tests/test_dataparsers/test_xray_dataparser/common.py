@@ -50,7 +50,7 @@ def _compute_diag(pts: np.ndarray) -> float:
 def _draw_cloud(plotter: pv.Plotter, xyz: np.ndarray, diag: float) -> None:
     """Add point-cloud glyphs to *plotter*."""
     cloud_pd = pv.PolyData(xyz)
-    plotter.add_points(cloud_pd, color="lightblue", point_size=diag * 0.1, render_points_as_spheres=False, label="point cloud")
+    plotter.add_points(cloud_pd, color="r", point_size=diag * 0.01, render_points_as_spheres=False, label="point cloud")
 
 
 def _draw_cameras(

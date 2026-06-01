@@ -104,7 +104,7 @@ class GaussianModel(nn.Module, ABC):
     def save_to_vtp(self, path: str):
         """保存为 .vtp 文件"""
         pd = self.to_polydata()
-        pv.save_meshio(path, pd)
+        pd.save(path)
 
     @classmethod
     def load_polydata_from_vtp(cls, path: str) -> pv.PolyData:

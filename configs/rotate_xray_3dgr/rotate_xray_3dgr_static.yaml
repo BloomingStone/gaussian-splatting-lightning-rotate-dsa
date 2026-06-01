@@ -12,7 +12,7 @@ trainer:
           class_path: internal.savers.x_ray_saver.XRaySaver
           init_args:
             save_ckpt: true
-            save_ply: true
+            save_vtp: true
             save_nii: true
             save_phase: 0.
     - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
@@ -23,7 +23,6 @@ trainer:
         max_save_val_output: -1
         max_image_saving_threads: 16
     - class_path: internal.callbacks.callbacks.ProgressBar
-    - class_path: internal.callbacks.callbacks.StopDataLoaderCacheThread
 data:
   parser: 
     class_path: internal.dataparsers.xray_dataparser.parser.XRayDataParser
@@ -74,6 +73,6 @@ model:
     class_path: internal.savers.x_ray_saver.XRaySaver
     init_args:
       save_ckpt: false
-      save_ply: false
+      save_vtp: false
       save_nii: true
       save_phase: 0.5

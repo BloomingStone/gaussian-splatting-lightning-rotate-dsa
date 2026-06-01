@@ -6,6 +6,7 @@ from typing import override, cast
 from .vanilla_density_controller import VanillaDensityControllerImpl, DensityController
 from . import utils as utils
 from ..models.xray_coronary_gaussian import GaussianInits, XrayCoronaryGaussianModel
+from ..renderers.renderer import RendererOutputs
 
 @dataclass
 class RotateXrayDensityController(DensityController):    
@@ -64,15 +65,15 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
     
         
     @override
-    def before_backward(self, outputs: dict, batch, gaussian_model, optimizers: list, global_step: int, pl_module) -> None:
+    def before_backward(self, outputs: RendererOutputs, batch, gaussian_model, optimizers: list, global_step: int, pl_module) -> None:
         if global_step >= self.config.densify_until_frac*pl_module.trainer.max_steps:
             return
 
-        outputs["viewspace_points"].retain_grad()
+        outputs.meta["viewspace_points"].retain_grad()
         
     
     @override
-    def after_backward(self, outputs: dict, batch, gaussian_model, optimizers: list, global_step: int, pl_module) -> None:
+    def after_backward(self, outputs: RendererOutputs, batch, gaussian_model, optimizers: list, global_step: int, pl_module) -> None:
         if global_step >= self.config.densify_until_frac*pl_module.trainer.max_steps:
             return
 

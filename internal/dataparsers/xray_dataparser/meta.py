@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
 
-from ..dataparser import MetaLoader
+from ..dataparser import MetaLoader, Meta
 
 
 MM = float | int
@@ -57,7 +57,7 @@ class FrameInfo:
 
  
 @dataclass
-class XRayMeta:
+class XRayMeta(Meta):
     """MetaData for XRay dataset."""
     raw_data: dict[str, Any]  # raw data loaded from json, can be used to construct other fields in Meta
     coronary_type: CorType

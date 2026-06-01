@@ -26,15 +26,14 @@ ROI = NamedTuple("ROI", [
 
 @dataclass
 class ImagesDatasetConfig:
-    camera_cache_device: str = "cuda"
-    image_cache_device: str | None = "cuda"
+    # camera cached on CPU by default; do not move cameras to CUDA in dataset
+    # if cache_image is True, cache images/masks as cpu tensors in dataset to avoid IO
+    cache_image: bool = True
     image_uint8: bool = False
 
 
 @dataclass
 class TiffDatasetConfig:
-    camera_cache_device: str = "cuda"
-    image_cache_device: str | None = "cuda"
     roi: ROI = ROI(
         top_left=PixelPosition(200, 200),
         bottom_right=PixelPosition(450, 400),
@@ -105,19 +104,18 @@ class ImagesDataset(GSDataset):
         self.other_data_closure = other_data_closure
         self.source_indices = list(range(len(image_paths))) if source_indices is None else source_indices
 
-        if self.cfg.camera_cache_device is not None:
-            self.cameras = self.cameras.to(torch.device(self.cfg.camera_cache_device))
+        # keep cameras on CPU in dataset worker processes to avoid CUDA init
+        self.cameras = self.cameras.to(torch.device("cpu"))
 
         self.cached_images = None
         self.cached_masks = None
 
         def _try_cache_images():
-            if self.cfg.image_cache_device is None:
+            if not self.cfg.cache_image:
                 return
 
-            device = torch.device(self.cfg.image_cache_device)
             L = len(self)
-            self.cached_images = torch.stack([self.get_image(i) for i in range(L)]).to(device)
+            self.cached_images = torch.stack([self.get_image(i) for i in range(L)])
 
             if self.masks_paths is None:
                 return
@@ -126,7 +124,7 @@ class ImagesDataset(GSDataset):
             is_masks_valid = [mask is not None for mask in masks]
             assert all(is_masks_valid), "Some masks are invalid, cannot cache masks"
 
-            self.cached_masks = torch.stack(cast(list[torch.Tensor], masks)).to(device)
+            self.cached_masks = torch.stack(cast(list[torch.Tensor], masks))
 
         _try_cache_images()
 
@@ -273,8 +271,8 @@ class TiffDataset(GSDataset):
         self.tiff_path = tiff_path
         self.source_indices = source_indices
 
-        if self.cfg.camera_cache_device is not None:
-            self.cameras = self.cameras.to(torch.device(self.cfg.camera_cache_device))
+        # keep cameras on CPU in dataset
+        self.cameras = self.cameras.to(torch.device("cpu"))
 
         tiff_data = tiff.imread(self.tiff_path).astype(np.float32)
         tiff_data, self.cameras = apply_roi(tiff_data, self.cameras, cfg.roi)
@@ -283,10 +281,7 @@ class TiffDataset(GSDataset):
         vol_min = tiff_data.min() if cfg.val_min is None else cfg.val_min
         tiff_data = (tiff_data - vol_min) / (vol_max - vol_min + 1e-8)
 
-        tiff_tensor = torch.from_numpy(tiff_data)
-        if self.cfg.image_cache_device is not None:
-            tiff_tensor = tiff_tensor.to(self.cfg.image_cache_device)
-        self.tiff_data = tiff_tensor
+        self.tiff_data = torch.from_numpy(tiff_data)
 
     def __len__(self):
         return len(self.source_indices)

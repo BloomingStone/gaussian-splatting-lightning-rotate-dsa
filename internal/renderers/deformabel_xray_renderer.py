@@ -5,6 +5,7 @@ import torch
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
+from torch.optim.adam import Adam
 from lightning import LightningModule
 from xray_gaussian_rasterization_voxelization import (
     GaussianRasterizationSettings,
@@ -284,7 +285,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         self.smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=total_steps*0.8)
     
     def training_setup(self, module) -> tuple[list[Optimizer]|None, list[LRScheduler]|None]:
-        optimizer = torch.optim.adam.Adam(
+        optimizer = Adam(
             [{
                 "params": list(self.deform_model.parameters()),
                 "name": "deform",

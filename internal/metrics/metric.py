@@ -10,7 +10,7 @@ from lightning import LightningModule
 from torch import Tensor
 
 from ..dataparsers.dataparser import BatchT
-from ..utils.ssim import ssim
+from .ssim import ssim
 from ..models.gaussian import GaussianModel
 from ..renderers.renderer import RendererOutputs
 from ..instantiate_config import Instantiable

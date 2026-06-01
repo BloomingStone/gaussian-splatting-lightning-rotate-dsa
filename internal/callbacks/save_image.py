@@ -20,6 +20,8 @@ from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 from torchvision.utils import _log_api_usage_once, make_grid
 
+from ..renderers.renderer import RendererOutputs
+
 
 
 @torch.no_grad()
@@ -70,7 +72,7 @@ class SaveImage(Callback):
 
     def __init__(
         self,
-        save_val_output: bool = False,
+        save_val_output: bool = True,
         max_save_val_output: int = -1,
         max_image_saving_threads: int = 16,
     ) -> None:
@@ -155,7 +157,7 @@ class SaveImage(Callback):
     #  Per-batch collection
     # ------------------------------------------------------------------
 
-    def _handle_batch_end(self, trainer, pl_module, outputs, batch, batch_idx: int, stage: str) -> None:
+    def _handle_batch_end(self, trainer, pl_module, outputs: RendererOutputs, batch, batch_idx: int, stage: str) -> None:
         if self.save_val_output is False or trainer.global_rank != 0:
             return
         if self.max_save_val_output >= 0 and batch_idx >= self.max_save_val_output:
@@ -191,10 +193,10 @@ class SaveImage(Callback):
     def on_test_epoch_start(self, trainer, pl_module) -> None:
         self._start_workers(trainer, pl_module)
 
-    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0) -> None:
+    def on_validation_batch_end(self, trainer, pl_module, outputs: RendererOutputs, batch, batch_idx, dataloader_idx=0) -> None:
         self._handle_batch_end(trainer, pl_module, outputs, batch, batch_idx, stage="val")
 
-    def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0) -> None:
+    def on_test_batch_end(self, trainer, pl_module, outputs: RendererOutputs, batch, batch_idx, dataloader_idx=0) -> None:
         self._handle_batch_end(trainer, pl_module, outputs, batch, batch_idx, stage="test")
 
     def on_validation_epoch_end(self, trainer, pl_module) -> None:

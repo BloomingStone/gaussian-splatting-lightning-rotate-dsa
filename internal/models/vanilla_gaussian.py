@@ -21,7 +21,7 @@ from ..utils.general_utils import (
     build_scaling_rotation,
     knn,
 )
-from ..optimizers import OptimizerConfig, AdamConfig, SelectiveAdam, SparseGaussianAdam
+from ..optimizers import OptimizerConfig, AdamConfig
 from ..schedulers import Scheduler, ExponentialDecayScheduler
 
 @dataclass

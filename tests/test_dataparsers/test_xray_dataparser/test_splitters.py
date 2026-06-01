@@ -46,7 +46,7 @@ def test_render_new_views_splitter_random_start_keeps_contiguous_sequence(test_x
 
 def test_render_new_views_splitter_rejects_unknown_mode(test_xray_data_root: Path):
     meta = load_test_meta(test_xray_data_root)
-    splitter = RenderNewViewsSpliter(random_loader_mode="invalid")
+    splitter = RenderNewViewsSpliter(random_loader_mode="invalid")  # type: ignore
 
     with pytest.raises(ValueError):
         splitter.split(Path("/tmp/data-d"), meta)

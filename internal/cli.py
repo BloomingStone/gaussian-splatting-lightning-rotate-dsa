@@ -53,12 +53,6 @@ class CLI(LightningCLI):
             help="the training result output path will be 'output/name/version'"
         )
         
-        # TODO: add max_steps to save_iterations, but need to compatible with --max_steps < 0 & --max_epochs > 0
-        parser.add_argument(
-            "--save_iterations", 
-            type=List[int], 
-            default=[7_000, 30_000]
-        )
         parser.add_argument(
             "--logger", 
             type=str, 
@@ -72,7 +66,7 @@ class CLI(LightningCLI):
         )
         parser.add_argument(
             "--output", 
-            type=str, 
+            type=Path, 
             default=Path(__file__).parent.parent / "outputs",
             help="the base directory of the output"
         )
@@ -87,27 +81,21 @@ class CLI(LightningCLI):
             default=False
         )
         parser.add_argument(
-            "--save_val", 
-            action="store_true", 
-            default=False,
-            help="Whether save images rendered during validation/test to files"
-        )
-        parser.add_argument(
             "--val_train", 
             action="store_true", 
             default=False,
             help="Whether use train set to do validation"
         )
         parser.add_argument(
-            "--cache_all_images", 
-            action="store_true", 
-            default=False,
-            help="Speedup validation/test by caching all images. Images in train set is cached by default."
-        )
-        parser.add_argument(
             "--pbar_rate", 
             type=int, 
             default=None
+        )
+        parser.add_argument(
+            "--overwrite_output",
+            action="store_true",
+            default=False,
+            help="Whether overwrite existing output directory, if False, the program will raise error when output directory already exists",
         )
 
     def before_instantiate_classes(self) -> None:
@@ -151,12 +139,13 @@ class CLI(LightningCLI):
             config.ckpt_path = _search_checkpoint(output_path)
 
         if self.config.subcommand == "fit":
-            if config.ckpt_path is None:
+            if config.ckpt_path is None and not config.overwrite_output:
                 assert not (output_path / "point_cloud").exists() and not (output_path / "checkpoints").exists(), (
-                    "checkpoint or point cloud output already exists in '{}', \n"
-                    "please specific a different experiment name (-n) or version (-v)".format(output_path)
+                    f"checkpoint or point cloud output already exists in '{output_path}', \n"
+                    "please specific a different experiment name (-n) or version (-v) or set --overwrite_output to True"
                 )
         else:
+            # test or predict
             # disable logger
             config.logger = "None"
             # disable config saveing
@@ -196,31 +185,6 @@ class CLI(LightningCLI):
         # set web viewer
         config.model.web_viewer = config.viewer
 
-        if config.save_val is True:
-            callbacks = getattr(config.trainer, "callbacks", None)
-            if callbacks is not None:
-                for callback in callbacks:
-                    if _update_callback_init_value(
-                        callback=callback,
-                        callback_class_path="internal.callbacks.save_image.SaveImage",
-                        init_arg_name="save_val_output",
-                        init_arg_value=True,
-                    ):
-                        break
-
-        # route --save_iterations to SceneSaver callback
-        if config.save_iterations is not None:
-            callbacks = getattr(config.trainer, "callbacks", None)
-            if callbacks is not None:
-                for callback in callbacks:
-                    if _update_callback_init_value(
-                        callback=callback,
-                        callback_class_path="internal.callbacks.scene_saver.SceneSaver",
-                        init_arg_name="save_iterations",
-                        init_arg_value=config.save_iterations,
-                    ):
-                        break
-
         config.data.val_on_train = config.val_train
 
         # set refresh rate of the progress bar
@@ -228,7 +192,7 @@ class CLI(LightningCLI):
     
     
     def _set_pbar_rate(self) -> None:
-        if self.config.pbar_rate is None:
+        if not hasattr(self.config, "pbar_rate") or self.config.pbar_rate is None:
             return
         
         callbacks = getattr(self.trainer, "callbacks", None)

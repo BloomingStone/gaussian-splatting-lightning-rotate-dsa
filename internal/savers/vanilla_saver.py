@@ -50,14 +50,11 @@ class VanillaSaverModule(SaverModule):
             with torch.no_grad():
                 xyz = pl_module.gaussian_model.get_xyz.detach().cpu().numpy().astype(np.float32)
                 pd = pv.PolyData(xyz)
-                pv.save_meshio(
-                    os.path.join(
-                        pl_module.hparams["output_path"],
-                        "checkpoints",
-                        f"epoch={pl_module.trainer.current_epoch}-step={pl_module.trainer.global_step}-xyz.vtp",
-                    ),
-                    pd,
-                )
+                pd.save(os.path.join(
+                    pl_module.hparams["output_path"],
+                    "checkpoints",
+                    f"epoch={pl_module.trainer.current_epoch}-step={pl_module.trainer.global_step}-xyz.vtp",
+                ))
         except Exception:
             pass  # xyz preview is optional
 

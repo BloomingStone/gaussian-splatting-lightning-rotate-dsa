@@ -1,7 +1,6 @@
 from typing import Tuple, Dict
 import torch
-from ..renderers.renderer import Renderer, RendererConfig, RendererOutputInfo, RendererOutputTypes
-from ..visualizers import build_viewer_output_visualizers, OutputVisualizer
+from ..renderers.renderer import Renderer, RendererConfig
 
 
 class ViewerRenderer:

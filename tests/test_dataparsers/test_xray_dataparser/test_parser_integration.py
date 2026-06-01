@@ -75,12 +75,10 @@ def _make_rotated_xray_parser() -> XRayDataParser:
         cameras_builder=RotateXRayCamerasBuilder(),
         dataset_builder=ImagesDatasetBuilder(
             dataset_config=ImagesDatasetConfig(
-                camera_cache_device="cpu",
-                image_cache_device="cpu",
                 image_uint8=False,
             )
         ),
-        filter_visible_points=False,
+        filter_visible_points=True,
     )
 
 
@@ -92,12 +90,9 @@ def _make_tiff_parser() -> XRayDataParser:
         cameras_builder=RotateXRayCamerasBuilder(),
         dataset_builder=TiffDatasetBuilder(
             base_name="rotate_dsa",
-            dataset_config=TiffDatasetConfig(
-                camera_cache_device="cpu",
-                image_cache_device="cpu",
-            ),
+            dataset_config=TiffDatasetConfig(),
         ),
-        filter_visible_points=False,
+        filter_visible_points=True,
     )
 
 

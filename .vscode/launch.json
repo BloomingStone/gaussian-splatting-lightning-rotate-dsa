@@ -27,7 +27,8 @@
                 "--config", "configs/rotate_xray_3dgr/rotate_xray_3dgr_static.yaml",
                 "--data.path", "data/rbf_reader_flow_contrast_LCA",
                 "-n", "rotate-xray__static",
-                "-v", "debug"
+                "-v", "debug",
+                "--overwrite_output"
             ]
         },
         {
@@ -40,7 +41,9 @@
                 "fit",
                 "--config", "configs/rotate_xray_3dgr/rotate_xray_3dgr_static.yaml",
                 "--data.path", "/media/data3/sj/Code/Gen4D/test/output/only_static_label",
-                "-n", "rotate-xcat-static-label-temp"
+                "-n", "rotate-xcat-static-label-temp",
+                "-v", "debug",
+                "--overwrite_output"
             ]
         },
         {
@@ -52,8 +55,10 @@
             "args": [
                 "fit",
                 "--config", "configs/rotate_xray_3dgr/rotate_xray_3dgr_deformable_xray_render.yaml",
-                "--data.path", "data/Diseased_17",
-                "-n", "rotate-xcat-deformable"
+                "--data.path", "data/rbf_reader_flow_contrast_LCA",
+                "-n", "rotate-xcat-deformable",
+                "-v", "debug",
+                "--overwrite_output"
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "${config:gs.debug.cudaVisibleDevices}"
@@ -69,7 +74,9 @@
                 "fit",
                 "--config", "configs/4D_dsa/pigdata_3d_deform.yaml",
                 "--data.path", "data/pigdata",
-                "-n", "pigdata-4d-recon"
+                "-n", "pigdata-4d-recon",
+                "-v", "debug",
+                "--overwrite_output"
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "${config:gs.debug.cudaVisibleDevices}"
@@ -85,7 +92,9 @@
                 "fit",
                 "--config", "configs/4D_dsa/pigdata_4D.yaml",
                 "--data.path", "data/pigdata",
-                "-n", "pigdata-4d-recon"
+                "-n", "pigdata-4d-recon",
+                "-v", "debug",
+                "--overwrite_output"
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "${config:gs.debug.cudaVisibleDevices}"
@@ -102,7 +111,8 @@
                 "--config", "configs/4D_dsa/pigdata_deform_with_flow.yaml",
                 "--data.path", "data/pigdata",
                 "-n", "pigdata-4d-recon",
-                "-v", "debug"
+                "-v", "debug",
+                "--overwrite_output"
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "0"
@@ -119,7 +129,8 @@
                 "--config", "configs/4D_dsa_generated/rotate_xray_3dgr_deform_with_flow.yaml",
                 "--data.path", "data/rbf_reader_flow_contrast_LCA",
                 "-n", "rotate-xray__deformable-with-flow",
-                "-v", "debug"
+                "-v", "debug",
+                "--overwrite_output"
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "1"

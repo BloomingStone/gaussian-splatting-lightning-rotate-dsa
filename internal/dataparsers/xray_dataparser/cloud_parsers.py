@@ -9,6 +9,8 @@ from ..dataparser import PointCloud, CloudParser, Stage
 from .meta import XRayMeta
 from .conebeam import ConeBeamParams, PngOdlTransform, ConeBeamProjector
 
+DEFAULT_NUM_POINTS = 100_000
+
 
 def get_AABB_corners(
     shape: np.ndarray,  # (3,) array of volume size in mm
@@ -61,7 +63,7 @@ def _get_random_backgound_cloud(xyz: np.ndarray, seed: int) -> np.ndarray:
 
 @dataclass
 class UniformCloudParser(CloudParser):
-    num_points: int
+    num_points: int = DEFAULT_NUM_POINTS
 
     def get_point_cloud(self, data_dir: Path, meta: XRayMeta, splits: None|dict[Stage, list[int]]=None) -> PointCloud:
         size = int(round(self.num_points ** (1/3)))
@@ -76,7 +78,7 @@ class UniformCloudParser(CloudParser):
 
 @dataclass
 class RandomCloudParser(CloudParser):
-    num_points: int
+    num_points: int = DEFAULT_NUM_POINTS
     seed: int = 42
 
     def get_point_cloud(self, data_dir: Path, meta: XRayMeta, splits: None|dict[Stage, list[int]]=None) -> PointCloud:
@@ -89,7 +91,7 @@ class RandomCloudParser(CloudParser):
 
 @dataclass
 class BallRandomCloudParser(CloudParser):
-    num_points: int
+    num_points: int = DEFAULT_NUM_POINTS
     R: float|None = None  # if None, will be set to the minimum dimension of the bounding box of the volume
     seed: int = 42
 
@@ -108,7 +110,7 @@ class BallRandomCloudParser(CloudParser):
 
 @dataclass
 class LabelCloudParser(CloudParser):
-    num_points: int
+    num_points: int = DEFAULT_NUM_POINTS
     label_nii_filename: str = "coronary_label.nii.gz"
     label_value: int | None = None  # if not None, only keep points with this label value in the label_nii
     seed: int = 42
@@ -150,7 +152,7 @@ class LabelCloudParser(CloudParser):
 
 @dataclass
 class CentralLineCloudParser(CloudParser):
-    num_points: int
+    num_points: int = DEFAULT_NUM_POINTS
     central_line_filename: str = "central_line.npz"
     seed: int = 42
     add_random_background_points: bool = True
@@ -169,7 +171,7 @@ class CentralLineCloudParser(CloudParser):
 
 @dataclass
 class FdkCloudParser(CloudParser):
-    num_points: int
+    num_points: int = DEFAULT_NUM_POINTS
     seed: int = 42
     use_filter: bool = True
     phase_min: float = 0.0
@@ -183,6 +185,22 @@ class FdkCloudParser(CloudParser):
         # TODO extract density from volume as feature, instead of using dummy constant feature
         feature = np.ones_like(xyz) * 127
         return PointCloud(xyz=xyz, feature=feature)
+
+    @staticmethod
+    def _load_png_projections(image_dir: Path, indices: list[int]) -> np.ndarray:
+        from PIL import Image
+
+        image_paths = sorted(image_dir.glob("*.png"))
+        if len(image_paths) == 0:
+            raise ValueError(f"No PNG files found in {image_dir}")
+
+        return np.stack(
+            [
+                np.asarray(Image.open(image_paths[i]).convert("L"))
+                for i in indices
+            ],
+            axis=0,
+        )
 
     @staticmethod
     def _preprocess_indices_alphas(
@@ -239,15 +257,9 @@ class FdkCloudParser(CloudParser):
         )
 
         if self.image_dir_name is not None:
-            from PIL import Image
             image_dir = data_dir / self.image_dir_name
             assert image_dir.exists(), f"Image directory {image_dir} does not exist"
-            image_paths = sorted(image_dir.glob(".png"))
-            iamge_paths = [image_paths[i] for i in indices]
-            projections = np.stack([
-                np.asarray(Image.open(image_paths[i]).convert("L"))
-                for i in indices
-            ], axis=0)
+            projections = self._load_png_projections(image_dir, indices)
         elif self.tiff_file_name is not None:
             import tifffile as tiff
             tiff_path = data_dir / self.tiff_file_name

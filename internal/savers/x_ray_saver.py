@@ -1,11 +1,13 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from pathlib import Path
 from concurrent.futures import Future, ThreadPoolExecutor
+from typing import cast
 
 import numpy as np
 import torch
 import pyvista as pv
-import nibabel as nib
 from nibabel import loadsave as nib_io
 from nibabel.nifti1 import Nifti1Image
 from xray_gaussian_rasterization_voxelization import (
@@ -15,9 +17,9 @@ from xray_gaussian_rasterization_voxelization import (
 
 from .saver import Saver, SaverModule
 from ..gaussian_splatting import GaussianSplatting
-from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from ..renderers.deformabel_xray_renderer import CoronaryDeformableXrayRenderer
 from ..deform_models import DeformModel, Deforms, GSParam
+from ..dataparsers.xray_dataparser import XRayMeta
 
 
 def quaternion_to_matrix(q: torch.Tensor) -> torch.Tensor:
@@ -156,31 +158,32 @@ class XRaySaver(Saver):
         return XRaySaverModule(self)
 
 
-@dataclass
-class VtpSavePayload:
-    path: Path
-    means: np.ndarray
-    scales: np.ndarray
-    rotations: np.ndarray
-    density: np.ndarray
-
-
-@dataclass
-class NiftiSavePayload:
-    volume_path: Path
-    dxyz_volume_path: Path
-    volume: np.ndarray
-    dxyz_volume: np.ndarray
-    volume_affine: np.ndarray
-    dxyz_affine: np.ndarray
-
-
-@dataclass
-class SaveOutputsPayload:
-    vtp: VtpSavePayload | None = None
-    nifti: NiftiSavePayload | None = None
 
 class XRaySaverModule(SaverModule):
+    @dataclass
+    class VtpSavePayload:
+        path: Path
+        means: np.ndarray
+        scales: np.ndarray
+        rotations: np.ndarray
+        density: np.ndarray
+
+
+    @dataclass
+    class NiftiSavePayload:
+        volume_path: Path
+        dxyz_volume_path: Path
+        volume: np.ndarray
+        dxyz_volume: np.ndarray
+        volume_affine: np.ndarray
+        dxyz_affine: np.ndarray
+
+
+    @dataclass
+    class SaveOutputsPayload:
+        vtp: XRaySaverModule.VtpSavePayload | None = None
+        nifti: XRaySaverModule.NiftiSavePayload | None = None
+    
     def __init__(self, config: XRaySaver):
         super().__init__()
         self.config = config
@@ -197,7 +200,7 @@ class XRaySaverModule(SaverModule):
             pd.point_data["scales"] = payload.vtp.scales
             pd.point_data["rotations"] = payload.vtp.rotations
             pd.field_data["model_type"] = np.array(["XrayCoronaryGaussian"])
-            pv.save_meshio(str(payload.vtp.path), pd)
+            pd.save(payload.vtp.path)
 
         if payload.nifti is not None:
             nib_io.save(
@@ -216,80 +219,117 @@ class XRaySaverModule(SaverModule):
         if pl_module.trainer.global_rank != 0:
             return
 
-        epoch = pl_module.trainer.current_epoch
-        step = pl_module.trainer.global_step
-        output_root = Path(pl_module.hparams["output_path"])
-        
-        ckpt_dir = output_root / "checkpoints"
-        ckpt_dir.mkdir(exist_ok=True)
-        
         if self.config.save_ckpt:
-            ckpt_path = ckpt_dir / f"epoch={epoch}-step={step}.ckpt"
-            
-            pl_module.trainer.save_checkpoint(ckpt_path)
+            self._save_ckpt(pl_module)
         
         pc = pl_module.gaussian_model
         
-        assert isinstance(pl_module.renderer, CoronaryDeformableXrayRenderer)
-        deform_model = pl_module.renderer.deform_model
+        renderer = cast(CoronaryDeformableXrayRenderer, pl_module.renderer)
+        deform_model = renderer.deform_model
         
         means3D = pc.get_means().detach()
         density = pc.get_density().detach()
         rotation = pc.get_rotations().detach()
         scales = pc.get_scales().detach()
         
+        # there is no contrast flow in simple generated rotating xray dataset, so we can just input the save_phase as the time 
+        # input to get the deformation at that phase
         deforms: Deforms = deform_model(
-            means3D.detach(), 
-            torch.full((means3D.shape[0], 1), self.config.save_phase, device=means3D.device),   # input phase is save_phase
+            xyz = means3D.detach(), 
+            t = torch.full((means3D.shape[0], 1), self.config.save_phase, device=means3D.device),   # input time is save_phase
+            phase = torch.full((means3D.shape[0], 1), self.config.save_phase, device=means3D.device),   # input phase is save_phase
         )
         
-        source_deformed = DeformModel.deform(
+        source_deformed = deform_model.deform(
             GSParam(xyz=means3D, rotation=rotation, scaling=scales, density=density), deforms
         )
-        means3D, rotation, scales = source_deformed.xyz, source_deformed.rotation, source_deformed.scaling
         
-        vtp_payload: VtpSavePayload | None = None
+        vtp_payload = self._make_vtp_save_payload(
+            pl_module, 
+            source_deformed
+        ) if self.config.save_vtp else None
 
-        if self.config.save_vtp:
-            vtp_dir = output_root / "point_cloud"
-            vtp_dir.mkdir(parents=True, exist_ok=True)
-            vtp_path = vtp_dir / f"iteration_{step}.vtp"
-            vtp_payload = VtpSavePayload(
-                path=vtp_path,
-                means=means3D.detach().cpu().numpy().astype(np.float32),
-                scales=pc.scale_inverse_activation(scales).detach().cpu().numpy().astype(np.float32),
-                rotations=pc.rotation_inverse_activation(rotation).detach().cpu().numpy().astype(np.float32),
-                density=density.detach().cpu().numpy().astype(np.float32),
-            )
+        nifti_payload = self._make_nii_save_payload(
+            pl_module, 
+            source_deformed
+        ) if self.config.save_nii else None
 
-        nifti_payload: NiftiSavePayload | None = None
-
-        if self.config.save_nii:
-            volume_shape = pl_module.trainer.datamodule.dataparser.volume_shape     # type: ignore
-            coronary_affine = pl_module.trainer.datamodule.dataparser.coronary_affine   # type: ignore
-            volume = gaussians_to_volume_by_Rasterizer(
-                means3D, scales, rotation, density, volume_shape, coronary_affine
-            )
-            dxyz_volume, zoomed_affine = deform_field_to_volume(deform_model, volume_shape, coronary_affine, zoomed_shape=(128, 128, 128))
-            coronary_affine_save = np.array(coronary_affine, copy=True)
-            torch.cuda.empty_cache()  # avoid CUDA OOM
-            
-            volume_dir = output_root / "volumes"
-            volume_dir.mkdir(parents=True, exist_ok=True)
-            volume_nii_path = volume_dir / f"volume__epoch={epoch}-step={step}.nii.gz"
-            dxyz_volume_nii_path = volume_dir / f"dxyz_volume__epoch={epoch}-step={step}.nii.gz"
-            nifti_payload = NiftiSavePayload(
-                volume_path=volume_nii_path,
-                dxyz_volume_path=dxyz_volume_nii_path,
-                volume=volume,
-                dxyz_volume=dxyz_volume,
-                volume_affine=coronary_affine_save,
-                dxyz_affine=zoomed_affine,
-            )
-
+        # save in threads
         if self._pending_save is not None and not self._pending_save.done():
             self._pending_save.result()
 
-        payload = SaveOutputsPayload(vtp=vtp_payload, nifti=nifti_payload)
+        payload = self.SaveOutputsPayload(vtp=vtp_payload, nifti=nifti_payload)
         self._pending_save = self._save_executor.submit(self._save_outputs, payload)
+    
+    
+    def _save_ckpt(self, pl_module: GaussianSplatting):
+        epoch = pl_module.trainer.current_epoch
+        step = pl_module.trainer.global_step
+        output_root = Path(pl_module.hparams["output_path"])
+        ckpt_dir = output_root / "checkpoints"
+        ckpt_dir.mkdir(exist_ok=True)
+        ckpt_path = ckpt_dir / f"epoch={epoch}-step={step}.ckpt"
+        
+        pl_module.trainer.save_checkpoint(ckpt_path)
+    
+    
+    def _make_nii_save_payload(
+        self, 
+        pl_module: GaussianSplatting,
+        gs_param: GSParam,
+    ) -> NiftiSavePayload:
+        datamodule = pl_module.get_datamodule()
+        meta = datamodule.dataparser.meta
+        assert isinstance(meta, XRayMeta)
+        volume_shape = tuple(meta.volume_size)
+        coronary_affine = meta.centering_affine
+        volume = gaussians_to_volume_by_Rasterizer(
+            gs_param.xyz, gs_param.scaling, gs_param.rotation, gs_param.density, volume_shape, coronary_affine
+        )
+        dxyz_volume, zoomed_affine = deform_field_to_volume(
+            pl_module.renderer.deform_model, volume_shape, coronary_affine, zoomed_shape=(128, 128, 128)
+        )
+        coronary_affine_save = np.array(coronary_affine, copy=True)
+        torch.cuda.empty_cache()  # avoid CUDA OOM
+        
+        output_root = Path(pl_module.hparams["output_path"])
+        epoch = pl_module.trainer.current_epoch
+        step = pl_module.trainer.global_step
+
+        volume_dir = output_root / "volumes"
+        volume_dir.mkdir(parents=True, exist_ok=True)
+        volume_nii_path = volume_dir / f"volume__epoch={epoch}-step={step}.nii.gz"
+        dxyz_volume_nii_path = volume_dir / f"dxyz_volume__epoch={epoch}-step={step}.nii.gz"
+
+        return self.NiftiSavePayload(
+            volume_path=volume_nii_path,
+            dxyz_volume_path=dxyz_volume_nii_path,
+            volume=volume,
+            dxyz_volume=dxyz_volume,
+            volume_affine=coronary_affine_save,
+            dxyz_affine=zoomed_affine,
+        )
+    
+    
+    def _make_vtp_save_payload(
+        self,
+        pl_module: GaussianSplatting,
+        gs_param: GSParam,
+    ) -> VtpSavePayload:
+        
+        output_root = Path(pl_module.hparams["output_path"])
+        step = pl_module.trainer.global_step
+
+        vtp_dir = output_root / "point_cloud"
+        vtp_dir.mkdir(parents=True, exist_ok=True)
+        vtp_path = vtp_dir / f"iteration_{step}.vtp"
+
+        return self.VtpSavePayload(
+            path=vtp_path,
+            means=gs_param.xyz.detach().cpu().numpy().astype(np.float32),
+            scales=gs_param.scaling.detach().cpu().numpy().astype(np.float32),
+            rotations=gs_param.rotation.detach().cpu().numpy().astype(np.float32),
+            density=gs_param.density.detach().cpu().numpy().astype(np.float32),
+        )
+
         

@@ -23,7 +23,6 @@ trainer:
         max_save_val_output: 2
         max_image_saving_threads: 16
     - class_path: internal.callbacks.callbacks.ProgressBar
-    - class_path: internal.callbacks.callbacks.StopDataLoaderCacheThread
 
 
 data:

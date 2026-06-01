@@ -24,6 +24,7 @@ data:
         class_path: internal.dataparsers.xray_dataparser.splitters.RenderNewViewsSpliter
         init_args:
           train_ratio: 0.8
+          random_loader_mode: random-shuffle
       cameras_builder:
         class_path: internal.dataparsers.xray_dataparser.cameras_builder.RotateXRayCamerasBuilder
       dataset_builder:
@@ -69,6 +70,6 @@ model:
     class_path: internal.savers.x_ray_saver.XRaySaver
     init_args:
       save_ckpt: false
-      save_ply: false
+      save_vtp: false
       save_nii: true
       save_phase: 0.5

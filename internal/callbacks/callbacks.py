@@ -86,20 +86,3 @@ class ValidateOnTrainEnd(Callback):
             trainer.validating = False
 
 
-# ---------------------------------------------------------------------------
-#  StopDataLoaderCacheThread
-# ---------------------------------------------------------------------------
-
-class StopDataLoaderCacheThread(Callback):
-    def _stop_thread(self, data_loader):
-        import queue
-        if data_loader.cache_thread is not None:
-            data_loader.stop_caching = True
-            try:
-                data_loader.cache_output_queue.get(block=False)
-            except queue.Empty:
-                pass
-            data_loader.cache_thread.join()
-
-    def on_train_end(self, trainer, pl_module) -> None:
-        self._stop_thread(trainer.train_dataloader)

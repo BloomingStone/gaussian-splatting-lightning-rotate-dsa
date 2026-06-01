@@ -8,11 +8,13 @@ from torch.utils.data import Dataset
 
 from ..cameras import Camera, Cameras
 
+class Meta:
+    pass
 
-MetaT = TypeVar("MetaT")
+MetaT = TypeVar("MetaT", bound=Meta)
 
-MetaT_co = TypeVar("MetaT_co", covariant=True)
-MetaT_contra = TypeVar("MetaT_contra", contravariant=True)
+MetaT_co = TypeVar("MetaT_co", covariant=True, bound=Meta)
+MetaT_contra = TypeVar("MetaT_contra", contravariant=True, bound=Meta)
 
 class MetaLoader(Protocol[MetaT_co]):
     """Loader protocol for DataParser."""
@@ -96,6 +98,10 @@ class GSDataset(Dataset):
     
     def __getitem__(self, index: int) -> ItemT:
         raise NotImplementedError("GSDataset is an abstract class. Please implement __getitem__ method.")
+    
+    @property
+    def image_names(self) -> list[str]:
+        raise NotImplementedError("GSDataset is an abstract class. Please implement image_names property.")
 
 
 DatasetT = TypeVar("DatasetT", bound=GSDataset, covariant=True)
@@ -177,12 +183,15 @@ class DataParser(Generic[MetaT, DatasetT]):
     dataset_builder: DatasetBuilder[MetaT, DatasetT]
     
     filter_visible_points: bool = True
+    
+    meta: MetaT | None = None
 
     def get_outputs(self, data_dir: Path) -> DataParserOutputs[MetaT]:
         """
         :return: [training set, validation set, point cloud]
         """
         meta = self.meta_loader.load(data_dir)
+        self.meta = meta
         splits = self.spliter.split(data_dir, meta)
         point_cloud = self.cloud_parser.get_point_cloud(data_dir, meta, splits)
         cameras = self.cameras_builder.build_cameras(meta)
@@ -202,3 +211,8 @@ class DataParser(Generic[MetaT, DatasetT]):
             },
             point_cloud=point_cloud,
         )
+
+# For lightning's jsonargparser to recognize this as a dataclass, we need to add a dummy field with default value
+class DataParserBuilder:
+    def build(self) -> DataParser:
+        ...

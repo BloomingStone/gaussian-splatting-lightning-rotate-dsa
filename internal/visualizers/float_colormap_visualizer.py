@@ -23,7 +23,7 @@ def normalization_preprocessor(
     image: Tensor, 
     min_clamp: float|None,
     max_clamp: float|None
-):
+) -> Tensor:
     if min_clamp is not None:
         image = torch.clamp_min(image, min=min_clamp)
         
@@ -37,10 +37,12 @@ def normalization_preprocessor(
     image = image - min_value
     if max_diff > 0:
         image = image / max_diff
+    
+    return image
 
 
 
-def float_colormap(image, colormap: ColorMapName = ColorMapName.TURBO):
+def float_colormap(image: Tensor, colormap: ColorMapName = ColorMapName.TURBO) -> Tensor:
     """Copied from NeRFStudio: https://github.com/nerfstudio-project/nerfstudio/blob/f97eb2e5f0c754e1ab0873374c8dcea5d18e169c/nerfstudio/utils/colormaps.py#L93-L114. Please follow their license.
 
     Convert single channel to a color image.
@@ -61,7 +63,7 @@ def float_colormap(image, colormap: ColorMapName = ColorMapName.TURBO):
     image_long_max = torch.max(image_long)
     assert image_long_min >= 0, f"the min value is {image_long_min}"
     assert image_long_max <= 255, f"the max value is {image_long_max}"
-    colormap_colors = matplotlib.colormaps[colormap].colors
+    colormap_colors = matplotlib.colormaps[colormap].colors     # type: ignore
     return torch.tensor(colormap_colors, device=image.device)[image_long[0, ...]].permute(2, 0, 1)
 
 @dataclass

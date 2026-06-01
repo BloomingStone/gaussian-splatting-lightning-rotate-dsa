@@ -4,8 +4,6 @@ from lightning.pytorch.cli import ArgsType
 
 from internal.gaussian_splatting import GaussianSplatting
 from internal.datamodule import DataModule
-from internal.callbacks import SaveGaussian, KeepRunningIfWebViewerEnabled, StopImageSavingThreads, ProgressBar, ValidateOnTrainEnd, StopDataLoaderCacheThread
-
 
 def cli(args: ArgsType = None):
     CLI(

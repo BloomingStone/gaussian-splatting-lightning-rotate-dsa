@@ -1,5 +1,19 @@
 # Gaussian Splatting
 
+## TODO
+
+- [ ] TODO cfg_args 可能没有用
+- [ ] TODO 自定义从 ckpt 导入和 ply 导入模型
+	- 或者说要求实现 GS 实现各自的loader 从 ply 文件或 ply 对象中加载 GS
+	- [X] DONE 修改使用 VTK 导入点云，而不是 ply
+	- [ ] TODO 现在导入是将 点云和 render 混合一起导入，但这在有运动场的情况下会有问题。需要调整
+- [X] 一些使用 hparams 调用的对象改为直接使用对象
+- [ ] TODO 把3D metric 放入lightning 中，这样每次训练后会自动计算3Dmetric指标。同时需要保证 fit 结束后会生成 metrics.yaml
+	- 使用 pipline B 生成 用 冠脉标签区域 范围内，用固定阈值得到冠脉label + 0.9 0.8 0.7 等百分位或其他阈值自动化提取
+- [ ] TODO 把 vanilla 投影后端从 [[diff_gaussian_rasterization]] 切换到 [[gsplat]] #GS
+- [ ] TODO 实现并运行 viewer
+- [ ] TODO GS 使用 FDK 初始化结果应该返回density (sigma 吸收率), 而不是rbg
+
 ## 存储格式：VTK PolyData (.vtp)
 
 GS 模型的持久化使用 [PyVista PolyData](https://docs.pyvista.org/) 格式（`.vtp` 文件），替代了旧的 PLY 格式。

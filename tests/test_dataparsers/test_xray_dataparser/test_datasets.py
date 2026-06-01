@@ -53,8 +53,6 @@ def test_tiff_dataset_builder_resolves_and_reads_tiff(tmp_path: Path, output_roo
     builder = TiffDatasetBuilder(
         base_name="rotate_dsa",
         dataset_config=TiffDatasetConfig(
-            camera_cache_device="cuda",
-            image_cache_device="cuda",
             roi=ROI(top_left=PixelPosition(1, 1), bottom_right=PixelPosition(5, 4)),
         ),
     )
@@ -88,8 +86,6 @@ def test_images_dataset_builder_reads_real_fixture_data(test_xray_data_root: Pat
         use_depth_map=True,
         depth_map_filename="depth_map.npz",
         dataset_config=ImagesDatasetConfig(
-            camera_cache_device="cuda",
-            image_cache_device="cuda",
             image_uint8=False,
         ),
     )

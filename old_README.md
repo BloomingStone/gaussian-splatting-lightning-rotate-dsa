@@ -119,7 +119,7 @@ It can detect some dataset type automatically. You can also specify type with op
   * [Option 1]: Convert checkpoint file to ply: `python utils/ckpt2ply.py TRAINING_OUTPUT_PATH`, e.g.:
     * `python utils/ckpt2ply.py outputs/lego`
     * `python utils/ckpt2ply.py outputs/lego/checkpoints/epoch=300-step=30000.ckpt`
-  * [Option 2]: Start training with option: `--model.save_ply true`
+  * [Option 2]: Start training with option: `--model.save_vtp true`
 ### 2.2. Some useful options
 * Run training with web viewer
 ```bash

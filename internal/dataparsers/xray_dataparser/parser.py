@@ -1,11 +1,12 @@
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Union, cast
 
 import numpy as np
 import nibabel as nib
 
-from ..dataparser import DataParser
-from .meta import XRayMetaLoader
+from ..dataparser import DataParser, CloudParser, DataParserBuilder
+from .meta import XRayMetaLoader, XRayMeta
 from .cloud_parsers import (
     UniformCloudParser,
     RandomCloudParser,
@@ -17,26 +18,52 @@ from .cameras_builder import RotateXRayCamerasBuilder
 from .datasets import (
     ImagesDatasetBuilder,
     TiffDatasetBuilder,
+    ImagesDataset,
+    TiffDataset,
 )
 from .splitters import ReconstructionSpliter, RenderNewViewsSpliter
+from .cloud_parsers import UniformCloudParser, RandomCloudParser, BallRandomCloudParser, LabelCloudParser, CentralLineCloudParser, FdkCloudParser
+
+XRayCloudParserType = Union[
+    UniformCloudParser,
+    RandomCloudParser,
+    BallRandomCloudParser,
+    LabelCloudParser,
+    CentralLineCloudParser,
+    FdkCloudParser,
+]
+
+@dataclass
+class XRayDataParserBuilder(DataParserBuilder):
+    meta_loader: XRayMetaLoader =  field(default_factory=XRayMetaLoader)
+    cloud_parser: XRayCloudParserType = field(default_factory=RandomCloudParser)
+    spliter: ReconstructionSpliter|RenderNewViewsSpliter =  field(default_factory=ReconstructionSpliter)
+    cameras_builder: RotateXRayCamerasBuilder =  field(default_factory=RotateXRayCamerasBuilder)
+    dataset_builder: ImagesDatasetBuilder|TiffDatasetBuilder =  field(default_factory=ImagesDatasetBuilder)
+    filter_visible_points: bool = True
+    label_3d_filename: str = "coronary_label.nii.gz"
+    
+    def build(self):
+        return XRayDataParser(
+            meta_loader=self.meta_loader,
+            cloud_parser=self.cloud_parser,
+            spliter=self.spliter,
+            cameras_builder=self.cameras_builder,
+            dataset_builder=self.dataset_builder,
+            filter_visible_points=self.filter_visible_points,
+            label_3d_filename=self.label_3d_filename,
+        )
 
 
-InitPointCloudMode = Literal["uniform", "random", "random-ball", "label", "central-line"]
-DatasetType = Literal["images", "tiff"]
-ParserMode = Literal["reconstruction", "render-new-views"]
-
-
-class XRayDataParser(DataParser):
+class XRayDataParser(DataParser[XRayMeta, ImagesDataset|TiffDataset]):
     label_3d: np.ndarray | None
     label_3d_affine: np.ndarray | None
     
     
     def __init__(
         self,
-        meta_loader: XRayMetaLoader = XRayMetaLoader(),
-        cloud_parser: Union[
-            UniformCloudParser, RandomCloudParser, BallRandomCloudParser, LabelCloudParser, CentralLineCloudParser
-        ] = RandomCloudParser(num_points=100_000),
+        meta_loader = XRayMetaLoader(),
+        cloud_parser: CloudParser = RandomCloudParser(num_points=100_000),
         spliter: ReconstructionSpliter|RenderNewViewsSpliter = ReconstructionSpliter(),
         cameras_builder: RotateXRayCamerasBuilder = RotateXRayCamerasBuilder(),
         dataset_builder: ImagesDatasetBuilder|TiffDatasetBuilder = ImagesDatasetBuilder(),

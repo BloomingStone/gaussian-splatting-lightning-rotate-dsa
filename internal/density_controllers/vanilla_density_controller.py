@@ -7,6 +7,7 @@ from lightning import LightningModule
 from ..models.gaussian import GaussianModel, HasOpacityGetter
 from ..models.vanilla_gaussian import VanillaGaussianModel
 from ..utils.general_utils import build_rotation
+from ..renderers.renderer import RendererOutputs
 from .density_controller import DensityController, DensityControllerImpl
 from . import utils as utils
 
@@ -65,14 +66,14 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
         self.register_buffer("xyz_gradient_accum", xyz_gradient_accum, persistent=True)
         self.register_buffer("denom", denom, persistent=True)
 
-    def before_backward(self, outputs: dict, batch, gaussian_model: GaussianModel, optimizers: List, global_step: int, pl_module: LightningModule) -> None:
+    def before_backward(self, outputs: RendererOutputs, batch, gaussian_model: GaussianModel, optimizers: List, global_step: int, pl_module: LightningModule) -> None:
         gaussian_model = cast(VanillaGaussianModel, gaussian_model)
         if global_step >= self.config.densify_until_iter:
             return
 
-        outputs["viewspace_points"].retain_grad()
+        outputs.meta["viewspace_points"].retain_grad()
 
-    def after_backward(self, outputs: dict, batch, gaussian_model: GaussianModel, optimizers: List, global_step: int, pl_module: LightningModule) -> None:
+    def after_backward(self, outputs: RendererOutputs, batch, gaussian_model: GaussianModel, optimizers: List, global_step: int, pl_module: LightningModule) -> None:
         if global_step >= self.config.densify_until_iter:
             return
 
@@ -96,9 +97,9 @@ class VanillaDensityControllerImpl(DensityControllerImpl):
                 self.opacity_reset_at = global_step
 
     def update_states(self, outputs):
-        viewspace_point_tensor, visibility_filter, radii = outputs["viewspace_points"], outputs["visibility_filter"], outputs["radii"]
+        viewspace_point_tensor, visibility_filter, radii = outputs.meta["viewspace_points"], outputs.meta["visibility_filter"], outputs.meta["radii"]
         # retrieve viewspace_points_grad_scale if provided
-        viewspace_points_grad_scale = outputs.get("viewspace_points_grad_scale", None)
+        viewspace_points_grad_scale = outputs.meta.get("viewspace_points_grad_scale", None)
 
         # update states
         self.max_radii2D[visibility_filter] = torch.max(
