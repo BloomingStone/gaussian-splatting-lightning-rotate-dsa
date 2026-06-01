@@ -50,7 +50,7 @@ def _compute_diag(pts: np.ndarray) -> float:
 def _draw_cloud(plotter: pv.Plotter, xyz: np.ndarray, diag: float) -> None:
     """Add point-cloud glyphs to *plotter*."""
     cloud_pd = pv.PolyData(xyz)
-    plotter.add_points(cloud_pd, color="r", point_size=diag * 0.01, render_points_as_spheres=False, label="point cloud")
+    plotter.add_points(cloud_pd, color="r", point_size=diag * 0.05, render_points_as_spheres=False, label="point cloud")
 
 
 def _draw_cameras(
@@ -64,7 +64,6 @@ def _draw_cameras(
     """Add camera-center spheres and orientation arrows to *plotter*."""
     arrow_len = max(diag * 0.05, 1.0)
     cam_pd = pv.PolyData(centers)
-    plotter.add_points(cam_pd, color="red", point_size=diag * 0.001, render_points_as_spheres=True)
     plotter.add_arrows(centers, forward * arrow_len, color="red", label="forward")
     plotter.add_arrows(centers, up * arrow_len * 0.5, color="green", label="up")
     plotter.add_arrows(centers, right * arrow_len * 0.5, color="blue", label="right")

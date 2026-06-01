@@ -55,7 +55,7 @@
             "args": [
                 "fit",
                 "--config", "configs/rotate_xray_3dgr/rotate_xray_3dgr_deformable_xray_render.yaml",
-                "--data.path", "data/rbf_reader_flow_contrast_LCA",
+                "--data.path", "data/Diseased_17",
                 "-n", "rotate-xcat-deformable",
                 "-v", "debug",
                 "--overwrite_output"

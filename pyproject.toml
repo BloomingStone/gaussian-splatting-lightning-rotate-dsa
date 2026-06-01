@@ -16,11 +16,6 @@ gs-val = "internal.entrypoints.gspl:cli_val"
 gs-test = "internal.entrypoints.gspl:cli_test"
 gs-predict = "internal.entrypoints.gspl:cli_predict"
 
-segany-fit = "internal.entrypoints.seganygs:cli_fit"
-segany-val = "internal.entrypoints.seganygs:cli_val"
-segany-test = "internal.entrypoints.seganygs:cli_test"
-segany-predict = "internal.entrypoints.seganygs:cli_predict"
-
 gs-viewer = "internal.entrypoints.viewer:cli"
 
 [tool.pixi.workspace]

@@ -51,8 +51,6 @@ model:
     init_args:
       optimization_config:
         enable_ast: true
-        log_gradients: true
-        grad_log_interval: 50
       deform_model_config:
         class_path: internal.deform_models.HashGridDeformConfig
         init_args:
@@ -61,11 +59,17 @@ model:
           max_resolution: 2048
   metric:
     class_path: internal.metrics.rotate_xray_metrics.RotateXrayMetrics
+    init_args:
+      fused_ssim: true
+      w_gray_loss: 1.0
+      w_ssim_loss: 1.0
   gaussian:
     class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
     init_args:
       optimization:
-        log_gradients: true
-        grad_log_interval: 50
+        means_lr_init: 1e-4
   density:
     class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
+    init_args:
+      densify_grad_percentile: 0.95
+      cull_density_threshold: 1e-3

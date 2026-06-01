@@ -17,6 +17,7 @@ from .cloud_parsers import (
 from .cameras_builder import RotateXRayCamerasBuilder
 from .datasets import (
     ImagesDatasetBuilder,
+    FrangiMaskImagesDatasetBuilder,
     TiffDatasetBuilder,
     ImagesDataset,
     TiffDataset,
@@ -39,7 +40,7 @@ class XRayDataParserBuilder(DataParserBuilder):
     cloud_parser: XRayCloudParserType = field(default_factory=RandomCloudParser)
     spliter: ReconstructionSpliter|RenderNewViewsSpliter =  field(default_factory=ReconstructionSpliter)
     cameras_builder: RotateXRayCamerasBuilder =  field(default_factory=RotateXRayCamerasBuilder)
-    dataset_builder: ImagesDatasetBuilder|TiffDatasetBuilder =  field(default_factory=ImagesDatasetBuilder)
+    dataset_builder: ImagesDatasetBuilder|FrangiMaskImagesDatasetBuilder|TiffDatasetBuilder = field(default_factory=ImagesDatasetBuilder)
     filter_visible_points: bool = True
     label_3d_filename: str = "coronary_label.nii.gz"
     
@@ -66,7 +67,7 @@ class XRayDataParser(DataParser[XRayMeta, ImagesDataset|TiffDataset]):
         cloud_parser: CloudParser = RandomCloudParser(num_points=100_000),
         spliter: ReconstructionSpliter|RenderNewViewsSpliter = ReconstructionSpliter(),
         cameras_builder: RotateXRayCamerasBuilder = RotateXRayCamerasBuilder(),
-        dataset_builder: ImagesDatasetBuilder|TiffDatasetBuilder = ImagesDatasetBuilder(),
+        dataset_builder: ImagesDatasetBuilder|FrangiMaskImagesDatasetBuilder|TiffDatasetBuilder = ImagesDatasetBuilder(),
         filter_visible_points: bool = True,
         label_3d_filename: str = "coronary_label.nii.gz",
     ):

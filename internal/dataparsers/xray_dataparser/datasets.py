@@ -8,6 +8,7 @@ import numpy as np
 import tifffile as tiff
 
 from ...cameras import Cameras
+from ...utils.frangi import frangi_mask
 from ..dataparser import GSDataset, DatasetBuilder, ItemT, ImageItemT, Stage
 from .meta import XRayMeta
 
@@ -30,6 +31,18 @@ class ImagesDatasetConfig:
     # if cache_image is True, cache images/masks as cpu tensors in dataset to avoid IO
     cache_image: bool = True
     image_uint8: bool = False
+
+
+@dataclass
+class FrangiMaskImagesDatasetConfig(ImagesDatasetConfig):
+    frangi_sigmas: tuple[float, ...] = (1.0, 2.0, 3.0)
+    frangi_beta: float = 0.5
+    frangi_gamma: float = 15.0
+    frangi_black_ridges: bool = True
+    frangi_threshold: float = 0.2
+    frangi_dilation_radius: int = 3
+    frangi_closing_radius: int = 3
+    frangi_eps: float = 1e-6
 
 
 @dataclass
@@ -247,6 +260,108 @@ class ImagesDatasetBuilder(DatasetBuilder[XRayMeta, ImagesDataset]):
             cfg=self.dataset_config,
             image_paths=image_paths,
             masks_paths=masks_paths,
+            other_data_closure=other_data_closure,
+            source_indices=indices,
+        )
+
+
+class FrangiMaskImagesDataset(ImagesDataset):
+    cfg: FrangiMaskImagesDatasetConfig
+
+    def __init__(
+        self,
+        cameras: Cameras,
+        cfg: FrangiMaskImagesDatasetConfig,
+        image_paths: list[Path],
+        masks_paths: list[Path] | None = None,
+        other_data_closure: Callable[[int], dict[str, torch.Tensor]] | None = None,
+        source_indices: list[int] | None = None,
+    ):
+        super().__init__(
+            cameras=cameras,
+            cfg=cfg,
+            image_paths=image_paths,
+            masks_paths=masks_paths,
+            other_data_closure=other_data_closure,
+            source_indices=source_indices,
+        )
+
+        if self.cfg.cache_image:
+            masks = []
+            for i in range(len(self)):
+                mask = self.get_mask(i)
+                if mask is None:
+                    raise ValueError(f"Frangi mask is None for index {i}, cannot cache masks")
+                masks.append(mask)
+
+    @staticmethod
+    def _to_gray(image: torch.Tensor) -> torch.Tensor:
+        image = image.float()
+        if image.ndim == 2:
+            return image.unsqueeze(0)
+        if image.ndim != 3:
+            raise ValueError(f"Unsupported image shape for Frangi mask: {image.shape}")
+        if image.shape[0] == 1:
+            return image
+        return image.mean(dim=0, keepdim=True)
+
+    def get_mask(self, index: int) -> torch.Tensor | None:
+        if self.cached_masks is not None:
+            return self.cached_masks[index]
+
+        image = self._to_gray(self.get_image(index))
+        if image.max() > 1.0:
+            image = image / 255.0
+
+        mask = frangi_mask(
+            image=image,
+            sigmas=self.cfg.frangi_sigmas,
+            beta=self.cfg.frangi_beta,
+            gamma=self.cfg.frangi_gamma,
+            black_ridges=self.cfg.frangi_black_ridges,
+            threshold=self.cfg.frangi_threshold,
+            dilation_radius=self.cfg.frangi_dilation_radius,
+            closing_radius=self.cfg.frangi_closing_radius,
+            eps=self.cfg.frangi_eps,
+        )
+        if mask.dim() == 2:
+            mask = mask.unsqueeze(0)
+        mask = mask.expand(3, -1, -1)
+        return mask.bool()
+
+
+@dataclass
+class FrangiMaskImagesDatasetBuilder(ImagesDatasetBuilder):
+    dataset_config: FrangiMaskImagesDatasetConfig = field(default_factory=FrangiMaskImagesDatasetConfig)
+
+    def build_dataset(
+        self,
+        data_dir: Path,
+        cameras: Cameras,
+        meta: XRayMeta,
+        indices: list[int],
+        split: Stage,
+    ) -> FrangiMaskImagesDataset:
+        del meta, split
+        all_image_paths = sorted((data_dir / self.image_dir_name).glob(self.image_suffix))
+        image_paths = [all_image_paths[i] for i in indices]
+
+        other_data_closure = None
+        if self.use_depth_map:
+            depth_map_path = data_dir / self.depth_map_filename
+            if depth_map_path.exists():
+                depth_npy = np.load(depth_map_path)["arr_0"]
+
+                def get_depth_closure(index: int) -> dict[str, torch.Tensor]:
+                    return {"depth": torch.from_numpy(depth_npy[index]).float()}
+
+                other_data_closure = get_depth_closure
+
+        return FrangiMaskImagesDataset(
+            cameras=cameras.get_from_indices(indices),
+            cfg=self.dataset_config,
+            image_paths=image_paths,
+            masks_paths=None,
             other_data_closure=other_data_closure,
             source_indices=indices,
         )

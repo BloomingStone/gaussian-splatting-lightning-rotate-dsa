@@ -29,9 +29,6 @@ class DeformableRendererOptimizationConfig:
     eps: float = 1e-8
     warm_up: int = -1
     enable_ast: bool = True
-    log_gradients: bool = True
-    grad_log_interval: int = 100
-    density_ramp_steps: int = 2000
 
 
 @dataclass

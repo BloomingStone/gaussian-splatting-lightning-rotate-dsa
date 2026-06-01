@@ -1,11 +1,14 @@
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 import tifffile as tiff
 import torch
 
 from internal.dataparsers.xray_dataparser.cameras_builder import RotateXRayCamerasBuilder
 from internal.dataparsers.xray_dataparser.datasets import (
+    FrangiMaskImagesDatasetBuilder,
+    FrangiMaskImagesDatasetConfig,
     ImagesDatasetBuilder,
     ImagesDatasetConfig,
     PixelPosition,
@@ -103,3 +106,64 @@ def test_images_dataset_builder_reads_real_fixture_data(test_xray_data_root: Pat
         dataset.cameras,
         output_root / "images_dataset_cameras.png",
     )
+
+
+def test_frangi_mask_images_dataset_builder_generates_tubular_mask(tmp_path: Path, test_xray_data_root: Path, output_root: Path):
+    meta = load_test_meta(test_xray_data_root)
+    cameras = RotateXRayCamerasBuilder().build_cameras(meta)
+    indices = [0]
+
+    image_dir = tmp_path / "rotate_dsa"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    image = np.full((96, 96), 255, dtype=np.uint8)
+    image[:, 45:50] = 0
+    Image.fromarray(image, mode="L").save(image_dir / "000.png")
+
+    builder = FrangiMaskImagesDatasetBuilder(
+        image_dir_name="rotate_dsa",
+        image_suffix="*.png",
+        dataset_config=FrangiMaskImagesDatasetConfig(
+            cache_image=False,
+            image_uint8=False,
+            frangi_threshold=0.03,
+        ),
+    )
+    dataset = builder.build_dataset(tmp_path, cameras, meta, indices, "train")
+
+    item = dataset[0]
+    assert item.image.mask is not None
+    assert item.image.mask.shape == item.image.gt_image.shape
+    assert item.image.mask.any()
+    
+def test_frangi_mask_images_dataset_builder_reads_real_fixture_data(test_xray_data_no_flow_root: Path, output_root: Path):
+    from matplotlib import pyplot as plt
+    meta = load_test_meta(test_xray_data_no_flow_root)
+    cameras = RotateXRayCamerasBuilder().build_cameras(meta)
+    indices = list(range(10))
+
+    builder = FrangiMaskImagesDatasetBuilder(
+        image_dir_name="rotate_dsa",
+        image_suffix="*.png",
+        dataset_config=FrangiMaskImagesDatasetConfig(
+            cache_image=False,
+            image_uint8=False,
+            frangi_threshold=0.03,
+        ),
+    )
+    dataset = builder.build_dataset(test_xray_data_no_flow_root, cameras, meta, indices, "train")
+
+    item = dataset[0]
+    assert item.image.mask is not None
+    assert item.image.mask.shape == item.image.gt_image.shape
+    assert item.image.mask.any()
+    
+    output_dir = output_root / "frangi_masks"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for index, item in enumerate(iter(dataset)):
+        _, gt_image, mask = item.image
+        gt_image_np = gt_image.cpu().numpy().transpose(1, 2, 0)
+        assert mask is not None
+        mask_np = mask.cpu().numpy().transpose(1, 2, 0)
+        combined = np.concatenate([gt_image_np, mask_np], axis=1)
+        plt.imsave(output_dir / f"item_{index:03d}.png", combined)
+        

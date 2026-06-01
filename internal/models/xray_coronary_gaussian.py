@@ -51,9 +51,6 @@ class OptimizationConfig:
 
     rotations_lr: float = 0.001
 
-    log_gradients: bool = False
-    grad_log_interval: int = 100
-
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     
     def get_lr(self, key: str) -> float:
