@@ -1,0 +1,76 @@
+max_steps: 10000
+
+trainer:
+  check_val_every_n_epoch: 10
+  precision: 16-mixed
+  callbacks:
+    - class_path: internal.callbacks.scene_saver.SceneSaver
+      init_args:
+        save_iterations: [500, 10000]
+        saver:
+          class_path: internal.savers.x_ray_saver.XRaySaver
+          init_args:
+            save_ckpt: true
+            save_vtp: true
+            save_nii: true
+            save_phase: 0.
+    - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
+    - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
+    - class_path: internal.callbacks.save_image.SaveImage
+      init_args:
+        save_val_output: true
+        max_save_val_output: 10
+        max_image_saving_threads: 16
+    - class_path: internal.callbacks.callbacks.ProgressBar
+
+
+data:
+  parser: 
+    class_path: internal.dataparsers.xray_dataparser.parser.XRayDataParserBuilder
+    init_args:
+      meta_loader:
+        class_path: internal.dataparsers.xray_dataparser.meta.XRayMetaLoader
+      cloud_parser:
+        class_path: internal.dataparsers.xray_dataparser.cloud_parsers.RandomCloudParser
+        init_args:
+          num_points: 100_000
+      spliter:
+        class_path: internal.dataparsers.xray_dataparser.splitters.RenderNewViewsSpliter
+        init_args:
+          train_ratio: 0.8
+      cameras_builder:
+        class_path: internal.dataparsers.xray_dataparser.cameras_builder.RotateXRayCamerasBuilder
+      dataset_builder:
+        class_path: internal.dataparsers.xray_dataparser.datasets.FrangiMaskImagesDatasetBuilder
+        init_args:
+          dataset_config:
+            image_uint8: false
+model:
+  renderer:
+    class_path: internal.renderers.deformabel_xray_renderer.CoronaryDeformableXrayRenderer
+    init_args:
+      optimization_config:
+        enable_ast: true
+      deform_model_config:
+        class_path: internal.deform_models.HashGridDeformConfig
+        init_args:
+          x_multires: 13
+          log2_hashmap_size: 19
+          max_resolution: 2048
+  metric:
+    class_path: internal.metrics.RotateXrayMetricsWeightPatch
+    init_args:
+      fused_ssim: true
+      w_gray_loss: 1.0
+      w_ssim_loss: 1.0
+  gaussian:
+    class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
+    init_args:
+      optimization:
+        means_lr_init: 1e-4
+  density:
+    class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
+    init_args:
+      densification_interval: 300
+      densify_grad_percentile: 0.95
+      cull_density_threshold: 1e-4

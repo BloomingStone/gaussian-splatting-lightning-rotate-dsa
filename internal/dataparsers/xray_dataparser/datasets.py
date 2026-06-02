@@ -1,4 +1,4 @@
-from typing import Callable, cast, NamedTuple
+from typing import Callable, NamedTuple, Literal
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -8,7 +8,7 @@ import numpy as np
 import tifffile as tiff
 
 from ...cameras import Cameras
-from ...utils.frangi import frangi_mask
+from ...utils.frangi import frangi_mask, frangi_vesselness
 from ..dataparser import GSDataset, DatasetBuilder, ItemT, ImageItemT, Stage
 from .meta import XRayMeta
 
@@ -28,8 +28,6 @@ ROI = NamedTuple("ROI", [
 @dataclass
 class ImagesDatasetConfig:
     # camera cached on CPU by default; do not move cameras to CUDA in dataset
-    # if cache_image is True, cache images/masks as cpu tensors in dataset to avoid IO
-    cache_image: bool = True
     image_uint8: bool = False
 
 
@@ -39,6 +37,7 @@ class FrangiMaskImagesDatasetConfig(ImagesDatasetConfig):
     frangi_beta: float = 0.5
     frangi_gamma: float = 15.0
     frangi_black_ridges: bool = True
+    frangi_fusion: Literal["max", "soft"] = "soft"
     frangi_threshold: float = 0.2
     frangi_dilation_radius: int = 3
     frangi_closing_radius: int = 3
@@ -98,9 +97,6 @@ class ImagesDataset(GSDataset):
     other_data_closure: Callable[[int], dict[str, torch.Tensor]] | None
     source_indices: list[int]
 
-    cached_images: torch.Tensor | None
-    cached_masks: torch.Tensor | None
-
     def __init__(
         self,
         cameras: Cameras,
@@ -120,27 +116,6 @@ class ImagesDataset(GSDataset):
         # keep cameras on CPU in dataset worker processes to avoid CUDA init
         self.cameras = self.cameras.to(torch.device("cpu"))
 
-        self.cached_images = None
-        self.cached_masks = None
-
-        def _try_cache_images():
-            if not self.cfg.cache_image:
-                return
-
-            L = len(self)
-            self.cached_images = torch.stack([self.get_image(i) for i in range(L)])
-
-            if self.masks_paths is None:
-                return
-
-            masks = [self.get_mask(i) for i in range(L)]
-            is_masks_valid = [mask is not None for mask in masks]
-            assert all(is_masks_valid), "Some masks are invalid, cannot cache masks"
-
-            self.cached_masks = torch.stack(cast(list[torch.Tensor], masks))
-
-        _try_cache_images()
-
     def __len__(self):
         return len(self.image_paths)
 
@@ -150,9 +125,6 @@ class ImagesDataset(GSDataset):
 
     def get_image(self, index: int) -> torch.Tensor:
         """ Return image tensor in uint8 format, shape (3, H, W) """
-        if self.cached_images is not None:
-            return self.cached_images[index]
-
         image = Image.open(self.image_paths[index])
         image = np.array(image, dtype=np.uint8)
         image = torch.from_numpy(image)
@@ -176,9 +148,6 @@ class ImagesDataset(GSDataset):
 
     def get_mask(self, index: int) -> torch.Tensor | None:
         """ Return mask tensor in bool format, (3, H, W) """
-        if self.cached_masks is not None:
-            return self.cached_masks[index]
-
         if self.masks_paths is None:
             return None
 
@@ -286,13 +255,35 @@ class FrangiMaskImagesDataset(ImagesDataset):
             source_indices=source_indices,
         )
 
-        if self.cfg.cache_image:
-            masks = []
-            for i in range(len(self)):
-                mask = self.get_mask(i)
-                if mask is None:
-                    raise ValueError(f"Frangi mask is None for index {i}, cannot cache masks")
-                masks.append(mask)
+    @staticmethod
+    def _normalize_01(t: torch.Tensor) -> torch.Tensor:
+        t = t.float()
+        lo, hi = t.amin(), t.amax()
+        if hi > lo:
+            return (t - lo) / (hi - lo)
+        return torch.zeros_like(t)
+
+    def _compute_weight_map(self, gray_image: torch.Tensor) -> torch.Tensor:
+        """Return raw Frangi vesselness (H, W) normalised to [0, 1]."""
+        resp = frangi_vesselness(
+            image=gray_image,
+            sigmas=self.cfg.frangi_sigmas,
+            beta=self.cfg.frangi_beta,
+            gamma=self.cfg.frangi_gamma,
+            black_ridges=self.cfg.frangi_black_ridges,
+            fusion=self.cfg.frangi_fusion,
+            eps=self.cfg.frangi_eps,
+        )  # (1, H, W)
+        return self._normalize_01(resp)[0]  # (H, W)
+
+    def get_extra_data(self, index: int) -> dict[str, torch.Tensor] | None:
+        extra = super().get_extra_data(index) or {}
+        image = self._to_gray(self.get_image(index))
+        if image.max() > 1.0:
+            image = image / 255.0
+        extra["weight_map"] = self._compute_weight_map(image)
+        extra["weight_frangi"] = extra["weight_map"]  # alias for convenience
+        return extra
 
     @staticmethod
     def _to_gray(image: torch.Tensor) -> torch.Tensor:
@@ -306,9 +297,6 @@ class FrangiMaskImagesDataset(ImagesDataset):
         return image.mean(dim=0, keepdim=True)
 
     def get_mask(self, index: int) -> torch.Tensor | None:
-        if self.cached_masks is not None:
-            return self.cached_masks[index]
-
         image = self._to_gray(self.get_image(index))
         if image.max() > 1.0:
             image = image / 255.0
@@ -319,6 +307,7 @@ class FrangiMaskImagesDataset(ImagesDataset):
             beta=self.cfg.frangi_beta,
             gamma=self.cfg.frangi_gamma,
             black_ridges=self.cfg.frangi_black_ridges,
+            fusion=self.cfg.frangi_fusion,
             threshold=self.cfg.frangi_threshold,
             dilation_radius=self.cfg.frangi_dilation_radius,
             closing_radius=self.cfg.frangi_closing_radius,

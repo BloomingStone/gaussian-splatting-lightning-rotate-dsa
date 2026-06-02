@@ -123,7 +123,6 @@ def test_frangi_mask_images_dataset_builder_generates_tubular_mask(tmp_path: Pat
         image_dir_name="rotate_dsa",
         image_suffix="*.png",
         dataset_config=FrangiMaskImagesDatasetConfig(
-            cache_image=False,
             image_uint8=False,
             frangi_threshold=0.03,
         ),
@@ -139,13 +138,12 @@ def test_frangi_mask_images_dataset_builder_reads_real_fixture_data(test_xray_da
     from matplotlib import pyplot as plt
     meta = load_test_meta(test_xray_data_no_flow_root)
     cameras = RotateXRayCamerasBuilder().build_cameras(meta)
-    indices = list(range(10))
+    indices = list(range(0, len(cameras), 20))
 
     builder = FrangiMaskImagesDatasetBuilder(
         image_dir_name="rotate_dsa",
         image_suffix="*.png",
         dataset_config=FrangiMaskImagesDatasetConfig(
-            cache_image=False,
             image_uint8=False,
             frangi_threshold=0.03,
         ),
@@ -160,10 +158,21 @@ def test_frangi_mask_images_dataset_builder_reads_real_fixture_data(test_xray_da
     output_dir = output_root / "frangi_masks"
     output_dir.mkdir(parents=True, exist_ok=True)
     for index, item in enumerate(iter(dataset)):
-        _, gt_image, mask = item.image
-        gt_image_np = gt_image.cpu().numpy().transpose(1, 2, 0)
-        assert mask is not None
-        mask_np = mask.cpu().numpy().transpose(1, 2, 0)
-        combined = np.concatenate([gt_image_np, mask_np], axis=1)
-        plt.imsave(output_dir / f"item_{index:03d}.png", combined)
+            _, gt_image, mask = item.image
+            gt_np = gt_image[0].cpu().numpy()  # (H, W)
+            extra = item.extra_data
+            fig, axes = plt.subplots(1, 3, figsize=(16, 4))
+            axes[0].imshow(gt_np, cmap="gray")
+            axes[0].set_title("GT")
+            assert extra is not None and "weight_map" in extra
+            axes[1].imshow(extra["weight_map"], cmap="hot")
+            axes[1].set_title("Combined")
+            assert mask is not None
+            axes[2].imshow(mask[0].cpu().numpy(), cmap="gray")
+            axes[2].set_title("Mask")
+            for ax in axes:
+                ax.axis("off")
+            fig.tight_layout()
+            fig.savefig(output_dir / f"{index:03d}.png", bbox_inches="tight")
+            plt.close(fig)
         

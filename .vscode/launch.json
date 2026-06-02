@@ -65,6 +65,24 @@
             }
         },
         {
+            "name": "rotate x-ray train [patch metric]",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "fit",
+                "--config", "configs/rotate_xray_3dgr/patch_metric.yaml",
+                "--data.path", "data/Diseased_17",
+                "-n", "rotate-xcat-deformable",
+                "-v", "debug",
+                "--overwrite_output"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "${config:gs.debug.cudaVisibleDevices}"
+            }
+        },
+        {
             "name": "4D pig data recon[original deform]",
             "type": "debugpy",
             "request": "launch",

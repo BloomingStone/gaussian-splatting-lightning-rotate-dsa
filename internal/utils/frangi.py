@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, Literal
 
 import torch
 import torch.nn.functional as F
@@ -37,6 +37,7 @@ def frangi_vesselness(
     beta: float = 0.5,
     gamma: float = 15.0,
     black_ridges: bool = False,
+    fusion: Literal["max", "soft"] = "soft",
     eps: float = 1e-6,
 ) -> torch.Tensor:
     image_nchw = _to_nchw(image)
@@ -68,7 +69,7 @@ def frangi_vesselness(
     beta2 = max(beta * beta, eps)
     gamma2 = max(gamma * gamma, eps)
 
-    vesselness_max = torch.zeros_like(image_nchw)
+    responses: list[torch.Tensor] = []
     for dxx_kernel, dyy_kernel, dxy_kernel in kernels:
         dxx = _conv2d_depthwise(image_nchw, dxx_kernel)
         dyy = _conv2d_depthwise(image_nchw, dyy_kernel)
@@ -92,9 +93,14 @@ def frangi_vesselness(
         else:
             vesselness = torch.where(lambda2_sorted > 0, torch.zeros_like(vesselness), vesselness)
 
-        vesselness_max = torch.maximum(vesselness_max, vesselness)
+        responses.append(vesselness)
 
-    return _from_nchw(vesselness_max, image)
+    if fusion == "soft":
+        combined = torch.stack(responses, dim=0).mean(dim=0)
+    else:
+        combined, _ = torch.stack(responses, dim=0).max(dim=0)
+
+    return _from_nchw(combined, image)
 
 
 def frangi_mask(
@@ -103,6 +109,7 @@ def frangi_mask(
     beta: float = 0.5,
     gamma: float = 15.0,
     black_ridges: bool = False,
+    fusion: Literal["max", "soft"] = "soft",
     threshold: float = 0.2,
     dilation_radius: int = 0,
     closing_radius: int = 0,
@@ -114,6 +121,7 @@ def frangi_mask(
         beta=beta,
         gamma=gamma,
         black_ridges=black_ridges,
+        fusion=fusion,
         eps=eps,
     )
 
