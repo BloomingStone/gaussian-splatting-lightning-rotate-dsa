@@ -15,8 +15,8 @@ import mediapy
 from tqdm import tqdm
 from internal.cameras import Cameras
 from internal.renderers.vanilla_renderer import VanillaRenderer
-from internal.utils.guassian_utils.gaussian_model_loader import GaussianModelLoader
-from internal.utils.guassian_utils.gaussian_model_editor import MultipleGaussianModelEditor
+from internal.utils.gaussian_utils.gaussian_model_loader import GaussianModelLoader
+from internal.utils.gaussian_utils.gaussian_model_editor import MultipleGaussianModelEditor
 from internal.web_viewer.viewer_renderer import ViewerRenderer
 
 

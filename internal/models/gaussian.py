@@ -10,7 +10,7 @@ from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
 from ..instantiate_config import Instantiable
-from ..utils.guassian_utils.gaussian_containers import FreezableParameterDict
+from ..utils.gaussian_utils.gaussian_containers import FreezableParameterDict
 
 
 class GaussianModel(nn.Module, ABC):

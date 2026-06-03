@@ -6,7 +6,7 @@ from pytorch_lightning import LightningModule
 
 from internal.dataparsers.dataparser import BatchT
 from .metric import Metric, MetricImpl, CommonImageMetricImpl
-from ..renderers.deformabel_xray_renderer_coronary_props import XrayRendererOuputs
+from ..renderers.deformabel_xray_renderer import XrayRendererOuputs
 
 
 @dataclass
@@ -39,12 +39,18 @@ class RotateXrayMetricsWithMasksImpl(CommonImageMetricImpl):
         batch: BatchT,
         outputs: XrayRendererOuputs,
     ) -> tuple[dict[str, torch.Tensor], dict[str, bool]]:
-        _, image_info, _ = batch
+        _, image_info, extra_data = batch
         _, gt_image, mask = image_info
 
         gt_image = self._ensure_gray_nchw(gt_image)
         pred_gray = self._ensure_gray_nchw(outputs.gray_image)
-        mask_nchw = self._mask_to_nchw(mask, pred_gray)
+
+        # prefer frangi_soft_mask from extra_data; fall back to hard mask
+        if extra_data is not None and "frangi_soft_mask" in extra_data:
+            fsm = extra_data["frangi_soft_mask"]
+            mask_nchw = self._mask_to_nchw(fsm.unsqueeze(0) if fsm.dim() == 2 else fsm, pred_gray)
+        else:
+            mask_nchw = self._mask_to_nchw(mask, pred_gray)
 
         mask_sum = mask_nchw.sum().clamp_min(1.0)
         gray_loss = torch.abs(pred_gray - gt_image) * mask_nchw
@@ -106,9 +112,14 @@ class RotateXrayMetricsWithMasksImpl(CommonImageMetricImpl):
         prog_bar["loss"] = True
         
 
-        _, image_info, _ = batch
+        _, image_info, extra_data = batch
         _, gt_image, _ = image_info
         gt_image = self._ensure_gray_nchw(gt_image)
 
         self.add_image_validation_metrics(metrics, prog_bar, outputs.gray_image, gt_image)
+
+        weight = extra_data.get("soft_mask_weight") if extra_data is not None else None
+        if weight is not None:
+            self.add_weighted_validation_metrics(metrics, prog_bar, outputs.gray_image, gt_image, weight)
+
         return metrics, prog_bar

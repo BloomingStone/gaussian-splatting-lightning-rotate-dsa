@@ -210,7 +210,7 @@ class CLI(LightningCLI):
 
 
 def _search_checkpoint(path: Path) -> Path:
-    from internal.utils.guassian_utils.gaussian_model_loader import GaussianModelLoader
+    from internal.utils.gaussian_utils.gaussian_model_loader import GaussianModelLoader
     
     ckpt_path = GaussianModelLoader.search_load_file(path)
     assert ckpt_path.suffix == ".ckpt", "not a checkpoint can be found in {}".format(path)

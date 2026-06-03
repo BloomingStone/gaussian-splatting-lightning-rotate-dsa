@@ -1,4 +1,4 @@
-from typing import Literal, Any
+from typing import Literal, Any, cast
 from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
@@ -55,6 +55,13 @@ class FrameInfo:
     alpha_degree: Degree    # primary rotation angle, rotation around SI axis
     beta_degree: Degree     # secondary rotation angle, rotation around RL axis
 
+@dataclass
+class Label3DInfo:
+    data: np.ndarray
+    affine: np.ndarray
+    aabb: np.ndarray    # axis-aligned bounding box of the label, boolean mask of shape (D, H, W)
+    filename: str
+
  
 @dataclass
 class XRayMeta(Meta):
@@ -67,6 +74,10 @@ class XRayMeta(Meta):
     c_arm_geometry: CArmGeometry
     rotated_parameters: RotatedParameters
     frames: list[FrameInfo]
+    postprocess_meta: dict[str, Any]|None = None  # optional meta for postprocessing, e.g. for image normalization or noise simulation
+    
+    # --- 3D data properties for metric computation ---
+    label_3d_info: Label3DInfo|None = None
     
     @property
     def centering_affine(self) -> np.ndarray:
@@ -106,6 +117,7 @@ class XRayMeta(Meta):
 @dataclass
 class XRayMetaLoader(MetaLoader[XRayMeta]):
     meta_json_name: str = "rotate_dsa.json"
+    label_3d_filename: str = "coronary_label.nii.gz"
     
     def load(self, data_dir: Path) -> XRayMeta:
         """Load XRayMeta from the given path."""
@@ -136,6 +148,20 @@ class XRayMetaLoader(MetaLoader[XRayMeta]):
                 key: np.array(value, dtype=np.float64)
                 for key, value in centering_affine_dict.items()
             }
+        
+        if data_dir / self.label_3d_filename:
+            import nibabel as nib
+            label_nii_path = data_dir / self.label_3d_filename
+            nii_img = cast(nib.Nifti1Image, nib.load(label_nii_path))
+            assert nii_img.affine is not None, "NIfTI image must have affine"
+            label_3d_info = Label3DInfo(
+                data=nii_img.get_fdata().astype(np.uint8),
+                affine=nii_img.affine,
+                aabb=_compute_aabb(nii_img.get_fdata()),
+                filename=self.label_3d_filename,
+            )
+        else:
+            label_3d_info = None
 
         return XRayMeta(
             raw_data=meta_dict,
@@ -146,4 +172,19 @@ class XRayMetaLoader(MetaLoader[XRayMeta]):
             c_arm_geometry=CArmGeometry(**meta_dict["c_arm_geometry"]),
             rotated_parameters=RotatedParameters(**rotate_parameters),
             frames=frames,
+            postprocess_meta=meta_dict.get("postprocess_meta"),
+            label_3d_info=label_3d_info,
         )
+
+
+def _compute_aabb(label: np.ndarray) -> np.ndarray:
+    """Return boolean mask of the axis-aligned bounding box of *label*."""
+    mask = label > 0
+    if not mask.any():
+        return np.zeros_like(mask, dtype=bool)
+    coords = np.argwhere(mask)
+    mn = coords.min(axis=0)
+    mx = coords.max(axis=0)
+    aabb = np.zeros_like(mask, dtype=bool)
+    aabb[mn[0]:mx[0]+1, mn[1]:mx[1]+1, mn[2]:mx[2]+1] = True
+    return aabb

@@ -338,7 +338,7 @@ class GSplatV1ExampleCheckpointLoader:
             means_key = "means3d"
 
         from internal.models.vanilla_gaussian import VanillaGaussian
-        from internal.utils.guassian_utils.gaussian_utils import SHS_REST_DIM_TO_DEGREE
+        from internal.utils.gaussian_utils.gaussian_utils import SHS_REST_DIM_TO_DEGREE
         model = VanillaGaussian(sh_degree=SHS_REST_DIM_TO_DEGREE[gaussian_state_dict["shN"].shape[1]]).instantiate()
         model.setup_from_number(gaussian_state_dict[means_key].shape[0])
 

@@ -6,7 +6,7 @@ from pytorch_lightning import LightningModule
 
 from internal.dataparsers.dataparser import BatchT
 from .metric import Metric, MetricImpl, CommonImageMetricImpl
-from ..renderers.deformabel_xray_renderer_coronary_props import XrayRendererOuputs
+from ..renderers.deformabel_xray_renderer import XrayRendererOuputs
 
 
 @dataclass
@@ -169,9 +169,20 @@ class RotateXrayMetricsWeightPatchImpl(CommonImageMetricImpl):
         del pl_module, gaussian_model
         metrics, prog_bar = self._weight_patch_metrics(batch, outputs)
 
-        _, image_info, _ = batch
+        _, image_info, extra_data = batch
         _, gt_image, _ = image_info
         gt_image = self._ensure_gray_nchw(gt_image)
 
         self.add_image_validation_metrics(metrics, prog_bar, outputs.gray_image, gt_image)
+
+        weight = extra_data.get("soft_mask_weight") if extra_data is not None else None
+        if weight is not None:
+            self.add_weighted_validation_metrics(metrics, prog_bar, outputs.gray_image, gt_image, weight)
+        
+        metrics.update(self.metric3d)
+
         return metrics, prog_bar
+    
+    def on_validation_epoch_start(self, pl_module):
+        self.metric3d = self._compute_3d_metrics(pl_module=pl_module)
+        return super().on_validation_epoch_start(pl_module)

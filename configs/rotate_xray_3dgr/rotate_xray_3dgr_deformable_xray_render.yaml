@@ -6,7 +6,7 @@ trainer:
   callbacks:
     - class_path: internal.callbacks.scene_saver.SceneSaver
       init_args:
-        save_iterations: [500, 10000]
+        save_iterations: [2000, 5000, 10000]
         saver:
           class_path: internal.savers.x_ray_saver.XRaySaver
           init_args:
@@ -35,7 +35,7 @@ data:
         init_args:
           num_points: 100_000
       spliter:
-        class_path: internal.dataparsers.xray_dataparser.splitters.RenderNewViewsSpliter
+        class_path: internal.dataparsers.xray_dataparser.splitters.PhaseStratifiedSpliter
         init_args:
           train_ratio: 0.8
       cameras_builder:
@@ -65,11 +65,9 @@ model:
       w_ssim_loss: 1.0
   gaussian:
     class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
-    init_args:
-      optimization:
-        means_lr_init: 1e-4
   density:
     class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
     init_args:
-      densify_grad_percentile: 0.95
-      cull_density_threshold: 1e-3
+      densification_interval: 300
+      densify_grad_percentile: 0.98
+      cull_density_threshold: 5e-5

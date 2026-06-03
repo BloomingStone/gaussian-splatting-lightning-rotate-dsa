@@ -29,3 +29,7 @@ scripts/metrics_3D/output
 *.log
 
 tests/output/
+
+temp/
+
+**/.ipynb_checkpoints

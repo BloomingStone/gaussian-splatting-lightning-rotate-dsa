@@ -7,8 +7,8 @@ import torch
 
 from internal.dataparsers.xray_dataparser.cameras_builder import RotateXRayCamerasBuilder
 from internal.dataparsers.xray_dataparser.datasets import (
-    FrangiMaskImagesDatasetBuilder,
-    FrangiMaskImagesDatasetConfig,
+    FrangiImagesDatasetBuilder,
+    FrangiImagesDatasetConfig,
     ImagesDatasetBuilder,
     ImagesDatasetConfig,
     PixelPosition,
@@ -102,6 +102,38 @@ def test_images_dataset_builder_reads_real_fixture_data(test_xray_data_root: Pat
     assert item.extra_data["depth"].ndim == 2
     assert torch.is_floating_point(item.image.gt_image)
 
+    # soft_mask_weight exists and has correct shape
+    assert "soft_mask_weight" in item.extra_data
+    sw = item.extra_data["soft_mask_weight"]
+    assert sw.shape == item.image.gt_image.shape[1:]
+    assert sw.is_floating_point()
+    assert sw.min() >= 0.0 and sw.max() <= 1.0
+    # inside mask → weight = 1
+    assert sw[item.image.mask[0]].mean() >= 0.99
+
+    # Visualise: GT, mask, soft weight
+    output_dir = output_root / "soft_mask_weight"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _, gt_image, mask = item.image
+    gt_np = gt_image[0].cpu().numpy()
+    assert mask is not None
+    mask_np = mask[0].cpu().numpy().astype(float)
+    sw_np = sw.cpu().numpy()
+
+    from matplotlib import pyplot as plt
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    axes[0].imshow(gt_np, cmap="gray")
+    axes[0].set_title("GT image")
+    axes[1].imshow(mask_np, cmap="gray")
+    axes[1].set_title("GT mask (binary)")
+    axes[2].imshow(sw_np, cmap="hot", vmin=0.0, vmax=1.0)
+    axes[2].set_title("Soft mask weight")
+    for ax in axes:
+        ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(output_dir / "soft_mask_weight.png", bbox_inches="tight")
+    plt.close(fig)
+
     save_cameras(
         dataset.cameras,
         output_root / "images_dataset_cameras.png",
@@ -119,10 +151,10 @@ def test_frangi_mask_images_dataset_builder_generates_tubular_mask(tmp_path: Pat
     image[:, 45:50] = 0
     Image.fromarray(image, mode="L").save(image_dir / "000.png")
 
-    builder = FrangiMaskImagesDatasetBuilder(
+    builder = FrangiImagesDatasetBuilder(
         image_dir_name="rotate_dsa",
         image_suffix="*.png",
-        dataset_config=FrangiMaskImagesDatasetConfig(
+        dataset_config=FrangiImagesDatasetConfig(
             image_uint8=False,
             frangi_threshold=0.03,
         ),
@@ -130,9 +162,11 @@ def test_frangi_mask_images_dataset_builder_generates_tubular_mask(tmp_path: Pat
     dataset = builder.build_dataset(tmp_path, cameras, meta, indices, "train")
 
     item = dataset[0]
-    assert item.image.mask is not None
-    assert item.image.mask.shape == item.image.gt_image.shape
-    assert item.image.mask.any()
+    assert item.extra_data is not None
+    fmask = item.extra_data["frangi_mask"]
+    assert fmask is not None
+    assert fmask.shape == item.image.gt_image.shape
+    assert fmask.any()
     
 def test_frangi_mask_images_dataset_builder_reads_real_fixture_data(test_xray_data_no_flow_root: Path, output_root: Path):
     from matplotlib import pyplot as plt
@@ -140,10 +174,10 @@ def test_frangi_mask_images_dataset_builder_reads_real_fixture_data(test_xray_da
     cameras = RotateXRayCamerasBuilder().build_cameras(meta)
     indices = list(range(0, len(cameras), 20))
 
-    builder = FrangiMaskImagesDatasetBuilder(
+    builder = FrangiImagesDatasetBuilder(
         image_dir_name="rotate_dsa",
         image_suffix="*.png",
-        dataset_config=FrangiMaskImagesDatasetConfig(
+        dataset_config=FrangiImagesDatasetConfig(
             image_uint8=False,
             frangi_threshold=0.03,
         ),
@@ -151,14 +185,16 @@ def test_frangi_mask_images_dataset_builder_reads_real_fixture_data(test_xray_da
     dataset = builder.build_dataset(test_xray_data_no_flow_root, cameras, meta, indices, "train")
 
     item = dataset[0]
-    assert item.image.mask is not None
-    assert item.image.mask.shape == item.image.gt_image.shape
-    assert item.image.mask.any()
+    assert item.extra_data is not None
+    fmask = item.extra_data["frangi_mask"]
+    assert fmask is not None
+    assert fmask.shape == item.image.gt_image.shape
+    assert fmask.any()
     
     output_dir = output_root / "frangi_masks"
     output_dir.mkdir(parents=True, exist_ok=True)
     for index, item in enumerate(iter(dataset)):
-            _, gt_image, mask = item.image
+            _, gt_image, _ = item.image
             gt_np = gt_image[0].cpu().numpy()  # (H, W)
             extra = item.extra_data
             fig, axes = plt.subplots(1, 3, figsize=(16, 4))
@@ -166,10 +202,11 @@ def test_frangi_mask_images_dataset_builder_reads_real_fixture_data(test_xray_da
             axes[0].set_title("GT")
             assert extra is not None and "weight_map" in extra
             axes[1].imshow(extra["weight_map"], cmap="hot")
-            axes[1].set_title("Combined")
-            assert mask is not None
-            axes[2].imshow(mask[0].cpu().numpy(), cmap="gray")
-            axes[2].set_title("Mask")
+            axes[1].set_title("weight_map")
+            fmask = extra["frangi_mask"]
+            assert fmask is not None
+            axes[2].imshow(fmask[0].cpu().numpy(), cmap="gray")
+            axes[2].set_title("Frangi mask")
             for ax in axes:
                 ax.axis("off")
             fig.tight_layout()

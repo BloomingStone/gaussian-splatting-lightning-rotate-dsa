@@ -102,7 +102,7 @@ class GaussianSplatting(LightningModule):
     def _initialize_gaussians_from_trained_model(self):
         # assert self.hparams["gaussian"].extra_feature_dims == 0
 
-        from .utils.guassian_utils.gaussian_model_loader import GaussianModelLoader
+        from .utils.gaussian_utils.gaussian_model_loader import GaussianModelLoader
         load_from = GaussianModelLoader.search_load_file(self.hparams["initialize_from"])
 
         if load_from.suffix == ".vtp":
@@ -358,6 +358,10 @@ class GaussianSplatting(LightningModule):
 
         # write validation image
         return outputs
+    
+    def on_validation_epoch_start(self) -> None:
+        self.metric.on_validation_epoch_start(self)
+        return super().on_validation_epoch_start()
 
     def on_validation_epoch_end(self, name="val") -> None:
         super().on_validation_epoch_end()
@@ -395,6 +399,7 @@ class GaussianSplatting(LightningModule):
 
     def on_test_epoch_start(self) -> None:
         super().on_test_epoch_start()
+        self.metric.on_validation_epoch_start(self)
         return None
 
     def on_test_epoch_end(self) -> None:

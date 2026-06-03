@@ -81,3 +81,80 @@ class DeformableXrayRendererWithFlow(CoronaryDeformableXrayRenderer):
             in_warm_up=False
         )
         return res
+
+    
+    def training_forward(
+        self, 
+        step: int, 
+        module: LightningModule, 
+        viewpoint_camera: Camera, 
+        pc,
+        bg_color: torch.Tensor,
+        render_types: list|None = None,
+        **kwargs
+    )-> XrayRendererOuputs:
+        pc = cast(XrayCoronaryGaussianModel, pc)
+        # clone properties
+        gs = GSParam(
+            xyz=pc.get_means(),
+            rotation=pc.get_rotations(),
+            scaling=pc.get_scales(),
+            density=pc.get_density(),
+        )
+
+        N = gs.xyz.shape[0]
+        time = viewpoint_camera.time.unsqueeze(0).expand(N, -1)
+        phase = viewpoint_camera.phase.unsqueeze(0).expand(N, -1)
+        
+        if self.optimization_config.enable_ast:     # add AST noise
+            time_interval = 1 / ((step % self.train_set_length) + 1)
+            ast_noise = torch.randn(1, 1, device=gs.xyz.device).expand(N, -1) * time_interval * self.smooth_term(step)
+            time = time + ast_noise
+            phase = phase + ast_noise
+        
+        deforms = self.deform_model(gs.xyz.detach(), time.detach(), phase.detach())
+        
+        # apply density amplitude ramp for models that output d_density (with_flow)
+        ramp_steps = getattr(self.optimization_config, "density_ramp_steps", 2000)
+        warm_up = self.optimization_config.warm_up
+        if ramp_steps > 0:
+            alpha = float(max(0.0, min(1.0, (step - warm_up) / ramp_steps)))
+        else:
+            alpha = 1.0
+        if hasattr(deforms, "d_density"):
+            try:
+                deforms.d_density = deforms.d_density * alpha
+            except Exception:
+                pass
+
+        if step > self.optimization_config.warm_up:
+            # update means3D, rotation, scales
+            gs = self.deform_model.deform(gs, deforms)
+            deforms_mean, deforms_var = pc.deforms_recorder.update(deforms)
+        else:
+            deforms_mean = pc.deforms_recorder.get_deforms_mean()
+            deforms_var = pc.deforms_recorder.get_deforms_var()
+
+        gray_image, meta_whole = self._render(viewpoint_camera, gs)
+
+        viewspace_points = meta_whole["viewspace_points"]
+        radii = meta_whole["radii"]
+        visibility_filter = radii > 0
+        
+        return XrayRendererOuputs(
+            images={
+                ImgT.GRAY: (gray_image, FloatColormapVisualizer(ColorMapName.GRAY)),
+            },
+            meta={
+                MetaT.VIEWSPACE_POINTS: viewspace_points,
+                MetaT.VISIBILITY_FILTER: visibility_filter,
+                MetaT.RADII: radii,
+                MetaT.D_MOTION_MEAN: deforms_mean,
+                MetaT.D_MOTION_VAR: deforms_var,
+                MetaT.D_MEANS3D: deforms.d_xyz,
+                MetaT.D_ROTATION: deforms.d_rotation,
+                MetaT.D_SCALES: deforms.d_scaling,
+                MetaT.TIME: viewpoint_camera.time
+            },
+            is_warm_up=viewpoint_camera.time.item() <= self.optimization_config.warm_up
+        )

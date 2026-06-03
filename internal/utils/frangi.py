@@ -104,27 +104,11 @@ def frangi_vesselness(
 
 
 def frangi_mask(
-    image: torch.Tensor,
-    sigmas: Iterable[float] = (1.0, 2.0, 3.0),
-    beta: float = 0.5,
-    gamma: float = 15.0,
-    black_ridges: bool = False,
-    fusion: Literal["max", "soft"] = "soft",
+    vesselness: torch.Tensor,
     threshold: float = 0.2,
     dilation_radius: int = 0,
     closing_radius: int = 0,
-    eps: float = 1e-6,
 ) -> torch.Tensor:
-    vesselness = frangi_vesselness(
-        image=image,
-        sigmas=sigmas,
-        beta=beta,
-        gamma=gamma,
-        black_ridges=black_ridges,
-        fusion=fusion,
-        eps=eps,
-    )
-
     vesselness = vesselness.float()
     max_vesselness = vesselness.max()
     if max_vesselness <= 0:

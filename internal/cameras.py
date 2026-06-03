@@ -25,12 +25,6 @@ class Camera:
     height: Tensor
     time: Tensor
     phase: Tensor
-    """
-    NOTE: this should be None or a zero tensor currently
-        
-    For perspective: (k1,k2,p1,p2[,k3[,k4,k5,k6[,s1,s2,s3,s4[,τx,τy]]]]) of 4, 5, 8, 12 or 14 elements
-    For fisheye: (k1, k2, k3, k4)
-    """
 
     world_to_camera: Tensor
     projection: Tensor

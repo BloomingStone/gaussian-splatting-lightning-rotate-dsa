@@ -4,7 +4,7 @@ import torch
 from lightning import LightningModule
 
 
-from .deformabel_xray_renderer import CoronaryDeformableXrayRenderer, RenderRes
+from .deformabel_xray_renderer import CoronaryDeformableXrayRenderer, XrayRendererOuputs
 from ..cameras import Camera
 from ..deform_models import Deforms, GSParam
 from ..models.xray_4d_gaussian import Xray4DGaussianModel
@@ -18,7 +18,7 @@ class Xray4DRender(CoronaryDeformableXrayRenderer):
         scaling_modifier=1.0,
         render_types: list|None = None,
         **kwargs,
-    ) -> RenderRes:
+    ) -> XrayRendererOuputs:
         pc = cast(Xray4DGaussianModel, pc)
         xyz=pc.get_means().detach()
         N = xyz.shape[0]
@@ -58,12 +58,22 @@ class Xray4DRender(CoronaryDeformableXrayRenderer):
         deforms_mean = pc.deforms_recorder.get_deforms_mean()
         deforms_var = pc.deforms_recorder.get_deforms_var()
         
-        res = RenderRes(
-            gray_image, gray_coronary,                  # rendered
-            viewspace_points, visibility_filter, radii, # grad meta
-            deforms_mean, deforms_var, deforms,         # deforms and mean & var
-            viewpoint_camera.time, mask,                 # other info     
-            in_warm_up=False
+        res = XrayRendererOuputs(
+            images={
+                XrayRendererOuputs.ImageTypes.GRAY: (gray_image, None),
+                XrayRendererOuputs.ImageTypes.CORONARY: (gray_coronary, None),
+            },
+            meta={
+                XrayRendererOuputs.MetaTypes.VIEWSPACE_POINTS: viewspace_points,
+                XrayRendererOuputs.MetaTypes.VISIBILITY_FILTER: visibility_filter,
+                XrayRendererOuputs.MetaTypes.RADII: radii,
+                XrayRendererOuputs.MetaTypes.DEFORMS_MEAN: deforms_mean,
+                XrayRendererOuputs.MetaTypes.DEFORMS_VAR: deforms_var,
+                XrayRendererOuputs.MetaTypes.DEFORMS: deforms,
+                XrayRendererOuputs.MetaTypes.TIME: viewpoint_camera.time,
+                XrayRendererOuputs.MetaTypes.MASK: mask,
+            },
+            is_warm_up=False
         )
         return res
         
@@ -77,7 +87,7 @@ class Xray4DRender(CoronaryDeformableXrayRenderer):
         bg_color: torch.Tensor,
         render_types: list|None = None,
         **kwargs
-    )-> RenderRes:
+    )-> XrayRendererOuputs:
         pc = cast(Xray4DGaussianModel, pc)
 
         xyz=pc.get_means()
@@ -114,17 +124,24 @@ class Xray4DRender(CoronaryDeformableXrayRenderer):
         viewspace_points = meta_whole["viewspace_points"]
         radii = meta_whole["radii"]
         visibility_filter = radii > 0
-
-        gray_coronary = None
         
         mask = (gs.density > torch.quantile(gs.density, 0.90)).squeeze()
         if not torch.any(mask):
             mask = torch.ones_like(mask, dtype=torch.bool)
         
-        return RenderRes(
-            gray_image, gray_coronary,                  # rendered
-            viewspace_points, visibility_filter, radii, # grad meta
-            deforms_mean, deforms_var, deforms,         # deforms and mean & var
-            viewpoint_camera.time, mask,                 # other info     
-            in_warm_up=False
+        return XrayRendererOuputs(
+            images={
+                XrayRendererOuputs.ImageTypes.GRAY: (gray_image, None),
+            },
+            meta={
+                XrayRendererOuputs.MetaTypes.VIEWSPACE_POINTS: viewspace_points,
+                XrayRendererOuputs.MetaTypes.VISIBILITY_FILTER: visibility_filter,
+                XrayRendererOuputs.MetaTypes.RADII: radii,
+                XrayRendererOuputs.MetaTypes.DEFORMS_MEAN: deforms_mean,
+                XrayRendererOuputs.MetaTypes.DEFORMS_VAR: deforms_var,
+                XrayRendererOuputs.MetaTypes.DEFORMS: deforms,
+                XrayRendererOuputs.MetaTypes.TIME: viewpoint_camera.time,
+                XrayRendererOuputs.MetaTypes.MASK: mask,
+            },
+            is_warm_up=False
         )

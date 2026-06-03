@@ -5,7 +5,7 @@ from torch import nn
 
 from .deform_model import DeformModel, DefromModelConfig, Deforms, GSParam
 from ..encodings.vector_positional_encoding import VectorPositionalEncoding
-from internal.utils.guassian_utils.gaussian_utils import GaussianTransformUtils
+from internal.utils.gaussian_utils.gaussian_utils import GaussianTransformUtils
 
 
 class SafeExponential(nn.Module):
@@ -66,12 +66,13 @@ class ControlPointDeformModel(DeformModel):
     ) -> Deforms:
         self._maybe_init_grid_bounds(xyz)
 
-        if t.ndim == 1:
-            t = t.unsqueeze(-1)
-        if t.shape[-1] != 1:
-            t = t[..., :1]
+        phase = self.get_phase(t, phase)
+        if phase.ndim == 1:
+            phase = phase.unsqueeze(-1)
+        if phase.shape[-1] != 1:
+            phase = phase[..., :1]
 
-        t_basis = self.embed_t_fn(t)
+        t_basis = self.embed_t_fn(phase)
         if t_basis.shape[0] == 1 and xyz.shape[0] != 1:
             t_basis = t_basis.expand(xyz.shape[0], -1)
         if t_basis.shape[0] != xyz.shape[0]:
@@ -205,4 +206,4 @@ class ControlPointDeformModel(DeformModel):
         scaling = source.scaling * ( 1 + deforms.d_scaling )
         rotation = GaussianTransformUtils.quat_multiply(source.rotation, deforms.d_rotation)
         
-        return GSParam(xyz=xyz, rotation=rotation, scaling=scaling)       
+        return GSParam(xyz=xyz, rotation=rotation, scaling=scaling, density=source.density)       

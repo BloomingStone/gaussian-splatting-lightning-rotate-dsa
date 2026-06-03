@@ -3,9 +3,9 @@ from .datasets import (
     ImagesDataset,
     ImagesDatasetBuilder,
     ImagesDatasetConfig,
-    FrangiMaskImagesDataset,
-    FrangiMaskImagesDatasetBuilder,
-    FrangiMaskImagesDatasetConfig,
+    FrangiImagesDataset,
+    FrangiImagesDatasetBuilder,
+    FrangiImagesDatasetConfig,
     TiffDataset,
     TiffDatasetBuilder,
     TiffDatasetConfig,
@@ -19,4 +19,3 @@ from .cloud_parsers import (
     CentralLineCloudParser,
 )
 from .splitters import ReconstructionSpliter, RenderNewViewsSpliter
-from .parser import XRayDataParser

@@ -9,137 +9,139 @@ from ..encodings.vector_positional_encoding import VectorPositionalEncoding
 
 
 class SineLayer(nn.Module):
-	def __init__(
-		self,
-		in_features: int,
-		out_features: int,
-		omega_0: float,
-		is_first: bool = False,
-	):
-		super().__init__()
-		self.omega_0 = omega_0
-		self.is_first = is_first
-		self.linear = nn.Linear(in_features, out_features)
-		self.reset_parameters()
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        omega_0: float,
+        is_first: bool = False,
+    ):
+        super().__init__()
+        self.omega_0 = omega_0
+        self.is_first = is_first
+        self.linear = nn.Linear(in_features, out_features)
+        self.reset_parameters()
 
-	def reset_parameters(self) -> None:
-		in_features = self.linear.in_features
-		if self.is_first:
-			bound = 1.0 / in_features
-		else:
-			bound = (6.0 / in_features) ** 0.5 / self.omega_0
-		with torch.no_grad():
-			self.linear.weight.uniform_(-bound, bound)
-			self.linear.bias.uniform_(-bound, bound)
+    def reset_parameters(self) -> None:
+        in_features = self.linear.in_features
+        if self.is_first:
+            bound = 1.0 / in_features
+        else:
+            bound = (6.0 / in_features) ** 0.5 / self.omega_0
+        with torch.no_grad():
+            self.linear.weight.uniform_(-bound, bound)
+            self.linear.bias.uniform_(-bound, bound)
 
-	def forward(self, x: torch.Tensor) -> torch.Tensor:
-		return torch.sin(self.omega_0 * self.linear(x))
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.sin(self.omega_0 * self.linear(x))
 
 
 class SirenBackbone(nn.Module):
-	def __init__(
-		self,
-		input_ch: int,
-		hidden_dim: int,
-		hidden_layers: int,
-		first_omega_0: float,
-		hidden_omega_0: float,
-	):
-		super().__init__()
-		if hidden_layers < 1:
-			raise ValueError(f"hidden_layers must be >= 1, got {hidden_layers}")
+    def __init__(
+        self,
+        input_ch: int,
+        hidden_dim: int,
+        hidden_layers: int,
+        first_omega_0: float,
+        hidden_omega_0: float,
+    ):
+        super().__init__()
+        if hidden_layers < 1:
+            raise ValueError(f"hidden_layers must be >= 1, got {hidden_layers}")
 
-		layers: list[nn.Module] = [
-			SineLayer(input_ch, hidden_dim, omega_0=first_omega_0, is_first=True)
-		]
-		for _ in range(hidden_layers - 1):
-			layers.append(
-				SineLayer(hidden_dim, hidden_dim, omega_0=hidden_omega_0, is_first=False)
-			)
-		self.layers = nn.Sequential(*layers)
+        layers: list[nn.Module] = [
+            SineLayer(input_ch, hidden_dim, omega_0=first_omega_0, is_first=True)
+        ]
+        for _ in range(hidden_layers - 1):
+            layers.append(
+                SineLayer(hidden_dim, hidden_dim, omega_0=hidden_omega_0, is_first=False)
+            )
+        self.layers = nn.Sequential(*layers)
 
-	def forward(self, x: torch.Tensor) -> torch.Tensor:
-		return self.layers(x)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.layers(x)
 
 
 @dataclass
 class SirenDeformConfig(DefromModelConfig):
-	hidden_dim: int = 128
-	hidden_layers: int = 4
-	first_omega_0: float = 30.0
-	hidden_omega_0: float = 30.0
+    hidden_dim: int = 128
+    hidden_layers: int = 4
+    first_omega_0: float = 30.0
+    hidden_omega_0: float = 30.0
 
-	x_multires: int = 7
-	t_multires: int = 1
+    x_multires: int = 7
+    t_multires: int = 1
 
-	def instantiate(self, *args, **kwargs) -> Any:
-		return SirenDeformModel(self)
+    def instantiate(self, *args, **kwargs) -> Any:
+        return SirenDeformModel(self)
 
 
 class SirenDeformModel(DeformModel):
-	def __init__(self, cfg: SirenDeformConfig = SirenDeformConfig()):
-		super().__init__(cfg)
-		self.cfg = cfg
+    def __init__(self, cfg: SirenDeformConfig = SirenDeformConfig()):
+        super().__init__(cfg)
+        self.cfg = cfg
 
-		self.embed_xyz_fn = VectorPositionalEncoding(
-			input_channels=3,
-			n_frequencies=self.cfg.x_multires,
-		)
-		self.embed_t_fn = VectorPositionalEncoding(
-			input_channels=1,
-			n_frequencies=self.cfg.t_multires,
-		)
+        self.embed_xyz_fn = VectorPositionalEncoding(
+            input_channels=3,
+            n_frequencies=self.cfg.x_multires,
+        )
+        self.embed_t_fn = VectorPositionalEncoding(
+            input_channels=1,
+            n_frequencies=self.cfg.t_multires,
+        )
 
-		emb_x_ch = self.embed_xyz_fn.get_output_n_channels()
-		emb_t_ch = self.embed_t_fn.get_output_n_channels()
-		self.backbone = SirenBackbone(
-			input_ch=emb_x_ch + emb_t_ch,
-			hidden_dim=self.cfg.hidden_dim,
-			hidden_layers=self.cfg.hidden_layers,
-			first_omega_0=self.cfg.first_omega_0,
-			hidden_omega_0=self.cfg.hidden_omega_0,
-		)
+        emb_x_ch = self.embed_xyz_fn.get_output_n_channels()
+        emb_t_ch = self.embed_t_fn.get_output_n_channels()
+        self.backbone = SirenBackbone(
+            input_ch=emb_x_ch + emb_t_ch,
+            hidden_dim=self.cfg.hidden_dim,
+            hidden_layers=self.cfg.hidden_layers,
+            first_omega_0=self.cfg.first_omega_0,
+            hidden_omega_0=self.cfg.hidden_omega_0,
+        )
 
-		self.xyz_warp = nn.Linear(self.cfg.hidden_dim, 3)
-		self.scaling_warp = nn.Sequential(
-			nn.Linear(self.cfg.hidden_dim, 3),
-			nn.Tanh(),
-		)
-		self.axial_angle_warp = nn.Sequential(
-			nn.Linear(self.cfg.hidden_dim, 3),
-			nn.Tanh(),
-		)
+        self.xyz_warp = nn.Linear(self.cfg.hidden_dim, 3)
+        self.scaling_warp = nn.Sequential(
+            nn.Linear(self.cfg.hidden_dim, 3),
+            nn.Tanh(),
+        )
+        self.axial_angle_warp = nn.Sequential(
+            nn.Linear(self.cfg.hidden_dim, 3),
+            nn.Tanh(),
+        )
 
-	def forward(
-		self,
-		xyz: torch.Tensor,
-		t: torch.Tensor,
-		phase: torch.Tensor|None = None,
-	) -> Deforms:
-		if t.ndim == 1:
-			t = t.unsqueeze(-1)
-		if t.shape[-1] != 1:
-			t = t[..., :1]
+    def forward(
+        self,
+        xyz: torch.Tensor,
+        t: torch.Tensor,
+        phase: torch.Tensor|None = None,
+    ) -> Deforms:
+        phase = self.get_phase(t, phase)
+     
+        if phase.ndim == 1:
+            phase = phase.unsqueeze(-1)
+        if phase.shape[-1] != 1:
+            phase = phase[..., :1]
 
-		if t.shape[0] == 1 and xyz.shape[0] != 1:
-			t = t.expand(xyz.shape[0], -1)
-		if t.shape[0] != xyz.shape[0]:
-			raise RuntimeError(
-				f"Batch mismatch between xyz and t: {xyz.shape[0]} vs {t.shape[0]}"
-			)
+        if phase.shape[0] == 1 and xyz.shape[0] != 1:
+            phase = phase.expand(xyz.shape[0], -1)
+        if phase.shape[0] != xyz.shape[0]:
+            raise RuntimeError(
+                f"Batch mismatch between xyz and t: {xyz.shape[0]} vs {phase.shape[0]}"
+            )
 
-		x_emb = self.embed_xyz_fn(xyz)
-		t_emb = self.embed_t_fn(t)
-		h = self.backbone(torch.cat([x_emb, t_emb], dim=-1))
+        x_emb = self.embed_xyz_fn(xyz)
+        t_emb = self.embed_t_fn(phase)
+        h = self.backbone(torch.cat([x_emb, t_emb], dim=-1))
 
-		d_xyz = self.xyz_warp(h)
-		d_scaling = self.scaling_warp(h)
+        d_xyz = self.xyz_warp(h)
+        d_scaling = self.scaling_warp(h)
 
-		axial_angle = self.axial_angle_warp(h).float()
-		omega = torch.sqrt(torch.sum(axial_angle**2, dim=-1, keepdim=True) + 1e-10)
-		q_w = torch.cos(omega / 2.0)
-		q_v = axial_angle / 2.0 * torch.sinc(omega / (2.0 * torch.pi))
+        axial_angle = self.axial_angle_warp(h).float()
+        omega = torch.sqrt(torch.sum(axial_angle**2, dim=-1, keepdim=True) + 1e-10)
+        q_w = torch.cos(omega / 2.0)
+        q_v = axial_angle / 2.0 * torch.sinc(omega / (2.0 * torch.pi))
 
-		d_rotation = torch.cat([q_w, q_v], dim=-1).to(xyz)
-		d_rotation = torch.nn.functional.normalize(d_rotation)
-		return Deforms(d_xyz=d_xyz, d_scaling=d_scaling, d_rotation=d_rotation)	
+        d_rotation = torch.cat([q_w, q_v], dim=-1).to(xyz)
+        d_rotation = torch.nn.functional.normalize(d_rotation)
+        return Deforms(d_xyz=d_xyz, d_scaling=d_scaling, d_rotation=d_rotation)	

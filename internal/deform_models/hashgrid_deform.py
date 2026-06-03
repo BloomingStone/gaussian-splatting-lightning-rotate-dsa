@@ -69,8 +69,6 @@ class HashGridDeformConfig(DefromModelConfig):
     base_resolution: int = 16
     max_resolution: int = 128
     
-    has_phase_input: bool = False
-    
     def instantiate(self, *args, **kwargs) -> Any:
         return HashGridDefromModel(self)
 
@@ -98,9 +96,6 @@ class HashGridDefromModel(DeformModel):
             n_frequencies=self.cfg.t_multires,
         )
         emb_t_ch = self.embed_t_fn.get_output_n_channels()
-        
-        if self.cfg.has_phase_input:
-            raise NotImplementedError("Phase input not implemented yet")    # TODO
         
         def _mlp(W: int, layers: int, input_ch: int):
             return MLP(
@@ -151,7 +146,9 @@ class HashGridDefromModel(DeformModel):
             d_scaling: [n, 3] \\in [-1, 1], the scaling change for each point, where the new scaling will be scaling * (1 + d_scaling)
             d_rotation: [n, 4] \\in [-0.1*\\sqrt{3}, 0.1*\\sqrt{3}], the rotation for each point in quaternion format (w, x, y, z), where the new rotation will be rotation * d_rotation
         """
-        t_emb = self.embed_t_fn(t)
+        phase = self.get_phase(t, phase)
+        
+        t_emb = self.embed_t_fn(phase)
         x_emb = self.embed_fn(xyz)
         
         assert not torch.any(torch.isnan(x_emb)), "NaN detected in x_emb"

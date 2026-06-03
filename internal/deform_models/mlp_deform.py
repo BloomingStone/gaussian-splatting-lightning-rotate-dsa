@@ -131,20 +131,22 @@ class MLPDeformModel(DeformModel):
         t: torch.Tensor,
         phase: torch.Tensor|None = None,
     ) -> Deforms:
-        if t.ndim == 1:
-            t = t.unsqueeze(-1)
-        if t.shape[-1] != 1:
-            t = t[..., :1]
+        phase = self.get_phase(t, phase)
+        
+        if phase.ndim == 1:
+            phase = phase.unsqueeze(-1)
+        if phase.shape[-1] != 1:
+            phase = phase[..., :1]
 
-        if t.shape[0] == 1 and xyz.shape[0] != 1:
-            t = t.expand(xyz.shape[0], -1)
-        if t.shape[0] != xyz.shape[0]:
+        if phase.shape[0] == 1 and xyz.shape[0] != 1:
+            phase = phase.expand(xyz.shape[0], -1)
+        if phase.shape[0] != xyz.shape[0]:
             raise RuntimeError(
-                f"Batch mismatch between xyz and t: {xyz.shape[0]} vs {t.shape[0]}"
+                f"Batch mismatch between xyz and t: {xyz.shape[0]} vs {phase.shape[0]}"
             )
 
         x_emb = self.embed_xyz_fn(xyz)
-        t_emb = self.embed_t_fn(t)
+        t_emb = self.embed_t_fn(phase)
 
         if self.cfg.chunk > 0:
             d_xyz_list: list[torch.Tensor] = []

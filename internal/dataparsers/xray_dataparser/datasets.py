@@ -1,4 +1,4 @@
-from typing import Callable, NamedTuple, Literal
+from typing import Callable, NamedTuple, Literal, cast
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -27,12 +27,15 @@ ROI = NamedTuple("ROI", [
 
 @dataclass
 class ImagesDatasetConfig:
-    # camera cached on CPU by default; do not move cameras to CUDA in dataset
     image_uint8: bool = False
+    
+    # soft-mask weight:  w(x) = 1  inside GT mask,
+    #                    w(x) = exp(-d²/2σ²)  outside GT mask
+    soft_mask_sigma: float = 20.0
 
 
 @dataclass
-class FrangiMaskImagesDatasetConfig(ImagesDatasetConfig):
+class FrangiImagesDatasetConfig(ImagesDatasetConfig):
     frangi_sigmas: tuple[float, ...] = (1.0, 2.0, 3.0)
     frangi_beta: float = 0.5
     frangi_gamma: float = 15.0
@@ -169,10 +172,35 @@ class ImagesDataset(GSDataset):
         return mask.bool()
 
     def get_extra_data(self, index: int) -> None | dict[str, torch.Tensor]:
-        if self.other_data_closure is None:
-            return None
-        res = self.other_data_closure(self.source_indices[index])
-        return {k: v for k, v in res.items()}
+        extra: dict[str, torch.Tensor] = {}
+        if self.other_data_closure is not None:
+            res = self.other_data_closure(self.source_indices[index])
+            extra.update(res)
+
+        # soft mask weight based on ground-truth mask
+        mask = self.get_mask(index)
+        if mask is not None:
+            extra["soft_mask_weight"] = self._compute_soft_mask_weight(
+                mask[0], self.cfg.soft_mask_sigma,
+            )
+
+        return extra if extra else None
+
+    @staticmethod
+    def _compute_soft_mask_weight(mask: torch.Tensor, sigma: float) -> torch.Tensor:
+        """mask: (H, W) bool. Returns (H, W) float: 1 inside, exp(-d²/2σ²) outside."""
+        import numpy as np
+        try:
+            from scipy.ndimage import distance_transform_edt
+        except ImportError:
+            # fallback: just return the mask itself as weight
+            return mask.float()
+
+        mask_np = mask.cpu().numpy().astype(bool)
+        # distance from each pixel to nearest True (mask) pixel
+        dist = cast(np.ndarray, distance_transform_edt(~mask_np))
+        weight = np.where(mask_np, 1.0, np.exp(-dist ** 2 / (2.0 * sigma ** 2)))
+        return torch.from_numpy(weight).float().to(mask.device)
 
     def __getitem__(self, index: int) -> ItemT:
         return ItemT(
@@ -234,13 +262,13 @@ class ImagesDatasetBuilder(DatasetBuilder[XRayMeta, ImagesDataset]):
         )
 
 
-class FrangiMaskImagesDataset(ImagesDataset):
-    cfg: FrangiMaskImagesDatasetConfig
+class FrangiImagesDataset(ImagesDataset):
+    cfg: FrangiImagesDatasetConfig
 
     def __init__(
         self,
         cameras: Cameras,
-        cfg: FrangiMaskImagesDatasetConfig,
+        cfg: FrangiImagesDatasetConfig,
         image_paths: list[Path],
         masks_paths: list[Path] | None = None,
         other_data_closure: Callable[[int], dict[str, torch.Tensor]] | None = None,
@@ -281,8 +309,42 @@ class FrangiMaskImagesDataset(ImagesDataset):
         image = self._to_gray(self.get_image(index))
         if image.max() > 1.0:
             image = image / 255.0
-        extra["weight_map"] = self._compute_weight_map(image)
+
+        vesselness = frangi_vesselness(
+            image=image,
+            sigmas=self.cfg.frangi_sigmas,
+            beta=self.cfg.frangi_beta,
+            gamma=self.cfg.frangi_gamma,
+            black_ridges=self.cfg.frangi_black_ridges,
+            fusion=self.cfg.frangi_fusion,
+            eps=self.cfg.frangi_eps,
+        )  # (1, H, W)
+        extra["weight_map"] = self._normalize_01(vesselness)[0]
         extra["weight_frangi"] = extra["weight_map"]  # alias for convenience
+
+        # Frangi-derived binary mask (thresholded + morph)
+        fmask = frangi_mask(
+            vesselness=vesselness,
+            threshold=self.cfg.frangi_threshold,
+            dilation_radius=self.cfg.frangi_dilation_radius,
+            closing_radius=self.cfg.frangi_closing_radius,
+        )
+        if fmask.dim() == 2:
+            fmask = fmask.unsqueeze(0)
+        fmask_bool = fmask.expand(3, -1, -1).bool()
+        extra["frangi_mask"] = fmask_bool
+
+        # soft weight based on frangi mask
+        extra["frangi_soft_mask"] = self._compute_soft_mask_weight(
+            fmask_bool[0], self.cfg.soft_mask_sigma,
+        )
+        
+        mask = self.get_mask(index)
+        if mask is not None:
+            extra["soft_mask_weight"] = self._compute_soft_mask_weight(
+                mask[0], self.cfg.soft_mask_sigma,
+            )
+
         return extra
 
     @staticmethod
@@ -296,32 +358,10 @@ class FrangiMaskImagesDataset(ImagesDataset):
             return image
         return image.mean(dim=0, keepdim=True)
 
-    def get_mask(self, index: int) -> torch.Tensor | None:
-        image = self._to_gray(self.get_image(index))
-        if image.max() > 1.0:
-            image = image / 255.0
-
-        mask = frangi_mask(
-            image=image,
-            sigmas=self.cfg.frangi_sigmas,
-            beta=self.cfg.frangi_beta,
-            gamma=self.cfg.frangi_gamma,
-            black_ridges=self.cfg.frangi_black_ridges,
-            fusion=self.cfg.frangi_fusion,
-            threshold=self.cfg.frangi_threshold,
-            dilation_radius=self.cfg.frangi_dilation_radius,
-            closing_radius=self.cfg.frangi_closing_radius,
-            eps=self.cfg.frangi_eps,
-        )
-        if mask.dim() == 2:
-            mask = mask.unsqueeze(0)
-        mask = mask.expand(3, -1, -1)
-        return mask.bool()
-
 
 @dataclass
-class FrangiMaskImagesDatasetBuilder(ImagesDatasetBuilder):
-    dataset_config: FrangiMaskImagesDatasetConfig = field(default_factory=FrangiMaskImagesDatasetConfig)
+class FrangiImagesDatasetBuilder(ImagesDatasetBuilder):
+    dataset_config: FrangiImagesDatasetConfig = field(default_factory=FrangiImagesDatasetConfig)
 
     def build_dataset(
         self,
@@ -330,7 +370,7 @@ class FrangiMaskImagesDatasetBuilder(ImagesDatasetBuilder):
         meta: XRayMeta,
         indices: list[int],
         split: Stage,
-    ) -> FrangiMaskImagesDataset:
+    ) -> FrangiImagesDataset:
         del meta, split
         all_image_paths = sorted((data_dir / self.image_dir_name).glob(self.image_suffix))
         image_paths = [all_image_paths[i] for i in indices]
@@ -345,12 +385,19 @@ class FrangiMaskImagesDatasetBuilder(ImagesDatasetBuilder):
                     return {"depth": torch.from_numpy(depth_npy[index]).float()}
 
                 other_data_closure = get_depth_closure
+        
+        masks_paths = None
+        mask_dir = data_dir / self.mask_dir_name
+        if mask_dir.exists():
+            all_mask_paths = sorted(mask_dir.glob(self.image_suffix))
+            if len(all_mask_paths) > 0:
+                masks_paths = [all_mask_paths[i] for i in indices]
 
-        return FrangiMaskImagesDataset(
+        return FrangiImagesDataset(
             cameras=cameras.get_from_indices(indices),
             cfg=self.dataset_config,
             image_paths=image_paths,
-            masks_paths=None,
+            masks_paths=masks_paths,
             other_data_closure=other_data_closure,
             source_indices=indices,
         )

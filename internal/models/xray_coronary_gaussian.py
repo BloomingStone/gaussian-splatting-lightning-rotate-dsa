@@ -119,6 +119,7 @@ class HasDensityGetter(ABC):
         """Set raw density"""
         self.gaussians[self._density_name] = v
 
+MU_WATER = 0.002     # mm^-1
 
 class XrayCoronaryGaussianModel(
     HasVanillaGetters,
@@ -146,7 +147,7 @@ class XrayCoronaryGaussianModel(
         
         self.scale_activation = torch.nn.Softplus(threshold=10.0)
         self.scale_inverse_activation = inverse_softplus()
-        self.density_activation = lambda x: 1e-3 * torch.nn.Softplus(threshold=10.0)(x)    # scale by 1e-3
+        self.density_activation = lambda x: MU_WATER * torch.nn.Softplus(threshold=10.0)(x)    # scale by 1e-3
         self.density_inverse_activation = lambda x: inverse_softplus()(x * 1e3)     # reverse scale by 1e3
         self.rotation_activation = F.normalize
         self.rotation_inverse_activation = _identity_act

@@ -6332,6 +6332,8 @@ packages:
   timestamp: 1779159948016
 - pypi: .
   name: gaussian-splatting-lightning
+  requires_dist:
+  - monai
   requires_python: '>=3.10'
 - pypi: git+https://github.com/bloomingstone/diff-gaussian-rasterization?branch=main#a829cd8b5a90aa1751b0116e4ceb0c79467b32cc
   name: diff-gaussian-rasterization

@@ -5,7 +5,7 @@ import torch
 from pytorch_lightning import LightningModule
 
 from internal.metrics.metric import Metric, MetricImpl, CommonImageMetricImpl
-from internal.renderers.deformabel_xray_renderer import RenderRes
+from internal.renderers.deformabel_xray_renderer import  XrayRendererOuputs
 from internal.dataparsers.dataparser import BatchT
 
 
@@ -38,7 +38,7 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
         pl_module: LightningModule, 
         gaussian_model, 
         batch: BatchT, 
-        outputs: RenderRes
+        outputs: XrayRendererOuputs
     ):
         _, image_info, _ = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
         _, gt_image, _ = image_info
@@ -52,9 +52,9 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
         
         # regularization losses on deforms variance
         d_xyz_var = outputs.deforms_var["d_xyz"]
-        d_density_std = outputs.deforms_var["d_density"].sqrt()[outputs.density_mask]
-        d_density_mean = outputs.deforms_mean["d_density"].abs()[outputs.density_mask]
-        d_xyz_var_avg = d_xyz_var[outputs.density_mask].mean()
+        d_density_std = outputs.deforms_var["d_density"].sqrt()
+        d_density_mean = outputs.deforms_mean["d_density"].abs()
+        d_xyz_var_avg = d_xyz_var.mean()
         
         # use mean + 2*std as the uncertainty-aware density, which is roughly the upper bound of density with 95% confidence if 
         # we assume the deforms follow a normal distribution. 
@@ -100,13 +100,13 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
 
     def get_train_metrics(self, pl_module, gaussian_model, step: int, batch, outputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:
         return self._get_basic_metrics(
-            pl_module=pl_module,
+            pl_module=pl_module,    # type: ignore
             gaussian_model=gaussian_model,
             batch=batch,
-            outputs=outputs
+            outputs=outputs     # type: ignore
         )
     
-    def get_validate_metrics(self, pl_module, gaussian_model, batch, outputs: RenderRes) -> Tuple[Dict[str, Any], Dict[str, bool]]:
+    def get_validate_metrics(self, pl_module, gaussian_model, batch, outputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:
         metrics, prog_bar = self._get_basic_metrics(
             pl_module,
             gaussian_model,
@@ -114,10 +114,14 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             outputs
         )
 
-        _, image_info, _ = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
+        _, image_info, extra_data = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
         _, gt_image, _ = image_info
         gt_image = self._ensure_gray_nchw(gt_image)
 
         self.add_image_validation_metrics(metrics, prog_bar, outputs.gray_image, gt_image)
+
+        weight = extra_data.get("soft_mask_weight") if extra_data is not None else None
+        if weight is not None:
+            self.add_weighted_validation_metrics(metrics, prog_bar, outputs.gray_image, gt_image, weight)
 
         return metrics, prog_bar

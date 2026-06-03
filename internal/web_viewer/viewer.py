@@ -10,8 +10,8 @@ import viser.transforms as vtf
 import torch
 import yaml
 
-from ..utils.guassian_utils.gaussian_model_loader import GaussianModelLoader
-from ..utils.guassian_utils.gaussian_model_editor import MultipleGaussianModelEditor
+from ..utils.gaussian_utils.gaussian_model_loader import GaussianModelLoader
+from ..utils.gaussian_utils.gaussian_model_editor import MultipleGaussianModelEditor
 from ..web_viewer import ClientThread, ViewerRenderer
 from ..web_viewer.ui import populate_render_tab, TransformPanel, EditPanel
 from ..web_viewer.ui.up_direction_folder import UpDirectionFolder
@@ -88,12 +88,12 @@ class Viewer:
             self.show_render_panel = False
 
         if gsplat_v1_example is True:
-            from internal.utils.guassian_utils.gaussian_model_loader import GSplatV1ExampleCheckpointLoader
+            from internal.utils.gaussian_utils.gaussian_model_loader import GSplatV1ExampleCheckpointLoader
             model, renderer = GSplatV1ExampleCheckpointLoader.load(model_paths[0], self.device, anti_aliased=gsplat_v1_example_aa)
             training_output_base_dir = model_paths[0]
             dataset_type = "Colmap"
         elif vanilla_pvg is True:
-            from internal.utils.guassian_utils.gaussian_model_loader import VanillaPVGModelLoader
+            from internal.utils.gaussian_utils.gaussian_model_loader import VanillaPVGModelLoader
             model, renderer = VanillaPVGModelLoader.search_and_load(model_paths[0], self.device)
             training_output_base_dir = model_paths[0]
             self.checkpoint = None
@@ -282,7 +282,7 @@ class Viewer:
 
     def _load_vanilla_seganygs(self, path):
         from plyfile import PlyData
-        from internal.utils.guassian_utils.gaussian_utils import GaussianPlyUtils
+        from internal.utils.gaussian_utils.gaussian_utils import GaussianPlyUtils
 
         max_iteration = -1
         load_from = None

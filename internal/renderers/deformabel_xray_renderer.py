@@ -1,7 +1,9 @@
 from typing import Any, Optional, Tuple, cast
 from dataclasses import dataclass
+from enum import StrEnum
 
 import torch
+from torch import nn
 from torch import Tensor
 from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
@@ -13,12 +15,86 @@ from xray_gaussian_rasterization_voxelization import (
 )
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 
-from .renderer import Renderer
+from .renderer import Renderer, RendererOutputs
 from ..cameras import Camera
 from ..deform_models import DeformModel, DefromModelConfig, Deforms, GSParam
 from ..utils.general_utils import get_linear_noise_func
-from ..visualizers import FloatColormapVisualizer, ColorMapName
-from .deformabel_xray_renderer_coronary_props import XrayRendererOuputs, ImgT, MetaT
+from ..visualizers import FloatColormapVisualizer, ColorMapName, Visualizer
+
+
+@dataclass
+class XrayRendererOuputs(RendererOutputs):
+    class ImageTypes(StrEnum):
+        GRAY = "gray"
+        CORONARY = "coronary"
+    
+    class MetaTypes(StrEnum):
+        VIEWSPACE_POINTS = "viewspace_points"
+        VISIBILITY_FILTER = "visibility_filter"
+        RADII = "radii"
+        
+        DEFORMS_MEAN = "deforms_mean"
+        DEFORMS_VAR = "deforms_var"
+        
+        DEFORMS = "deforms"
+        
+        TIME = "time"
+        PHASE = "phase"
+        
+        MASK = "mask"
+    
+    images: dict[ImageTypes, tuple[Tensor, Visualizer|None]]    # type: ignore
+    meta: dict[MetaTypes, Any]   # type: ignore
+    
+    is_warm_up: bool
+
+    @property
+    def gray_image(self) -> Tensor:
+        return self.images[self.ImageTypes.GRAY][0]
+
+    @property
+    def coronary_image(self) -> Tensor:
+        return self.images[self.ImageTypes.CORONARY][0]
+
+    @property
+    def viewspace_points(self) -> Tensor:
+        return self.meta[self.MetaTypes.VIEWSPACE_POINTS]
+
+    @property
+    def visibility_filter(self) -> Tensor:
+        return self.meta[self.MetaTypes.VISIBILITY_FILTER]
+
+    @property
+    def radii(self) -> Tensor:
+        return self.meta[self.MetaTypes.RADII]
+
+    @property
+    def deforms_mean(self) -> dict[str, Tensor]:
+        return self.meta[self.MetaTypes.DEFORMS_MEAN]
+
+    @property
+    def deforms_var(self) -> dict[str, Tensor]:
+        return self.meta[self.MetaTypes.DEFORMS_VAR]
+
+    @property
+    def deforms(self) -> Deforms:
+        return self.meta[self.MetaTypes.DEFORMS]
+
+    @property
+    def time(self) -> Tensor:
+        return self.meta[self.MetaTypes.TIME]
+    
+    @property
+    def phase(self) -> Tensor:
+        return self.meta[self.MetaTypes.PHASE]
+    
+    @property
+    def mask(self) -> Optional[Tensor]:
+        return self.meta.get(self.MetaTypes.MASK, None)
+
+ImgT = XrayRendererOuputs.ImageTypes
+MetaT = XrayRendererOuputs.MetaTypes
+
 
 
 @dataclass
@@ -30,51 +106,6 @@ class DeformableRendererOptimizationConfig:
     warm_up: int = -1
     enable_ast: bool = True
 
-
-@dataclass
-class RenderRes:
-    gray_image: Tensor
-    gray_coronary: Tensor | None
-    viewspace_points: Tensor
-    visibility_filter: Tensor
-    radii: Tensor
-    
-    deforms_mean: dict[str, Tensor]
-    deforms_var: dict[str, Tensor]
-    
-    deforms: Deforms
-    
-    time: Tensor
-    density_mask: Tensor|None = None
-    
-    in_warm_up: bool = False
-
-    def __getitem__(self, item):
-        return getattr(self, item)
-    
-    def __contains__(self, item):
-        return hasattr(self, item)
-    
-    def __len__(self):
-        return len(self.__dict__)
-    
-    def __iter__(self):
-        return iter(self.__dict__)
-    
-    def items(self):
-        output_keys = [
-            "viewspace_points",
-            "visibility_filter",
-            "radii",
-        ]
-        for key in output_keys:
-            yield key, getattr(self, key)
-    
-    def get(self, key: str, defualt_value: Tensor|None) -> Tensor|None:
-        if hasattr(self, key):
-            return getattr(self, key)
-        else:
-            return defualt_value
 
 class CoronaryDeformableXrayRenderer(Renderer):
     deform_model: DeformModel
@@ -108,7 +139,7 @@ class CoronaryDeformableXrayRenderer(Renderer):
         
         time = viewpoint_camera.time.unsqueeze(0).expand(gs.xyz.shape[0], -1)
         phase = viewpoint_camera.phase.unsqueeze(0).expand(gs.xyz.shape[0], -1)
-        deforms: Deforms = self.deform_model(gs.xyz.detach(), time.detach(), phase.detach())
+        deforms: Deforms = self.deform_model(gs.xyz.detach(), t=time.detach(), phase=phase.detach())
         gs = self.deform_model.deform(gs, deforms)
         gray_image, meta_whole = self._render(viewpoint_camera, gs)
 
@@ -142,11 +173,9 @@ class CoronaryDeformableXrayRenderer(Renderer):
                 MetaT.VIEWSPACE_POINTS: viewspace_points,
                 MetaT.VISIBILITY_FILTER: visibility_filter,
                 MetaT.RADII: radii,
-                MetaT.D_MOTION_MEAN: deforms_mean,
-                MetaT.D_MOTION_VAR: deforms_var,
-                MetaT.D_MEANS3D: deforms.d_xyz,
-                MetaT.D_ROTATION: deforms.d_rotation,
-                MetaT.D_SCALES: deforms.d_scaling,
+                MetaT.DEFORMS_MEAN: deforms_mean,
+                MetaT.DEFORMS_VAR: deforms_var,
+                MetaT.DEFORMS: deforms,
                 MetaT.TIME: viewpoint_camera.time
             },
             is_warm_up=False
@@ -182,30 +211,26 @@ class CoronaryDeformableXrayRenderer(Renderer):
             time = time + ast_noise
             phase = phase + ast_noise
         
-        deforms = self.deform_model(gs.xyz.detach(), time.detach(), phase.detach())
+        deforms = self.deform_model(gs.xyz.detach(), t=time.detach(), phase=phase.detach())
         
-        # apply density amplitude ramp for models that output d_density (with_flow)
-        ramp_steps = getattr(self.optimization_config, "density_ramp_steps", 2000)
-        warm_up = self.optimization_config.warm_up
-        if ramp_steps > 0:
-            alpha = float(max(0.0, min(1.0, (step - warm_up) / ramp_steps)))
-        else:
-            alpha = 1.0
-        if hasattr(deforms, "d_density"):
-            try:
-                deforms.d_density = deforms.d_density * alpha
-            except Exception:
-                pass
-
-        if step > self.optimization_config.warm_up:
-            # update means3D, rotation, scales
-            gs = self.deform_model.deform(gs, deforms)
-            deforms_mean, deforms_var = pc.deforms_recorder.update(deforms)
-        else:
+        is_warm_up = step < self.optimization_config.warm_up
+        
+        if is_warm_up:
             deforms_mean = pc.deforms_recorder.get_deforms_mean()
             deforms_var = pc.deforms_recorder.get_deforms_var()
+        else:
+            gs = self.deform_model.deform(gs, deforms)
+            deforms_mean, deforms_var = pc.deforms_recorder.update(deforms)
 
         gray_image, meta_whole = self._render(viewpoint_camera, gs)
+
+        if is_warm_up:
+            # dummy operation to make sure deforms receive gradients during warm-up
+            # otherwise, there might be an error (AssertionError: No inf checks were recorded for this optimizer.) when 
+            # the optimizer tries to step with zero gradients
+            gray_image = gray_image + 0.0 * (
+                deforms.d_xyz.sum() + deforms.d_rotation.sum() + deforms.d_scaling.sum()
+            )
 
         viewspace_points = meta_whole["viewspace_points"]
         radii = meta_whole["radii"]
@@ -219,14 +244,13 @@ class CoronaryDeformableXrayRenderer(Renderer):
                 MetaT.VIEWSPACE_POINTS: viewspace_points,
                 MetaT.VISIBILITY_FILTER: visibility_filter,
                 MetaT.RADII: radii,
-                MetaT.D_MOTION_MEAN: deforms_mean,
-                MetaT.D_MOTION_VAR: deforms_var,
-                MetaT.D_MEANS3D: deforms.d_xyz,
-                MetaT.D_ROTATION: deforms.d_rotation,
-                MetaT.D_SCALES: deforms.d_scaling,
-                MetaT.TIME: viewpoint_camera.time
+                MetaT.DEFORMS_MEAN: deforms_mean,
+                MetaT.DEFORMS_VAR: deforms_var,
+                MetaT.DEFORMS: deforms,
+                MetaT.TIME: viewpoint_camera.time,
+                MetaT.PHASE: viewpoint_camera.phase,
             },
-            is_warm_up=viewpoint_camera.time.item() <= self.optimization_config.warm_up
+            is_warm_up=is_warm_up
         )
     
     def _render(

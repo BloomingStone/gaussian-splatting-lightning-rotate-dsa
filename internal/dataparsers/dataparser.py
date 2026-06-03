@@ -122,6 +122,8 @@ class DatasetBuilder(Protocol[MetaT_contra, DatasetT]):
 class DataParserOutputs(Generic[MetaT]):
     meta: MetaT
     
+    splits: dict[Stage, list[int]]
+    
     datasets: dict[Stage, GSDataset]
 
     point_cloud: PointCloud
@@ -205,6 +207,7 @@ class DataParser(Generic[MetaT, DatasetT]):
 
         return DataParserOutputs(
             meta=meta,
+            splits=splits,
             datasets = {
                 stage: self.dataset_builder.build_dataset(data_dir, cameras, meta, indices, stage)
                 for stage, indices in splits.items()

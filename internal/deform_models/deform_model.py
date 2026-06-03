@@ -4,7 +4,7 @@ from typing import Any
 import torch
 from torch import nn
 
-from internal.utils.guassian_utils.gaussian_utils import GaussianTransformUtils
+from internal.utils.gaussian_utils.gaussian_utils import GaussianTransformUtils
 from internal.instantiate_config import Instantiable
 
 @dataclass
@@ -175,6 +175,8 @@ class GSParam:
 
 @dataclass
 class DefromModelConfig(Instantiable):
+    # test no cardiac phase input, use global time t as the only input for temporal variation
+    use_t_as_phase: bool = False
     
     def instantiate(self, *args, **kwargs) -> Any:
         return DeformModel(self)
@@ -206,3 +208,11 @@ class DeformModel(nn.Module):
         rotation = GaussianTransformUtils.quat_multiply(source.rotation, deforms.d_rotation)
 
         return GSParam(xyz=xyz, rotation=rotation, scaling=scaling, density=source.density)
+    
+    def get_phase(self, t_input, phase_input):
+        if self.cfg.use_t_as_phase:
+            assert phase_input is None, "phase_input should be None when use_t_as_phase is True"
+            return t_input
+        else:
+            assert phase_input is not None, "phase_input should not be None when use_t_as_phase is False"
+            return phase_input

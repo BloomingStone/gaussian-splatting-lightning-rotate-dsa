@@ -55,6 +55,7 @@ def deform_field_to_volume(
     affine: np.ndarray,
     zoomed_shape: tuple[int, int, int],
     batch_size: int = 256*256,
+    save_uniformed_time: float = 0.5,
     save_phase: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     device = next(deform_model.parameters()).device
@@ -80,8 +81,9 @@ def deform_field_to_volume(
     for start in range(0, xyz.shape[0], batch_size):
         end = min(start + batch_size, xyz.shape[0])
         xyz_batch = xyz[start:end]
-        t_batch = torch.full((xyz_batch.shape[0], 1), save_phase, device=device)  # input phase is save_phase
-        deforms: Deforms = deform_model(xyz_batch, t_batch)
+        t_batch = torch.full((xyz_batch.shape[0], 1), save_uniformed_time, device=device)  # input time is save_uniformed_time
+        phase_batch = torch.full((xyz_batch.shape[0], 1), save_phase, device=device)  # input phase is save_phase
+        deforms: Deforms = deform_model(xyz_batch, t_batch, phase_batch)
         dxyz_chunks.append(deforms.d_xyz.cpu().float())
 
     dxyz_volume = torch.cat(dxyz_chunks, dim=0).reshape(zoomed_shape + (3,))
@@ -94,9 +96,10 @@ def gaussians_to_volume_by_Rasterizer(
     scales: torch.Tensor,
     rotation: torch.Tensor,
     density: torch.Tensor,
-    shape: tuple[int, int, int],
-    affine: np.ndarray
-) -> np.ndarray:
+    shape: tuple[int, ...],
+    affine: np.ndarray,
+    to_cpu: bool = True,
+) -> np.ndarray|torch.Tensor:
     A = affine[:3, :3]
     spacing = np.linalg.norm(A, axis=0)    # make sure the spacing is positive
     sVoxel = spacing * np.array(shape)  # sVoxel = size of whole volume (length of XYZ, not the voxel size)
@@ -116,14 +119,13 @@ def gaussians_to_volume_by_Rasterizer(
         debug=False,
     )
     voxelizer = GaussianVoxelizer(voxel_settings)
+    vol_pred: torch.Tensor
     vol_pred, radii = voxelizer(
         means3D,
         density,
         scales,
         rotation,
     )
-    
-    vol_pred = vol_pred.cpu().squeeze().numpy()
     
     D = A / spacing
 
@@ -137,22 +139,37 @@ def gaussians_to_volume_by_Rasterizer(
     if not np.allclose(aligned_score, 1.0, atol=1e-3):
         raise ValueError("Affine includes arbitrary rotation; need interpolation-based resampling")
 
-    # permute the volume to align with the affine
-    vol = np.transpose(vol_pred, axes=tuple(perm))
-
     # flip axes if the affine includes a flip
     signs = np.sign(D[perm, np.arange(3)])
-    flip_axes = tuple(np.where(signs < 0)[0].tolist())
-    if len(flip_axes) > 0:
-        vol = np.flip(vol, axis=flip_axes)
     
-    return vol
+    # permute the volume to align with the affine
+    if to_cpu:
+        vol = vol_pred.cpu().squeeze().numpy()
+        vol = np.transpose(vol, axes=tuple(perm))
+
+        flip_axes = tuple(np.where(signs < 0)[0].tolist())
+        if len(flip_axes) > 0:
+            vol = np.flip(vol, axis=flip_axes)
+        
+        return vol
+    else:
+        vol = vol_pred.squeeze()
+        vol = vol.permute(tuple(perm))
+
+        signs = torch.from_numpy(signs).to(device=vol.device, dtype=vol.dtype)
+        flip_axes = tuple(torch.where(signs < 0)[0].tolist())
+        if len(flip_axes) > 0:
+            vol = torch.flip(vol, dims=flip_axes)
+        
+        return vol
 
 @dataclass
 class XRaySaver(Saver):
     save_ckpt: bool = True
     save_vtp: bool = True
     save_nii: bool = True
+    
+    save_uniformed_time: float = 0.5
     save_phase: float = 0.0
     def instantiate(self, *args, **kwargs) -> "XRaySaverModule":
         return XRaySaverModule(self)
@@ -231,13 +248,11 @@ class XRaySaverModule(SaverModule):
         density = pc.get_density().detach()
         rotation = pc.get_rotations().detach()
         scales = pc.get_scales().detach()
-        
-        # there is no contrast flow in simple generated rotating xray dataset, so we can just input the save_phase as the time 
-        # input to get the deformation at that phase
+
         deforms: Deforms = deform_model(
             xyz = means3D.detach(), 
-            t = torch.full((means3D.shape[0], 1), self.config.save_phase, device=means3D.device),   # input time is save_phase
-            phase = torch.full((means3D.shape[0], 1), self.config.save_phase, device=means3D.device),   # input phase is save_phase
+            t = torch.full((means3D.shape[0], 1), self.config.save_uniformed_time, device=means3D.device),
+            phase = torch.full((means3D.shape[0], 1), self.config.save_phase, device=means3D.device),
         )
         
         source_deformed = deform_model.deform(
@@ -286,8 +301,10 @@ class XRaySaverModule(SaverModule):
         volume = gaussians_to_volume_by_Rasterizer(
             gs_param.xyz, gs_param.scaling, gs_param.rotation, gs_param.density, volume_shape, coronary_affine
         )
+        assert isinstance(volume, np.ndarray)
         dxyz_volume, zoomed_affine = deform_field_to_volume(
-            pl_module.renderer.deform_model, volume_shape, coronary_affine, zoomed_shape=(128, 128, 128)
+            pl_module.renderer.deform_model, volume_shape, coronary_affine, zoomed_shape=(128, 128, 128),
+            save_uniformed_time=self.config.save_uniformed_time, save_phase=self.config.save_phase
         )
         coronary_affine_save = np.array(coronary_affine, copy=True)
         torch.cuda.empty_cache()  # avoid CUDA OOM

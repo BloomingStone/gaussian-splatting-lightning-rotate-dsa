@@ -8,8 +8,8 @@ import numpy as np
 from internal.dataparsers.dataparser import ImageItemT, ItemT
 from internal.dataparsers.xray_dataparser.cameras_builder import RotateXRayCamerasBuilder
 from internal.dataparsers.xray_dataparser.datasets import (
-    FrangiMaskImagesDatasetBuilder,
-    FrangiMaskImagesDatasetConfig,
+    FrangiImagesDatasetBuilder,
+    FrangiImagesDatasetConfig,
 )
 from internal.dataparsers.xray_dataparser.meta import XRayMetaLoader
 from internal.metrics.rotate_xray_metrics_weight_patch import (
@@ -125,10 +125,10 @@ def test_patch_metric_with_real_fixture_data(test_xray_data_no_flow_root: Path, 
     cameras = RotateXRayCamerasBuilder().build_cameras(meta)
     indices = list(range(0, len(cameras), 40))  # thin out for speed
 
-    builder = FrangiMaskImagesDatasetBuilder(
+    builder = FrangiImagesDatasetBuilder(
         image_dir_name="rotate_dsa",
         image_suffix="*.png",
-        dataset_config=FrangiMaskImagesDatasetConfig(
+        dataset_config=FrangiImagesDatasetConfig(
             image_uint8=False,
             frangi_threshold=0.03,
         ),

@@ -44,7 +44,7 @@ def _get_random_ball_cloud(num_points: int, R: float, center: np.ndarray, seed: 
     costheta = rng.uniform(-1, 1, num_points)
     u = rng.uniform(0, 1, num_points)
     theta = np.arccos(costheta)
-    r = R * (u ** (1/3))
+    r = R * (np.power(u, 1/3))
     x = r * np.sin(theta) * np.cos(phi)
     y = r * np.sin(theta) * np.sin(phi)
     z = r * np.cos(theta)
@@ -58,11 +58,19 @@ def _get_random_backgound_cloud(xyz: np.ndarray, seed: int) -> np.ndarray:
     radius = d.max() * 1.2
     N = xyz.shape[0]
     return _get_random_ball_cloud(num_points=N, R=radius, center=center.squeeze(), seed=seed)
-    
 
 
 @dataclass
-class UniformCloudParser(CloudParser):
+class XRayCloudParser(CloudParser[XRayMeta]):
+    """
+    Base class for XRay point cloud parsers.  lightning jsonargparser's typing does not support Protocols, so we 
+    use a base class instead of a Protocol for parsers.
+    """
+    pass    
+
+
+@dataclass
+class UniformCloudParser(XRayCloudParser):
     num_points: int = DEFAULT_NUM_POINTS
 
     def get_point_cloud(self, data_dir: Path, meta: XRayMeta, splits: None|dict[Stage, list[int]]=None) -> PointCloud:
@@ -77,9 +85,9 @@ class UniformCloudParser(CloudParser):
 
 
 @dataclass
-class RandomCloudParser(CloudParser):
+class RandomCloudParser(XRayCloudParser):
     num_points: int = DEFAULT_NUM_POINTS
-    seed: int = 42
+    seed: int = 0
 
     def get_point_cloud(self, data_dir: Path, meta: XRayMeta, splits: None|dict[Stage, list[int]]=None) -> PointCloud:
         rng = np.random.default_rng(self.seed)
@@ -90,16 +98,16 @@ class RandomCloudParser(CloudParser):
 
 
 @dataclass
-class BallRandomCloudParser(CloudParser):
+class BallRandomCloudParser(XRayCloudParser):
     num_points: int = DEFAULT_NUM_POINTS
     R: float|None = None  # if None, will be set to the minimum dimension of the bounding box of the volume
-    seed: int = 42
+    seed: int = 0
 
     def get_point_cloud(self, data_dir: Path, meta: XRayMeta, splits: None|dict[Stage, list[int]]=None) -> PointCloud:
         if self.R is None:
             aabb = get_AABB_corners(meta.volume_size, meta.centering_affine)
             bounds_axis = aabb.max(axis=0) - aabb.min(axis=0)
-            R: float = bounds_axis.min()
+            R: float = bounds_axis.min() / 2
         else:
             R = self.R
         
@@ -109,18 +117,18 @@ class BallRandomCloudParser(CloudParser):
 
 
 @dataclass
-class LabelCloudParser(CloudParser):
+class LabelCloudParser(XRayCloudParser):
     num_points: int = DEFAULT_NUM_POINTS
-    label_nii_filename: str = "coronary_label.nii.gz"
     label_value: int | None = None  # if not None, only keep points with this label value in the label_nii
-    seed: int = 42
+    seed: int = 0
     add_random_background_points: bool = True
 
     def get_point_cloud(self, data_dir: Path, meta: XRayMeta, splits: None|dict[Stage, list[int]]=None) -> PointCloud:
         import nibabel as nib
         
         affine = meta.centering_affine
-        label_nii_path = data_dir / self.label_nii_filename
+        assert meta.label_3d_info is not None, "label_3d_info must be provided in meta for LabelCloudParser"
+        label_nii_path = data_dir / meta.label_3d_info.filename
         nii_img = cast(nib.Nifti1Image, nib.load(label_nii_path))
         data = nii_img.get_fdata().astype(np.uint8)
         
@@ -151,10 +159,10 @@ class LabelCloudParser(CloudParser):
 
 
 @dataclass
-class CentralLineCloudParser(CloudParser):
+class CentralLineCloudParser(XRayCloudParser):
     num_points: int = DEFAULT_NUM_POINTS
     central_line_filename: str = "central_line.npz"
-    seed: int = 42
+    seed: int = 0
     add_random_background_points: bool = True
 
     def get_point_cloud(self, data_dir: Path, meta: XRayMeta, splits: None|dict[Stage, list[int]]=None) -> PointCloud:
@@ -170,9 +178,9 @@ class CentralLineCloudParser(CloudParser):
 
 
 @dataclass
-class FdkCloudParser(CloudParser):
+class FdkCloudParser(XRayCloudParser):
     num_points: int = DEFAULT_NUM_POINTS
-    seed: int = 42
+    seed: int = 0
     use_filter: bool = True
     phase_min: float = 0.0
     phase_max: float = 0.5

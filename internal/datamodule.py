@@ -266,10 +266,14 @@ class DataModule(LightningDataModule):
                     'fx': float(camera.fx),
                     'cx': camera.cx.item(),
                     'cy': camera.cy.item(),
-                    'time': camera.time.item()
+                    'time': camera.time.item(),
+                    'phase': camera.phase.item(),
                 })
             with open(os.path.join(output_path, "cameras.json"), "w") as f:
                 json.dump(sibr_cameras, f, indent=4, ensure_ascii=False)
+            
+            with open(os.path.join(output_path, "splits.json"), "w") as f:
+                json.dump(self.dataparser_outputs.splits, f, indent=4, ensure_ascii=False)
 
             # save input point cloud to vtp file
             pd = pv.PolyData(self.dataparser_outputs.point_cloud.xyz.astype(np.float32))

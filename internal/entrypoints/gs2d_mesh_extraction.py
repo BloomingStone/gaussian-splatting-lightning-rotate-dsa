@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 import open3d as o3d
 from jsonargparse import CLI
-from internal.utils.guassian_utils.gaussian_model_loader import GaussianModelLoader
+from internal.utils.gaussian_utils.gaussian_model_loader import GaussianModelLoader
 from internal.utils.gs2d_mesh_utils import GS2DMeshUtils, post_process_mesh
 
 
