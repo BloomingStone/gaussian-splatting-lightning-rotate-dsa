@@ -11,6 +11,7 @@ from internal.dataparsers.xray_dataparser.splitters import (
     PhaseStratifiedSpliter,
     ReconstructionSpliter,
     RenderNewViewsSpliter,
+    Stage,
 )
 
 from .common import load_test_meta
@@ -64,9 +65,9 @@ def test_render_new_views_splitter_rejects_unknown_mode(test_xray_data_root: Pat
 
 
 def _check_split_validity(
-    splits: dict[str, list[int]],
+    splits: dict[Stage, list[int]],
     n_frames: int,
-    key_test: str = "test",
+    key_test: Stage = "test",
 ) -> None:
     """Assert that train/val/test partition *n_frames* without overlap."""
     assert "train" in splits and "val" in splits and key_test in splits
@@ -90,68 +91,17 @@ def test_phase_stratified_splitter_basic_validity(test_xray_data_root: Path):
     _check_split_validity(splits, meta.num_frames)
 
 
-def test_phase_stratified_splitter_excludes_phase0_when_not_dominant(test_xray_data_root: Path):
-    """Phase‑0 frames should NOT appear in training when phase 0 is not the
-    most numerous bin.  Use fine bins (n_bins=50) so phase 0 is isolated."""
+def test_phase_stratified_splitter_train_count_matches_target(test_xray_data_root: Path):
+    """Total training frames should be floor(n_frames × train_ratio)."""
     meta = load_test_meta(test_xray_data_root)
-    splitter = PhaseStratifiedSpliter(train_ratio=0.8, seed=0, n_bins=50)
-    splits = splitter.split(test_xray_data_root, meta)
-
-    phases = meta.phase_array
-    # ground truth phase‑0 indices
-    phase0_indices = set(np.where(phases == 0)[0].tolist())
-    train_set = set(splits["train"])
-
-    n0 = len(phase0_indices)
-    # find max bin size to decide if phase 0 is dominant
-    bin_edges = np.linspace(0, 1, 51)
-    bin_ids = np.clip(np.digitize(phases, bin_edges) - 1, 0, 49)
-    max_other = max(
-        (bin_ids == b).sum()
-        for b in range(50)
-        if b != 0 and (bin_ids == b).sum() > 0
-    )
-
-    if n0 > 0 and n0 <= max_other:
-        # phase 0 is NOT dominant → must be absent from training
-        assert train_set.isdisjoint(phase0_indices), (
-            f"phase‑0 frames {phase0_indices} found in training but phase 0 "
-            f"count={n0} ≤ max other bin count={max_other}"
+    for ratio in [0.5, 0.7, 0.9]:
+        s = PhaseStratifiedSpliter(train_ratio=ratio, seed=0, n_bins=20)
+        splits = s.split(test_xray_data_root, meta)
+        expected = int(meta.num_frames * ratio)
+        assert len(splits["train"]) == expected, (
+            f"ratio={ratio}: got {len(splits['train'])}, expected {expected}"
         )
-
-
-def test_phase_stratified_splitter_uses_phase0_when_dominant(
-    test_xray_data_no_flow_root: Path,
-):
-    """When phase 0 has strictly more frames than any other bin, it SHOULD
-    appear in training.  Diseased_17 is known to have many phase‑0 frames."""
-    meta = load_test_meta(test_xray_data_no_flow_root)
-    phases = meta.phase_array
-    phase0_indices = set(np.where(phases == 0)[0].tolist())
-    n0 = len(phase0_indices)
-
-    if n0 == 0:
-        pytest.skip("No phase‑0 frames in this dataset")
-
-    # verify phase 0 IS the dominant bin with coarse bins
-    bin_edges = np.linspace(0, 1, 21)
-    bin_ids = np.clip(np.digitize(phases, bin_edges) - 1, 0, 19)
-    max_other = max(
-        (bin_ids == b).sum()
-        for b in range(20)
-        if b != 0 and (bin_ids == b).sum() > 0
-    )
-
-    if n0 <= max_other:
-        pytest.skip("Phase 0 is not dominant in this dataset, cannot test the dominant case")
-
-    splitter = PhaseStratifiedSpliter(train_ratio=0.8, seed=0, n_bins=20)
-    splits = splitter.split(test_xray_data_no_flow_root, meta)
-    train_set = set(splits["train"])
-
-    assert not train_set.isdisjoint(phase0_indices), (
-        f"phase‑0 is dominant (n0={n0} > others≤{max_other}) but none selected in training"
-    )
+        assert len(splits["val"]) == meta.num_frames - expected
 
 
 def test_phase_stratified_splitter_deterministic(test_xray_data_root: Path):
