@@ -12,6 +12,7 @@ from internal.dataparsers.xray_dataparser.splitters import (
     ReconstructionSpliter,
     RenderNewViewsSpliter,
     Stage,
+    UniformIntervalSpliter,
 )
 
 from .common import load_test_meta
@@ -194,3 +195,73 @@ def test_file_splitter_loads_with_relative_to_data_dir(test_xray_data_root: Path
         assert result == dummy_splits
     finally:
         split_path.unlink(missing_ok=True)
+
+
+# ───────── UniformIntervalSpliter ─────────
+
+
+def test_uniform_interval_splitter_first_and_last_are_train(test_xray_data_root: Path):
+    """Frame 0 and n-1 must always be in the training set."""
+    meta = load_test_meta(test_xray_data_root)
+    n = meta.num_frames
+    splitter = UniformIntervalSpliter(train_ratio=0.8)
+    splits = splitter.split(test_xray_data_root, meta)
+    train_set = set(splits["train"])
+    assert 0 in train_set, "first frame (0) should be in training"
+    assert (n - 1) in train_set, "last frame (n-1) should be in training"
+
+
+def test_uniform_interval_splitter_train_count(test_xray_data_root: Path):
+    """Total training frames should be close to int(n * train_ratio).
+
+    Because the first and last frames are always reserved for training,
+    the actual train count may be up to 2 frames higher than the target
+    when the target validation count exceeds the number of interior frames.
+    """
+    meta = load_test_meta(test_xray_data_root)
+    n = meta.num_frames
+    for ratio in [0.5, 0.7, 0.9]:
+        s = UniformIntervalSpliter(train_ratio=ratio)
+        splits = s.split(test_xray_data_root, meta)
+        target_train = int(n * ratio)
+        # train can be target_train or target_train + {0,1,2} due to
+        # first/last reservation eating into val slots
+        assert target_train <= len(splits["train"]) <= target_train + 2, (
+            f"ratio={ratio}: got {len(splits['train'])}, "
+            f"expected in [{target_train}, {target_train + 2}]"
+        )
+
+
+def test_uniform_interval_splitter_no_overlap(test_xray_data_root: Path):
+    """Train and val must be disjoint and together cover all frames."""
+    meta = load_test_meta(test_xray_data_root)
+    splits = UniformIntervalSpliter(train_ratio=0.75).split(test_xray_data_root, meta)
+    train_set = set(splits["train"])
+    val_set = set(splits["val"])
+    assert train_set.isdisjoint(val_set), "train and val overlap"
+    assert train_set | val_set == set(range(meta.num_frames))
+    assert splits["val"] == splits["test"]
+
+
+def test_uniform_interval_splitter_val_is_uniformly_spaced(test_xray_data_root: Path):
+    """Validation frames should be approximately uniformly spaced."""
+    meta = load_test_meta(test_xray_data_root)
+    splitter = UniformIntervalSpliter(train_ratio=0.8)
+    splits = splitter.split(test_xray_data_root, meta)
+    val = np.array(splits["val"])
+    if len(val) < 3:
+        pytest.skip("too few val frames to check spacing")
+    diffs = np.diff(val)
+    # ratios between consecutive gaps should be close to 1
+    ratios = diffs[1:] / diffs[:-1]
+    assert all(0.5 < r < 2.0 for r in ratios), (
+        f"val indices {val.tolist()} are not uniformly spaced"
+    )
+
+
+def test_uniform_interval_splitter_all_train_when_ratio_1(test_xray_data_root: Path):
+    """train_ratio=1 should put all frames in training."""
+    meta = load_test_meta(test_xray_data_root)
+    splits = UniformIntervalSpliter(train_ratio=1.0).split(test_xray_data_root, meta)
+    assert len(splits["train"]) == meta.num_frames
+    assert splits["val"] == []

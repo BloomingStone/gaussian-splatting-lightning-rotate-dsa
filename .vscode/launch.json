@@ -49,7 +49,7 @@
             ]
         },
         {
-            "name": "rotate x-ray train [deformable]",
+            "name": "rotate x-ray train [debug]",
             "type": "debugpy",
             "request": "launch",
             "program": "main.py",
@@ -61,10 +61,27 @@
                 "-n", "rotate-xcat-deformable",
                 "-v", "debug",
                 "--overwrite_output",
-                "--logger", "wandb"
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "${config:gs.debug.cudaVisibleDevices}"
+            }
+        },
+        {
+            "name": "rotate x-ray train [baseline]",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "fit",
+                "--config", "configs/rotate_xray_3dgr/rotate_xray_3dgr_deformable_xray_render.yaml",
+                "--data.path", "data/Diseased_17",
+                "-n", "rot-xca_diseased-17",
+                "-v", "baseline",
+                "--logger", "wandb"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0"
             }
         },
         {
@@ -77,13 +94,12 @@
                 "fit",
                 "--config", "configs/rotate_xray_3dgr/patch_metric.yaml",
                 "--data.path", "data/Diseased_17",
-                "-n", "rotate-xcat-deformable",
-                "-v", "debug",
-                "--overwrite_output",
+                "-n", "rot-xca_patch_metric",
+                "-v", "frangi-patch-loss",
                 "--logger", "wandb"
             ],
             "env": {
-                "CUDA_VISIBLE_DEVICES": "${config:gs.debug.cudaVisibleDevices}"
+                "CUDA_VISIBLE_DEVICES": "1"
             }
         },
         {

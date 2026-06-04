@@ -1,4 +1,4 @@
-max_steps: 10000
+max_steps: 20000
 
 trainer:
   check_val_every_n_epoch: 10
@@ -6,7 +6,7 @@ trainer:
   callbacks:
     - class_path: internal.callbacks.scene_saver.SceneSaver
       init_args:
-        save_iterations: [2000, 5000, 10000]
+        save_iterations: [5000, 10000, 20000]
         saver:
           class_path: internal.savers.x_ray_saver.XRaySaver
           init_args:
@@ -33,9 +33,9 @@ data:
       cloud_parser:
         class_path: internal.dataparsers.xray_dataparser.cloud_parsers.RandomCloudParser
         init_args:
-          num_points: 100_000
+          num_points: 10_000
       spliter:
-        class_path: internal.dataparsers.xray_dataparser.splitters.PhaseStratifiedSpliter
+        class_path: internal.dataparsers.xray_dataparser.splitters.UniformIntervalSpliter
         init_args:
           train_ratio: 0.8
       cameras_builder:
