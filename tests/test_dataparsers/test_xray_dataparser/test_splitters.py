@@ -15,7 +15,7 @@ from internal.dataparsers.xray_dataparser.splitters import (
     UniformIntervalSpliter,
 )
 
-from .common import load_test_meta
+from ..common import load_test_meta
 
 
 def test_reconstruction_splitter_uses_all_frames(test_xray_data_root: Path):

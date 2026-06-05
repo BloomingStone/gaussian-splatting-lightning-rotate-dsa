@@ -84,7 +84,6 @@ def collate_fn(batch: list[ItemT]) -> BatchT:
 
 
 class GSDataset(Dataset):
-    data_dir: Path
     cameras: Cameras
     
     @staticmethod
@@ -113,7 +112,7 @@ class DatasetBuilder(Protocol[MetaT_contra, DatasetT]):
         cameras: Cameras,
         meta: MetaT_contra,
         indices: list[int],
-        split: Stage,
+        stage: Stage,
     ) -> DatasetT:
         ...
 

@@ -5,7 +5,7 @@ import torch
 
 from internal.dataparsers.xray_dataparser.cameras_builder import RotateXRayCamerasBuilder
 
-from .common import load_test_meta, make_point_cloud, save_cameras
+from ..common import load_test_meta, make_point_cloud, save_cameras
 
 
 def test_cameras_builder_populates_intrinsics_and_time(test_xray_data_root: Path, output_root: Path):
