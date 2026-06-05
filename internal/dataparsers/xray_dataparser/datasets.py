@@ -228,9 +228,9 @@ class ImagesDatasetBuilder(DatasetBuilder[XRayMeta, ImagesDataset]):
         cameras: Cameras,
         meta: XRayMeta,
         indices: list[int],
-        split: Stage,
+        stage: Stage,
     ) -> ImagesDataset:
-        del meta, split
+        del meta, stage
         all_image_paths = sorted((data_dir / self.image_dir_name).glob(self.image_suffix))
         image_paths = [all_image_paths[i] for i in indices]
 
@@ -369,9 +369,9 @@ class FrangiImagesDatasetBuilder(ImagesDatasetBuilder):
         cameras: Cameras,
         meta: XRayMeta,
         indices: list[int],
-        split: Stage,
+        stage: Stage,
     ) -> FrangiImagesDataset:
-        del meta, split
+        del meta, stage
         all_image_paths = sorted((data_dir / self.image_dir_name).glob(self.image_suffix))
         image_paths = [all_image_paths[i] for i in indices]
 
@@ -477,9 +477,9 @@ class TiffDatasetBuilder(DatasetBuilder[XRayMeta, TiffDataset]):
         cameras: Cameras,
         meta: XRayMeta,
         indices: list[int],
-        split: Stage,
+        stage: Stage,
     ) -> TiffDataset:
-        del meta, split
+        del meta, stage
         return TiffDataset(
             cameras=cameras.get_from_indices(indices),
             cfg=self.dataset_config,

@@ -13,7 +13,7 @@ from internal.dataparsers.xray_dataparser.cloud_parsers import (
     get_AABB_corners,
 )
 
-from .common import load_test_meta, save_point_cloud_and_cameras
+from ..common import load_test_meta, save_point_cloud_and_cameras
 
 
 def test_uniform_cloud_parser_creates_regular_grid(test_xray_data_root: Path, output_root: Path):

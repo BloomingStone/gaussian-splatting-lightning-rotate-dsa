@@ -9,7 +9,7 @@ from internal.dataparsers.xray_dataparser.cloud_parsers import FdkCloudParser
 from internal.dataparsers.xray_dataparser.meta import XRayMetaLoader
 from internal.dataparsers.xray_dataparser.splitters import ReconstructionSpliter
 
-from .common import make_point_cloud, save_point_cloud
+from ..common import make_point_cloud, save_point_cloud
 
 
 def test_fdk_cloud_parser_loads_png_file_list_in_sorted_order(tmp_path: Path) -> None:

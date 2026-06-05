@@ -67,7 +67,7 @@ def euler_angles_to_matrix(euler_angles: torch.Tensor, convention: str) -> torch
 
 
 
-class RotateXRayCamerasBuilder(CamerasBuilder):
+class RotateXRayCamerasBuilder(CamerasBuilder[XRayMeta]):
     def build_cameras(self, meta: XRayMeta) -> Cameras:
         """Build Cameras from XRayMeta."""
         n_cameras = meta.num_frames

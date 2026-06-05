@@ -20,7 +20,7 @@ from internal.dataparsers.xray_dataparser.datasets import (
 from internal.dataparsers.xray_dataparser.meta import XRayMetaLoader
 from internal.dataparsers.xray_dataparser.splitters import ReconstructionSpliter
 
-from .common import make_point_cloud, load_test_meta, save_cameras
+from ..common import make_point_cloud, load_test_meta, save_cameras
 
 
 def _make_cameras(test_pigdata_root: Path):
