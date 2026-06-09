@@ -185,7 +185,7 @@
             "console": "integratedTerminal",
             "args": [
                 "fit",
-                "--config", "configs/4D_dsa_generated/rotate_xray_3dgr_deform_with_flow.yaml",
+                "--config", "configs/4D_dsa_generated/rotate_xray_with_flow.yaml",
                 "--data.path", "data/rbf_reader_flow_contrast_LCA",
                 "-n", "rotate-xray__deformable-with-flow",
                 "-v", "debug",

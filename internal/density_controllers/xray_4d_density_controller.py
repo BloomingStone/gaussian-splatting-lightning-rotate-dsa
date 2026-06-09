@@ -28,7 +28,7 @@ class Xray4DDensityControllerImpl(RotateXrayDensityControllerImpl):
 
         # calculate mean grads
         grads = self.xyz_gradient_accum / self.denom
-        grads[grads.isnan()] = 0.0
+        grads[grads.isnan()] = 0.
 
         # Dynamic threshold: max percentile of grad in recent 5 density-control steps.
         grad_norm = grads.norm(dim=-1)
@@ -50,6 +50,7 @@ class Xray4DDensityControllerImpl(RotateXrayDensityControllerImpl):
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
             big_points_ws = gaussian_model.get_scales().max(dim=1).values > 0.1 * prune_extent
+            
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
         self._prune_points(prune_mask, gaussian_model, optimizers)
 

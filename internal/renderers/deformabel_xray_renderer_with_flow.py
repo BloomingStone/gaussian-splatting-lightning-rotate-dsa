@@ -7,8 +7,15 @@ from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from ..cameras import Camera
 from ..deform_models import GSParam
 from ..deform_models.deform_with_flow import DeformsWithFlow, DeformWithFlowConfig, DeformWithFlowModel
+from ..visualizers import FloatColormapVisualizer, ColorMapName
 
-from .deformabel_xray_renderer import DeformableRendererOptimizationConfig, RenderRes, CoronaryDeformableXrayRenderer
+from .deformabel_xray_renderer import (
+    DeformableRendererOptimizationConfig,
+    CoronaryDeformableXrayRenderer,
+    XrayRendererOuputs,
+    ImgT,
+    MetaT,
+)
 
 class DeformableXrayRendererWithFlow(CoronaryDeformableXrayRenderer):
     deform_model: DeformWithFlowModel   # type: ignore
@@ -31,7 +38,7 @@ class DeformableXrayRendererWithFlow(CoronaryDeformableXrayRenderer):
         scaling_modifier=1.0,
         render_types: list|None = None,
         **kwargs,
-    ) -> RenderRes:
+    ) -> XrayRendererOuputs:
         pc = cast(XrayCoronaryGaussianModel, pc)
         gs = GSParam(
             xyz=pc.get_means().detach(),
@@ -73,20 +80,29 @@ class DeformableXrayRendererWithFlow(CoronaryDeformableXrayRenderer):
         )
         
         
-        res = RenderRes(
-            gray_image, gray_coronary,                  # rendered
-            viewspace_points, visibility_filter, radii, # grad meta
-            deforms_mean, deforms_var, deforms,         # deforms and mean & var
-            viewpoint_camera.time, mask,                 # other info     
-            in_warm_up=False
+        return XrayRendererOuputs(
+            images={
+                ImgT.GRAY: (gray_image, FloatColormapVisualizer(ColorMapName.GRAY)),
+                ImgT.CORONARY: (gray_coronary, FloatColormapVisualizer(ColorMapName.GRAY)),
+            },
+            meta={
+                MetaT.VIEWSPACE_POINTS: viewspace_points,
+                MetaT.VISIBILITY_FILTER: visibility_filter,
+                MetaT.RADII: radii,
+                MetaT.DEFORMS_MEAN: deforms_mean,
+                MetaT.DEFORMS_VAR: deforms_var,
+                MetaT.DEFORMS: deforms,
+                MetaT.TIME: viewpoint_camera.time,
+                MetaT.MASK: mask,
+            },
+            is_warm_up=False
         )
-        return res
 
     
     def training_forward(
         self, 
         step: int, 
-        module: LightningModule, 
+        module, 
         viewpoint_camera: Camera, 
         pc,
         bg_color: torch.Tensor,
@@ -149,11 +165,9 @@ class DeformableXrayRendererWithFlow(CoronaryDeformableXrayRenderer):
                 MetaT.VIEWSPACE_POINTS: viewspace_points,
                 MetaT.VISIBILITY_FILTER: visibility_filter,
                 MetaT.RADII: radii,
-                MetaT.D_MOTION_MEAN: deforms_mean,
-                MetaT.D_MOTION_VAR: deforms_var,
-                MetaT.D_MEANS3D: deforms.d_xyz,
-                MetaT.D_ROTATION: deforms.d_rotation,
-                MetaT.D_SCALES: deforms.d_scaling,
+                MetaT.DEFORMS_MEAN: deforms_mean,
+                MetaT.DEFORMS_VAR: deforms_var,
+                MetaT.DEFORMS: deforms,
                 MetaT.TIME: viewpoint_camera.time
             },
             is_warm_up=viewpoint_camera.time.item() <= self.optimization_config.warm_up

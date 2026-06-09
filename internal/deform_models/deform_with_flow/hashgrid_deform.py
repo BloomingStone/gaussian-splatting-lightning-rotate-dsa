@@ -7,7 +7,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 from .deform_with_flow import DeformWithFlowModel, DeformWithFlowConfig, DeformsWithFlow
-from ...utils.network_factory import NetworkFactory
+from ..network_factory import NetworkFactory
 from ...encodings.vector_positional_encoding import VectorPositionalEncoding
 
 

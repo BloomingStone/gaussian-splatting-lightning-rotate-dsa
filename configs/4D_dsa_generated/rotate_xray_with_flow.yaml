@@ -1,25 +1,44 @@
 # 在原有3D形变场的基础上增加density 变化，命名用 with_flow 来区分原来的3D形变场模型
-max_steps: 10000
-save_val: true
-cache_all_images: true
-trainer:
-  check_val_every_n_epoch: 5
-  precision: 16-mixed
+project: rotate_xray_4d
 
-save_iterations: [1000, 5000, 10000]
+max_steps: 20000
+
+trainer:
+  check_val_every_n_epoch: 10
+  precision: 16-mixed
+  callbacks:
+    - class_path: internal.callbacks.scene_saver.SceneSaver
+      init_args:
+        save_iterations: [1000, 10000, 20000]
+        saver:
+          class_path: internal.savers.x_ray_saver_with_flow.XRaySaver_Flow
+          init_args:
+            save_ckpt: true
+            save_vtp: true
+            save_nii: true
+            save_phase: 0.
+            save_time_or_type: 0.5
+    - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
+    - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
+    - class_path: internal.callbacks.save_image.SaveImage
+      init_args:
+        save_val_output: true
+        max_save_val_output: 10
+        max_image_saving_threads: 16
+    - class_path: internal.callbacks.callbacks.ProgressBar
 
 data:
   parser: 
-    class_path: internal.dataparsers.xray_dataparser.parser.XRayDataParser
+    class_path: internal.dataparsers.xray_dataparser.parser.XRayDataParserBuilder
     init_args:
       meta_loader:
         class_path: internal.dataparsers.xray_dataparser.meta.XRayMetaLoader
       cloud_parser:
         class_path: internal.dataparsers.xray_dataparser.cloud_parsers.RandomCloudParser
         init_args:
-          num_points: 100_000
+          num_points: 10_000
       spliter:
-        class_path: internal.dataparsers.xray_dataparser.splitters.RenderNewViewsSpliter
+        class_path: internal.dataparsers.xray_dataparser.splitters.UniformIntervalSpliter
         init_args:
           train_ratio: 0.8
       cameras_builder:
@@ -28,19 +47,14 @@ data:
         class_path: internal.dataparsers.xray_dataparser.datasets.ImagesDatasetBuilder
         init_args:
           dataset_config:
-            class_path: internal.dataparsers.xray_dataparser.datasets.ImagesDatasetConfig
-            init_args:
-              image_uint8: false
+            image_uint8: false
 
 model:
-  max_save_val_output: 10
   renderer:
     class_path: internal.renderers.deformabel_xray_renderer_with_flow.DeformableXrayRendererWithFlow
     init_args:
       optimization_config:
         enable_ast: true
-        log_gradients: true
-        grad_log_interval: 50
       deform_model_config:
         class_path: internal.deform_models.deform_with_flow.HashGridDeformConfig
         init_args:
@@ -54,22 +68,8 @@ model:
       fused_ssim: true
       w_gray_loss: 1.0
       w_ssim_loss: 1.0
-      w_d_density: 10.0
+      w_d_density: 0.0
   gaussian:
     class_path: internal.models.xray_coronary_gaussian_with_flow.XrayCoronaryGaussianWithFlow
-    init_args:
-      optimization:
-        log_gradients: true
-        grad_log_interval: 50
   density:
     class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
-  renderer_output_types: 
-    - gray_image
-    - gray_coronary
-  saver:
-    class_path: internal.savers.x_ray_saver_with_flow.XRaySaver
-    init_args:
-      save_ckpt: false
-      save_vtp: false
-      save_nii: true
-      save_phase: 0.
