@@ -7,6 +7,7 @@ import torch
 from torch.utils.data import Dataset
 
 from ..cameras import Camera, Cameras
+from ..visualizers import Visualizer
 
 class Meta:
     pass
@@ -184,8 +185,21 @@ class DataParser(Generic[MetaT, DatasetT]):
     dataset_builder: DatasetBuilder[MetaT, DatasetT]
     
     filter_visible_points: bool = True
+    """
+    Whether to filter out points that are not visible in any camera view.
+    """
     
     meta: MetaT | None = None
+    """
+    Loaded metadata for the dataset.
+    """
+    
+    gt_image_visualizer: None|Visualizer = None
+    """
+    Optional visualizer for GT images. If provided, it will be used to visualize GT images in save_image callback. 
+    This is useful for datasets where GT images are not directly viewable (e.g., raw density projs) and need to 
+    be converted to RGB for visualization.
+    """
 
     def get_outputs(self, data_dir: Path) -> DataParserOutputs[MetaT]:
         """

@@ -13,6 +13,7 @@ from .datasets import (
     TiffDatasetBuilder,
 )
 from .splitters import ReconstructionSpliter, XRaySpliter
+from ...visualizers.gamma_visulizer import GammaVisualizer
 
 
 @dataclass
@@ -25,6 +26,8 @@ class XRayDataParserBuilder(DataParserBuilder):
     filter_visible_points: bool = True
     
     def build(self):
+        visualizer = GammaVisualizer(gamma=0.1) if isinstance(self.dataset_builder, TiffDatasetBuilder) else None
+        
         return DataParser(
             meta_loader=self.meta_loader,
             cloud_parser=self.cloud_parser,
@@ -32,4 +35,5 @@ class XRayDataParserBuilder(DataParserBuilder):
             cameras_builder=self.cameras_builder,
             dataset_builder=self.dataset_builder,
             filter_visible_points=self.filter_visible_points,
+            gt_image_visualizer=visualizer,
         )

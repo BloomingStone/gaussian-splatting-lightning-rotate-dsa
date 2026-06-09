@@ -3,3 +3,4 @@ from .float_colormap_visualizer import FloatColormapVisualizer, ColorMapName, no
 from .feature_pca_visualizer import FeaturePCAVisualizer, pca_colormap
 from .depth_visualizer import DepthMapVisualizer
 from .normalmap_visualizer import NormalMapVisualizer
+from .gamma_visulizer import GammaVisualizer

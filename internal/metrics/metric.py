@@ -69,15 +69,6 @@ class metric3DConfig:
 
     thresholds_percentile: tuple[float, ...] = (0.99, 0.995, 0.998)
 
-    closing_radius_vox: int = 1
-    """Radius (voxels) for morphological closing after thresholding."""
-
-    connectivity: int = 1
-    """3D connectivity for connected-component analysis (1, 2, or 3)."""
-
-    min_component_size_vox: int = 0
-    """Minimum component size in voxels (0 = no filtering)."""
-
 
 class CommonImageMetricImpl(MetricImpl):
     def __init__(self, config, *args, **kwargs) -> None:
