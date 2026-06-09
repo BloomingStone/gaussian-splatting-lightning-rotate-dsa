@@ -1,32 +1,41 @@
 from dataclasses import dataclass
-from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Literal
+
 import torch
 
-
-from .x_ray_saver import XRaySaver, XRaySaverModule
+from .saver import Saver, ThreadedSaverModule
+from .x_ray_saver import (
+    VtpSavePayload,
+    NiftiSavePayload,
+    SaveOutputsPayload,
+    _save_outputs,
+)
 from ..renderers.deformabel_xray_renderer_with_flow import DeformableXrayRendererWithFlow
 from ..deform_models import Deforms, GSParam
 from ..models.xray_coronary_gaussian_with_flow import XrayCoronaryGaussianModelWithFlow
+from ..gaussian_splatting import GaussianSplatting
+from ..dataparsers.xray_dataparser import XRayMeta
 
 
 @dataclass
-class XRaySaver_Flow(XRaySaver):
-    save_time_or_type: float|Literal["mean", "std", "var", "mean+2std"] = "mean+2std"
+class XRaySaver_Flow(Saver):
+    save_ckpt: bool = True
+    save_vtp: bool = True
+    save_nii: bool = True
+    save_phase: float = 0.0
+    save_time_or_type: float | Literal["mean", "std", "var", "mean+2std"] = "mean+2std"
     
-    def instantiate(self, *args, **kwargs) -> "XRaySaverModule":
-        return XRaySaverModule(self)
+    def instantiate(self, *args, **kwargs) -> "XRaySaverModule_Flow":
+        return XRaySaverModule_Flow(self)
 
 
-class XRaySaverModule_Flow(XRaySaverModule):
+class XRaySaverModule_Flow(ThreadedSaverModule):
     def __init__(self, config: XRaySaver_Flow):
-        super().__init__(config)
+        super().__init__(thread_name_prefix="xray-save")
         self.config = config
-        self._save_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="xray-save")
-        self._pending_save: Future | None = None
 
 
-    def save(self, pl_module):
+    def save(self, pl_module: GaussianSplatting):
         if pl_module.trainer.global_rank != 0:
             return
 
@@ -78,17 +87,25 @@ class XRaySaverModule_Flow(XRaySaverModule):
                 raise ValueError(f"Invalid save_time_or_type: {self.config.save_time_or_type}")
         
         gs_param = GSParam(xyz=means3D, rotation=rotation, scaling=scales, density=density)
-        vtp_payload = self._make_vtp_save_payload(
+        vtp_payload = VtpSavePayload.build_from_gsparam(
             pl_module, 
             gs_param
         ) if self.config.save_vtp else None
         
-        nifti_payload = self._make_nii_save_payload(
+        datamodule = pl_module.get_datamodule()
+        meta = datamodule.dataparser.meta
+        assert isinstance(meta, XRayMeta)
+        volume_shape = tuple(meta.volume_size)
+        coronary_affine = meta.centering_affine
+
+        nifti_payload = NiftiSavePayload.build_from_gsparam(
             pl_module, 
-            source_deformed
+            gs_param,
+            volume_shape,
+            coronary_affine,
         ) if self.config.save_nii else None
 
 
-        payload = self.SaveOutputsPayload(vtp=vtp_payload, nifti=nifti_payload)
-        self._pending_save = self._save_executor.submit(self._save_outputs, payload)
+        payload = SaveOutputsPayload(vtp=vtp_payload, nifti=nifti_payload)
+        self._submit_save_task(_save_outputs, payload)
         

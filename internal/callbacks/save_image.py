@@ -21,6 +21,7 @@ from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 from torchvision.utils import _log_api_usage_once, make_grid
 
 from ..renderers.renderer import RendererOutputs
+from ..gaussian_splatting import GaussianSplatting
 
 
 
@@ -157,7 +158,7 @@ class SaveImage(Callback):
     #  Per-batch collection
     # ------------------------------------------------------------------
 
-    def _handle_batch_end(self, trainer, pl_module, outputs: RendererOutputs, batch, batch_idx: int, stage: str) -> None:
+    def _handle_batch_end(self, trainer, pl_module: GaussianSplatting, outputs: RendererOutputs, batch, batch_idx: int, stage: str) -> None:
         if self.save_val_output is False or trainer.global_rank != 0:
             return
         if self.max_save_val_output >= 0 and batch_idx >= self.max_save_val_output:
@@ -169,6 +170,10 @@ class SaveImage(Callback):
         gt_image = image_info[1]
         if gt_image is None:
             return
+        
+        gt_image_vis = pl_module.get_datamodule().dataparser.gt_image_visualizer
+        if gt_image_vis is not None:
+            gt_image = gt_image_vis.process(gt_image)
 
         output_images = {}
         for key, (img, vis) in outputs.images.items():
@@ -193,10 +198,10 @@ class SaveImage(Callback):
     def on_test_epoch_start(self, trainer, pl_module) -> None:
         self._start_workers(trainer, pl_module)
 
-    def on_validation_batch_end(self, trainer, pl_module, outputs: RendererOutputs, batch, batch_idx, dataloader_idx=0) -> None:
+    def on_validation_batch_end(self, trainer, pl_module: GaussianSplatting, outputs: RendererOutputs, batch, batch_idx, dataloader_idx=0) -> None:
         self._handle_batch_end(trainer, pl_module, outputs, batch, batch_idx, stage="val")
 
-    def on_test_batch_end(self, trainer, pl_module, outputs: RendererOutputs, batch, batch_idx, dataloader_idx=0) -> None:
+    def on_test_batch_end(self, trainer, pl_module: GaussianSplatting, outputs: RendererOutputs, batch, batch_idx, dataloader_idx=0) -> None:
         self._handle_batch_end(trainer, pl_module, outputs, batch, batch_idx, stage="test")
 
     def on_validation_epoch_end(self, trainer, pl_module) -> None:
