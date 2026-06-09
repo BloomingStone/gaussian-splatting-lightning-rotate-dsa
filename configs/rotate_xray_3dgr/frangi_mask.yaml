@@ -33,7 +33,7 @@ data:
       cloud_parser:
         class_path: internal.dataparsers.xray_dataparser.cloud_parsers.RandomCloudParser
         init_args:
-          num_points: 100_000
+          num_points: 10_000
       spliter:
         class_path: internal.dataparsers.xray_dataparser.splitters.UniformIntervalSpliter
         init_args:
@@ -58,12 +58,12 @@ model:
           log2_hashmap_size: 19
           max_resolution: 2048
   metric:
-    class_path: internal.metrics.RotateXrayMetricsWeightPatch
+    class_path: internal.metrics.RotateXrayMetricsWithMasks
     init_args:
       fused_ssim: true
       w_gray_loss: 1.0
       w_ssim_loss: 1.0
-      w_patch_loss: 0.1
+      w_mask_loss: 1.0
   gaussian:
     class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
   density:

@@ -85,6 +85,24 @@
             }
         },
         {
+            "name": "rotate x-ray train [frangi mask metric]",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "fit",
+                "--config", "configs/rotate_xray_3dgr/frangi_mask.yaml",
+                "--data.path", "data/Diseased_17",
+                "-n", "rot-xca_frangi_mask",
+                "-v", "frangi-mask-loss",
+                "--logger", "wandb"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
+            }
+        },
+        {
             "name": "rotate x-ray train [patch metric]",
             "type": "debugpy",
             "request": "launch",
