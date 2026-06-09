@@ -5,7 +5,7 @@ from typing import override, cast
 
 from .rotate_xray_density_controller import RotateXrayDensityController
 from .rotate_xray_density_controller import RotateXrayDensityControllerImpl
-from .density_controller import Utils
+from . import utils as Utils
 from ..gaussian_splatting import GaussianSplatting
 from ..models.xray_4d_gaussian import GaussianInits, Xray4DGaussianModel
 
@@ -30,15 +30,15 @@ class Xray4DDensityControllerImpl(RotateXrayDensityControllerImpl):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
 
-        # Dynamic threshold: max p95 of recent 5 density-control steps.
+        # Dynamic threshold: max percentile of grad in recent 5 density-control steps.
         grad_norm = grads.norm(dim=-1)
         valid_grad_norm = grad_norm[torch.isfinite(grad_norm)]
         if valid_grad_norm.numel() > 0:
-            grad_p9 = float(torch.quantile(valid_grad_norm, 0.98).item())
-            self._recent_grad_p9.append(grad_p9)
-            self._grad_threshold = max(self._recent_grad_p9)
+            grad_percentile = float(torch.quantile(valid_grad_norm, self.config.densify_grad_percentile).item())
+            self._recent_grad_percentile.append(grad_percentile)
+            self._grad_threshold = max(self._recent_grad_percentile)
         elif self._grad_threshold is None:
-            self._grad_threshold = self.config.densify_grad_threshold
+            self._grad_threshold = float(torch.quantile(valid_grad_norm, self.config.densify_grad_percentile).item())
 
         # densify
         self._densify_and_clone(grads, gaussian_model, optimizers)

@@ -11,6 +11,8 @@ import math
 import numpy as np
 import torch
 from monai.losses.cldice import SoftclDiceLoss
+from scipy.ndimage import distance_transform_edt
+from skimage.morphology import skeletonize
 from monai.metrics import (
     compute_average_precision,          # type: ignore[import]
     compute_confusion_matrix_metric,    # type: ignore[import]
@@ -60,7 +62,8 @@ def compute_all_metrics(
         spacing: Voxel spacing in mm.
 
     Returns:
-        dict with keys: ``dice``, ``precision``, ``recall``, ``hd95``, ``cldice``.
+        dict with keys: ``dice``, ``precision``, ``recall``, ``hd95``, ``cldice``,
+        ``centerline_dist_avg``, ``hd95_cl``.
     """
     # --- Convert gt to torch on the same device as pred ---
     if isinstance(gt, np.ndarray):
@@ -84,6 +87,8 @@ def compute_all_metrics(
             "recall": 1.0,
             "hd95": 0.0,
             "cldice": 1.0,
+            "dist_avg_cl": 0.0,
+            "hd95_cl": 0.0,
         }
 
     # --- Add batch/channel dims: (1, 1, D, H, W) ---
@@ -122,13 +127,90 @@ def compute_all_metrics(
     gt_oh = torch.cat([1.0 - gt_bc, gt_bc], dim=1)
     cldice = float((1.0 - _soft_cldice_fn(gt_oh, pred_oh)).item())
 
+    # ── Centerline-based distances (CPU numpy) ──
+    if one_empty:
+        centerline_dist_avg = float("inf")
+        hd95_cl = float("inf")
+    else:
+        pred_np = pred.cpu().numpy()
+        gt_np = gt.cpu().numpy()
+        centerline_dist_avg, hd95_cl = _centerline_distances(pred_np, gt_np, spacing)
+
     return {
         "dice": dice,
         "precision": precision,
         "recall": recall,
         "hd95": hd95,
         "cldice": cldice,
+        "dist_avg_cl": centerline_dist_avg,
+        "hd95_cl": hd95_cl,
     }
+
+
+# ---------------------------------------------------------------------------
+# Centerline-based metrics
+# ---------------------------------------------------------------------------
+
+
+def _centerline_distances(
+    pred_np: np.ndarray,
+    gt_np: np.ndarray,
+    spacing: tuple[float, float, float],
+) -> tuple[float, float]:
+    """Compute centerline-based distance metrics between two binary masks.
+
+    Extracts the skeleton (centerline) of each mask using morphological
+    thinning, then computes the bidirectional point-to-surface distances.
+
+    Args:
+        pred_np: (D, H, W) bool numpy array — predicted segmentation.
+        gt_np: (D, H, W) bool numpy array — ground-truth segmentation.
+        spacing: Voxel spacing in mm ``(sz, sy, sx)``.
+
+    Returns:
+        Tuple of ``(centerline_dist_avg, hd95_cl)``:
+
+        - **centerline_dist_avg**: average symmetric centerline distance (mm).
+        - **hd95_cl**: 95th-percentile Hausdorff distance on centerlines (mm).
+    """
+    # --- Skeletonize ---
+    sk_pred = skeletonize(pred_np, method="lee")       # (D, H, W) bool
+    sk_gt = skeletonize(gt_np, method="lee")            # (D, H, W) bool
+
+    # --- Quick edge cases ---
+    n_pred = sk_pred.sum()
+    n_gt = sk_gt.sum()
+
+    if n_pred == 0 and n_gt == 0:
+        return (0.0, 0.0)
+
+    # --- Distance transforms (with spacing) ---
+    # Convert spacing to (D, H, W) order (z, y, x)
+    sampling = tuple(float(s) for s in spacing)         # (sz, sy, sx)
+    dt_pred: np.ndarray = distance_transform_edt(~sk_pred, sampling=sampling)  # type: ignore[assignment]
+    dt_gt: np.ndarray = distance_transform_edt(~sk_gt, sampling=sampling)     # type: ignore[assignment]
+
+    # --- Gather distances ---
+    if n_pred > 0:
+        dists_pred_to_gt = dt_gt[sk_pred]   # distances from pred skeleton → gt skeleton
+    else:
+        dists_pred_to_gt = np.array([], dtype=np.float64)
+
+    if n_gt > 0:
+        dists_gt_to_pred = dt_pred[sk_gt]   # distances from gt skeleton → pred skeleton
+    else:
+        dists_gt_to_pred = np.array([], dtype=np.float64)
+
+    # --- Combine bidirectional distances ---
+    all_dists = np.concatenate([dists_pred_to_gt, dists_gt_to_pred])
+
+    if len(all_dists) == 0:
+        return (float("inf"), float("inf"))
+
+    centerline_dist_avg = float(all_dists.mean())
+    hd95_cl = float(np.percentile(all_dists, 95))
+
+    return (centerline_dist_avg, hd95_cl)
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,9 @@ import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 from lightning import LightningModule
+from torch.optim.optimizer import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
+import pyvista as pv
 
 from .gaussian import (
     Gaussian, 
@@ -21,9 +24,10 @@ from ..utils.general_utils import (
     inverse_sigmoid,
     strip_symmetric,
     build_scaling_rotation,
+    knn
 )
 from ..schedulers import ExponentialDecayScheduler
-from ..optimizers import OptimizerConfig, Adam
+from ..optimizers import OptimizerConfig, AdamConfig
 from ..deform_models.deform_model import DeformsMARecoder
 
 @dataclass
@@ -52,10 +56,7 @@ class OptimizationConfig:
 
     rotations_lr: float = 0.001
 
-    log_gradients: bool = False
-    grad_log_interval: int = 100
-
-    optimizer: OptimizerConfig = field(default_factory=Adam)
+    optimizer: OptimizerConfig = field(default_factory=AdamConfig)
 
     def get_density_dc_lr(self) -> float:
         return self.density_lr if self.density_dc_lr is None else self.density_dc_lr
@@ -246,7 +247,7 @@ class HasDensityGetter(ABC):
         freq_res = self.density_res_freq[:, lower_bound:self.active_F]
         return torch.sum(freq_res ** 2, dim=-1, keepdim=True)
     
-    def get_density_std(self, do_activate: bool, lower_bound: int=0) -> torch.Tensor:
+    def get_density_std(self, do_activate: bool=True, lower_bound: int=0) -> torch.Tensor:
         std = torch.sqrt(self.get_density_res_energy(lower_bound=lower_bound)+1e-6)
         if do_activate:
             std = self.density_activateion(std)
@@ -316,7 +317,6 @@ class Xray4DGaussianModel(
         self.rotation_inverse_activation = _identity_act
         
         self.deforms_recorder = DeformsMARecoder()
-        self._grad_hook_registered = False
 
     @property
     def n_gaussians(self) -> int:
@@ -332,6 +332,7 @@ class Xray4DGaussianModel(
     def setup_from_pcd(
             self, xyz: Tensor|np.ndarray, 
             rgb: Any, 
+            init_scale: float = 1.0,
             *args, 
             **kwargs 
         ):
@@ -345,9 +346,10 @@ class Xray4DGaussianModel(
         
         fused_point_cloud = xyz_coronary
 
-        from simple_knn._C import distCUDA2
-        dist2 = torch.clamp_min(distCUDA2(fused_point_cloud.cuda()), 0.0000001).to(fused_point_cloud.device)
-        scales = torch.log(torch.sqrt(dist2))[..., None].repeat(1, 3)
+        # Initialize the GS size to be the average dist of the 3 nearest neighbors
+        dist2_avg = (knn(fused_point_cloud, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
+        dist_avg = torch.sqrt(dist2_avg)
+        scales = torch.log(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
 
         n_gaussians = fused_point_cloud.shape[0]
         inits = GaussianInits(n_gaussians, density_res_freq_max=self.config.optimization.density_freq_res_max)
@@ -395,10 +397,9 @@ class Xray4DGaussianModel(
     
     @override
     def training_setup(self, module: LightningModule) -> tuple[
-        list[torch.optim.Optimizer] | torch.optim.Optimizer | None,
-        list[torch.optim.lr_scheduler.LRScheduler] | torch.optim.lr_scheduler.LRScheduler | None
+        list[Optimizer] | Optimizer | None,
+        list[LRScheduler] | LRScheduler | None
     ]:
-        self._register_grad_monitor_hook(module)
 
         # ---- adaptively scaled according to the camera distribution radius
         spatial_lr_scale = self.config.optimization.spatial_lr_scale
@@ -419,8 +420,8 @@ class Xray4DGaussianModel(
             
         optimizer_factory = self.config.optimization.optimizer
         
-        opt_list: list[torch.optim.Optimizer] = []
-        schedule_list: list[torch.optim.lr_scheduler.LRScheduler] = []
+        opt_list: list[Optimizer] = []
+        schedule_list: list[LRScheduler] = []
         
         name = "means"
         lr = optimization_config.means_lr_init
@@ -551,64 +552,17 @@ class Xray4DGaussianModel(
     def get_non_pre_activated_properties(self):
         raise NotImplementedError("get_non_pre_activated_properties is not implemented yet")
     
-    
-    @staticmethod
-    def _grad_stats(parameters: list[torch.Tensor]) -> dict[str, float]:
-        total_sq_norm = 0.0
-        max_abs = 0.0
-        nan_count = 0.0
-        inf_count = 0.0
-        grad_param_count = 0.0
-        grad_elem_count = 0.0
+    def to_polydata(self) -> pv.PolyData:
+        """
+        将当前 GS 属性导出为 pv.PolyData。
+        points = means (xyz 坐标)，其余属性作为 point_data arrays。
+        每个子类自行决定导出哪些属性。
+        """
+        raise NotImplementedError()
 
-        for p in parameters:
-            g = p.grad
-            if g is None:
-                continue
-            grad_param_count += 1.0
-            grad_elem_count += float(g.numel())
-            g32 = g.detach().float()
-            nan_count += float(torch.isnan(g32).sum().item())
-            inf_count += float(torch.isinf(g32).sum().item())
-            total_sq_norm += float(torch.square(g32).sum().item())
-            max_abs = max(max_abs, float(g32.abs().max().item()))
-
-        return {
-            "l2": total_sq_norm ** 0.5,
-            "max_abs": max_abs,
-            "nan_count": nan_count,
-            "inf_count": inf_count,
-            "grad_param_count": grad_param_count,
-        }
-
-    def _register_grad_monitor_hook(self, module: LightningModule):
-        if self._grad_hook_registered:
-            return
-
-        def _log_gradients(outputs, batch, gaussian_model, global_step: int, pl_module: LightningModule):
-            optimization_config = self.config.optimization
-            if optimization_config.log_gradients is False:
-                return
-            if optimization_config.grad_log_interval <= 0:
-                return
-            if global_step % optimization_config.grad_log_interval != 0:
-                return
-            if pl_module.global_rank != 0:
-                return
-            if pl_module.logger is None:
-                return
-
-            metrics_to_log: dict[str, float] = {}
-            for key in self._keys:
-                stats = self._grad_stats([self.gaussians[key]])
-                metrics_to_log[f"stats/gs_grad/{key}/l2"] = stats["l2"]
-                metrics_to_log[f"stats/gs_grad/{key}/max_abs"] = stats["max_abs"]
-                metrics_to_log[f"stats/gs_grad/{key}/nan_count"] = stats["nan_count"]
-                metrics_to_log[f"stats/gs_grad/{key}/inf_count"] = stats["inf_count"]
-            metrics_to_log["stats/gs_active_F"] = float(self._active_F)
-            metrics_to_log["stats/gs_density_freq_res_mean"] = self.density_res_freq.mean().item()
-            
-            pl_module.logger.log_metrics(metrics_to_log, step=pl_module.trainer.global_step)
-
-        module.on_after_backward_hooks.append(_log_gradients)
-        self._grad_hook_registered = True
+    def setup_from_polydata(self, polydata: pv.PolyData, *args, **kwargs):
+        """
+        从 pv.PolyData 初始化 GS 属性。
+        每个子类自行决定读取哪些 point_data 字段。
+        """
+        raise NotImplementedError()
