@@ -65,6 +65,12 @@ class CLI(LightningCLI):
             help="WanDB project name"
         )
         parser.add_argument(
+            "--tags", 
+            type=Optional[List[str]], 
+            default=None, 
+            help="Tags for the experiment, only works when --logger is set to 'wandb'"
+        )
+        parser.add_argument(
             "--output", 
             type=Path, 
             default=Path(__file__).parent.parent / "outputs",
@@ -171,6 +177,8 @@ class CLI(LightningCLI):
                 wandb_name = "{}_{}".format(wandb_name, config.version)
             setattr(logger_config.init_args, "name", wandb_name)
             setattr(logger_config.init_args, "project", config.project)
+            if config.tags is not None:
+                setattr(logger_config.init_args, "tags", config.tags)
         elif config.logger == "none" or config.logger == "None" or config.logger == "false" or config.logger == "False":
             logger_config = False
         else:

@@ -1,21 +1,72 @@
-from typing import cast
+from typing import Any, Optional, Tuple, cast
+from dataclasses import dataclass
+from enum import StrEnum
+
 import torch
 from torch import Tensor
+from lightning import LightningModule
 from xray_gaussian_rasterization_voxelization import (
     GaussianRasterizationSettings,
     GaussianRasterizer,
 )
 
-from lightning import LightningModule
+from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
+from .renderer import Renderer, RendererOutputs
 from ..deform_models import GSParam
 from ..cameras import Camera
-from .density_xray_renderer import XrayRenderer as DensityXrayRenderer
-from .density_xray_renderer import XrayRendererOuputs, XrayCoronaryGaussianModel, ImgT, MetaT
-from ..visualizers import GammaVisualizer, ColorMapName, Visualizer
+from ..visualizers import FloatColormapVisualizer, ColorMapName, Visualizer
 
 
-class XrayRenderer(DensityXrayRenderer):
+@dataclass
+class RendererOptimizationConfig:
+    lr: float = 1e-3
+    lr_final_factor: float = 0.002
+    eps: float = 1e-8
+
+
+@dataclass
+class XrayRendererOuputs(RendererOutputs):
+    class ImageTypes(StrEnum):
+        GRAY = "gray"
     
+    class MetaTypes(StrEnum):
+        VIEWSPACE_POINTS = "viewspace_points"
+        VISIBILITY_FILTER = "visibility_filter"
+        RADII = "radii"
+    
+    images: dict[ImageTypes, tuple[Tensor, Visualizer|None]]    # type: ignore
+    meta: dict[MetaTypes, Any]   # type: ignore
+
+    @property
+    def gray_image(self) -> Tensor:
+        return self.images[self.ImageTypes.GRAY][0]
+
+    @property
+    def viewspace_points(self) -> Tensor:
+        return self.meta[self.MetaTypes.VIEWSPACE_POINTS]
+
+    @property
+    def visibility_filter(self) -> Tensor:
+        return self.meta[self.MetaTypes.VISIBILITY_FILTER]
+
+    @property
+    def radii(self) -> Tensor:
+        return self.meta[self.MetaTypes.RADII]
+
+ImgT = XrayRendererOuputs.ImageTypes
+MetaT = XrayRendererOuputs.MetaTypes
+
+
+class XrayRenderer(Renderer):
+
+    def __init__(
+            self,
+            optimization_config: RendererOptimizationConfig,
+    ) -> None:
+        super().__init__()
+        self.optimization_config = optimization_config
+        self._grad_hook_registered = False
+
     def forward(
         self,
         viewpoint_camera: Camera,
@@ -41,7 +92,7 @@ class XrayRenderer(DensityXrayRenderer):
         
         res = XrayRendererOuputs(
             images={
-                ImgT.GRAY: (gray_image, GammaVisualizer(gamma=0.1, colormap=ColorMapName.GRAY)),
+                ImgT.GRAY: (gray_image, FloatColormapVisualizer(ColorMapName.GRAY)),
             },
             meta={
                 MetaT.VIEWSPACE_POINTS: viewspace_points,
@@ -81,7 +132,7 @@ class XrayRenderer(DensityXrayRenderer):
         
         return XrayRendererOuputs(
             images={
-                ImgT.GRAY: (gray_image, GammaVisualizer(gamma=0.1, colormap=ColorMapName.GRAY)),
+                ImgT.GRAY: (gray_image, FloatColormapVisualizer(ColorMapName.GRAY)),
             },
             meta={
                 MetaT.VIEWSPACE_POINTS: viewspace_points,
@@ -89,13 +140,13 @@ class XrayRenderer(DensityXrayRenderer):
                 MetaT.RADII: radii
             },
         )
- 
     
     def _render(
         self, 
         viewpoint_camera: Camera,
         gs: GSParam,
-    ) -> tuple[Tensor, dict[str, Tensor]]:
+    ) -> Tuple[Tensor, dict[str, Tensor]]:
+
         rasterizer = GaussianRasterizer(GaussianRasterizationSettings(
             image_height=int(viewpoint_camera.height.item()),
             image_width=int(viewpoint_camera.width.item()),
@@ -121,12 +172,16 @@ class XrayRenderer(DensityXrayRenderer):
             rotations=gs.rotation,
         )
         
-        # xray image formation model: I = I0 * exp(-sigma * d), where sigma is the density and d is the effective diameter (related to radii)
-        rendered_image = torch.exp( - torch.clamp(rendered_image, min=1e-3, max=14.0))
-        
         meta = {
             "viewspace_points": means_2D,
             "radii": radii,
         }
         
         return rendered_image, meta
+    
+    
+    def setup(self, stage: str, lightning_module, *args: Any, **kwargs: Any) -> Any:
+        if stage == "fit":
+            self.train_set_length = len(lightning_module.trainer.datamodule.dataparser_outputs.train_set)
+        
+        total_steps = lightning_module.trainer.max_steps

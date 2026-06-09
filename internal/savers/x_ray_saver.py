@@ -277,6 +277,7 @@ class NiftiSavePayload:
             deform_model, volume_shape, affine, zoomed_shape=(128, 128, 128),
             save_uniformed_time=save_uniformed_time, save_phase=save_phase
         )
+        torch.cuda.empty_cache()  # avoid CUDA OOM
         
         output_root = Path(pl_module.hparams["output_path"])
         epoch = pl_module.trainer.current_epoch

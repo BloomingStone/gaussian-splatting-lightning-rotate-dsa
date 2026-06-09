@@ -177,6 +177,48 @@
             "env": {
                 "CUDA_VISIBLE_DEVICES": "1"
             }
+        },
+        {
+            "name": "rotate dsa[3DGR-CAR R2guassian]",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "fit",
+                "--config", "configs/3DGRCAR/3DGR-CAR.yaml",
+                "--data.path", "data/asoca/",
+                "-n", "3DGR-CAR",
+                "-v", "debug",
+                "--overwrite_output",
+                "--logger", "wandb",
+                "--tags", "[\"3DGR-CAR\", \"debug\"]"
+                // "--tags+", "test",
+                // "--tags+", "debug"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
+            }
+        },
+        {
+            "name": "rotate dsa[3DGR-CAR XCA-RAW]",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "fit",
+                "--config", "configs/3DGRCAR/3DGR-CAR_xca-raw.yaml",
+                "--data.path", "data/asoca/",
+                "-n", "3DGR-CAR_XCA-RAW",
+                "-v", "debug",
+                "--overwrite_output",
+                // "--logger", "wandb",
+                // "--tags", "[\"3DGR-CAR\", \"debug\"]"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
+            }
         }
     ]
 }

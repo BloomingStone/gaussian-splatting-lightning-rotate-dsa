@@ -1,0 +1,65 @@
+project: 3DGR-CAR_XCA-RAW    # for wandb
+max_steps: 10000
+
+trainer:
+  log_every_n_steps: 2
+  check_val_every_n_epoch: 500
+  precision: 16-mixed
+  callbacks:
+    - class_path: internal.callbacks.scene_saver.SceneSaver
+      init_args:
+        save_iterations: [2000]
+        saver:
+          class_path: internal.savers.x_ray_saver_static.XRaySaver
+          init_args:
+            save_ckpt: false
+            save_vtp: false
+            save_nii: true
+            threshold: null
+    - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
+    - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
+    - class_path: internal.callbacks.save_image.SaveImage
+      init_args:
+        save_val_output: true
+        max_save_val_output: 10
+        max_image_saving_threads: 2
+    - class_path: internal.callbacks.callbacks.ProgressBar
+
+
+data:
+  parser: 
+    class_path: internal.dataparsers.threeDGR_parser.ThreeDGRCarDataParserBuilder
+    init_args:
+      meta_loader:
+        case_name: Diseased_1_lca
+        default_use_proj: xca-raw
+        label_sub_dir_name: ori_labels
+        has_coronary_type: false
+      cloud_parser:
+        class_path: internal.dataparsers.threeDGR_parser.RandomCloudParser
+        init_args:
+          num_points: 10_000
+      spliter:
+        num_views: 4
+        val_on_selected_views: false
+model:
+  renderer:
+    class_path: internal.renderers.xray_renderer.XrayRenderer
+  metric:
+    class_path: internal.metrics.xray_metrics_static.StaticXrayMetrics
+    init_args:
+      metric3d_cfg:
+        thresholds_absolute: []
+        thresholds_percentile: []
+      fused_ssim: true
+      w_gray_loss: 1.0
+      w_ssim_loss: 1.0
+      
+  gaussian:
+    class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
+  density:
+    class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
+    init_args:
+      densification_interval: 300
+      densify_grad_percentile: 0.95
+      cull_density_threshold: 5e-5
