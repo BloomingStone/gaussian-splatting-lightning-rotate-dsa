@@ -157,7 +157,7 @@ class XRayMetaLoader(MetaLoader[XRayMeta]):
             label_3d_info = Label3DInfo(
                 data=nii_img.get_fdata().astype(np.uint8),
                 affine=nii_img.affine,
-                aabb=_compute_aabb(nii_img.get_fdata()),
+                aabb=compute_aabb_mask(nii_img.get_fdata()),
                 filename=self.label_3d_filename,
             )
         else:
@@ -177,7 +177,7 @@ class XRayMetaLoader(MetaLoader[XRayMeta]):
         )
 
 
-def _compute_aabb(label: np.ndarray) -> np.ndarray:
+def compute_aabb_mask(label: np.ndarray) -> np.ndarray:
     """Return boolean mask of the axis-aligned bounding box of *label*."""
     mask = label > 0
     if not mask.any():

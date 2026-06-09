@@ -56,7 +56,17 @@ def float_colormap(image: Tensor, colormap: ColorMapName = ColorMapName.TURBO) -
     """
     image = torch.nan_to_num(image, 0)
     if colormap == ColorMapName.GRAY:
-        return image.repeat(3, 1, 1)
+        match image.shape:
+            case (_, _):
+                image = image[None].repeat(3, 1, 1)   # (3, H, W)
+            case (1, _, _):
+                image = image.repeat(3, 1, 1)   # (3, H, W)
+            case (3, _, _):
+                pass    # already in (3, H, W) format
+            case _:
+                raise ValueError(f"Unsupported image shape {image.shape} for GRAY colormap")
+        return image
+            
     
     image_long = (image * 255).long()
     image_long_min = torch.min(image_long)

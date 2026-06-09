@@ -442,7 +442,8 @@ class TiffDataset(GSDataset):
         return [f"{self.tiff_path.name}_{idx}" for idx in self.source_indices]
 
     def get_image(self, index: int) -> torch.Tensor:
-        image = self.tiff_data[self.source_indices[index]].unsqueeze(0)
+        # raw density projection data, use parser.visualizer (gamma visualization) to visualize if needed
+        image = self.tiff_data[self.source_indices[index]].unsqueeze(0)     # (H, W) -> (1, H, W)
         return image
 
     def __getitem__(self, index: int) -> ItemT:
