@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from concurrent.futures import Future, ThreadPoolExecutor
+from collections.abc import Sequence
 from typing import cast
 
 import numpy as np
@@ -15,7 +15,7 @@ from xray_gaussian_rasterization_voxelization import (
     GaussianVoxelizer,
 )
 
-from .saver import Saver, SaverModule
+from .saver import Saver, ThreadedSaverModule
 from ..gaussian_splatting import GaussianSplatting
 from ..renderers.deformabel_xray_renderer import CoronaryDeformableXrayRenderer
 from ..deform_models import DeformModel, Deforms, GSParam
@@ -100,6 +100,7 @@ def gaussians_to_volume_by_Rasterizer(
     affine: np.ndarray,
     to_cpu: bool = True,
 ) -> np.ndarray|torch.Tensor:
+    affine = np.asarray(affine)
     A = affine[:3, :3]
     spacing = np.linalg.norm(A, axis=0)    # make sure the spacing is positive
     sVoxel = spacing * np.array(shape)  # sVoxel = size of whole volume (length of XYZ, not the voxel size)
@@ -163,11 +164,190 @@ def gaussians_to_volume_by_Rasterizer(
         
         return vol
 
+
+@dataclass
+class VtpSavePayload:
+    path: Path
+    means: np.ndarray
+    scales: np.ndarray
+    rotations: np.ndarray
+    density: np.ndarray
+    
+    @staticmethod
+    def build_from_gs(
+        pl_module: GaussianSplatting,
+        xyz: torch.Tensor,
+        scales: torch.Tensor,
+        rotation: torch.Tensor,
+        density: torch.Tensor,
+    ) -> VtpSavePayload:
+        output_root = Path(pl_module.hparams["output_path"])
+        step = pl_module.trainer.global_step
+
+        vtp_dir = output_root / "point_cloud"
+        vtp_dir.mkdir(parents=True, exist_ok=True)
+        vtp_path = vtp_dir / f"iteration_{step}.vtp"
+
+        return VtpSavePayload(
+            path=vtp_path,
+            means=xyz.detach().cpu().numpy().astype(np.float32),
+            scales=scales.detach().cpu().numpy().astype(np.float32),
+            rotations=rotation.detach().cpu().numpy().astype(np.float32),
+            density=density.detach().cpu().numpy().astype(np.float32),
+        )
+    
+    @staticmethod
+    def build_from_gsparam(
+        pl_module: GaussianSplatting,
+        gs_param: GSParam,
+    ) -> VtpSavePayload:
+        return VtpSavePayload.build_from_gs(
+            pl_module,
+            gs_param.xyz,
+            gs_param.scaling,
+            gs_param.rotation,
+            gs_param.density,
+        )
+
+
+@dataclass
+class NiftiSavePayload:
+    volume_path: Path
+    volume: np.ndarray
+    volume_affine: np.ndarray
+    
+    @staticmethod
+    def build_from_gs(
+        pl_module: GaussianSplatting,
+        xyz: torch.Tensor,
+        scales: torch.Tensor,
+        rotation: torch.Tensor,
+        density: torch.Tensor,
+        volume_shape: tuple[int, int, int],
+        affine: np.ndarray,
+    ) -> NiftiSavePayload:
+        volume = gaussians_to_volume_by_Rasterizer(
+            xyz, scales, rotation, density, volume_shape, affine
+        )
+        assert isinstance(volume, np.ndarray)
+        affine_save = np.array(affine, copy=True)
+        torch.cuda.empty_cache()  # avoid CUDA OOM
+        
+        output_root = Path(pl_module.hparams["output_path"])
+        epoch = pl_module.trainer.current_epoch
+        step = pl_module.trainer.global_step
+
+        volume_dir = output_root / "volumes"
+        volume_dir.mkdir(parents=True, exist_ok=True)
+        volume_nii_path = volume_dir / f"volume__epoch={epoch}-step={step}.nii.gz"
+
+        return NiftiSavePayload(
+            volume_path=volume_nii_path,
+            volume=volume,
+            volume_affine=affine_save,
+        ) 
+    
+    @staticmethod
+    def build_from_gsparam(
+        pl_module: GaussianSplatting,
+        gs_param: GSParam,
+        volume_shape: tuple[int, int, int],
+        affine: np.ndarray,
+    ) -> NiftiSavePayload:
+        return NiftiSavePayload.build_from_gs(
+            pl_module,
+            gs_param.xyz,
+            gs_param.scaling,
+            gs_param.rotation,
+            gs_param.density,
+            volume_shape,
+            affine,
+        )
+    
+    @staticmethod
+    def build_from_deform_model(
+        pl_module: GaussianSplatting,
+        deform_model: DeformModel,
+        volume_shape: tuple[int, int, int],
+        affine: np.ndarray,
+        save_uniformed_time: float = 0.5,
+        save_phase: float = 0.0,
+    ) -> NiftiSavePayload:
+        dxyz_volume, zoomed_affine = deform_field_to_volume(
+            deform_model, volume_shape, affine, zoomed_shape=(128, 128, 128),
+            save_uniformed_time=save_uniformed_time, save_phase=save_phase
+        )
+        
+        output_root = Path(pl_module.hparams["output_path"])
+        epoch = pl_module.trainer.current_epoch
+        step = pl_module.trainer.global_step
+
+        volume_dir = output_root / "volumes"
+        volume_dir.mkdir(parents=True, exist_ok=True)
+        dxyz_volume_nii_path = volume_dir / f"dxyz_volume__epoch={epoch}-step={step}.nii.gz"
+
+        return NiftiSavePayload(
+            volume_path=dxyz_volume_nii_path,
+            volume=dxyz_volume,
+            volume_affine=zoomed_affine,
+        )
+    
+    
+
+@dataclass
+class SaveOutputsPayload:
+    vtp: VtpSavePayload | Sequence[VtpSavePayload|None] | None = None
+    nifti: NiftiSavePayload | Sequence[NiftiSavePayload|None] | None = None
+    
+
+def _save_outputs(
+    payload: SaveOutputsPayload,
+) -> None:
+    def _to_point_cloud(vtp_payload: VtpSavePayload) -> pv.PolyData:
+        pd = pv.PolyData(vtp_payload.means)
+        pd.point_data["density"] = vtp_payload.density
+        pd.point_data["scales"] = vtp_payload.scales
+        pd.point_data["rotations"] = vtp_payload.rotations
+        pd.field_data["model_type"] = np.array(["XrayCoronaryGaussian"])
+        return pd
+    
+    match payload.vtp:
+        case VtpSavePayload() as vtp_payload:
+            all_vtp = [vtp_payload]
+        case Sequence() as vtp_sequence:
+            all_vtp = []
+            for item in vtp_sequence:
+                if item is not None and isinstance(item, VtpSavePayload):
+                    all_vtp.append(item)
+        case _:
+            all_vtp = []
+    
+    for vtp_payload in all_vtp:
+        pd = _to_point_cloud(vtp_payload)
+        pd.save(vtp_payload.path)
+    
+    match payload.nifti:
+        case NiftiSavePayload() as nifti_payload:
+            all_nifti = [nifti_payload]
+        case Sequence() as nifti_sequence:
+            all_nifti = []
+            for item in nifti_sequence:
+                if item is not None and isinstance(item, NiftiSavePayload):
+                    all_nifti.append(item)
+        case _:
+            all_nifti = []
+    
+    for nifti_payload in all_nifti:
+        nifti_img = Nifti1Image(nifti_payload.volume, affine=nifti_payload.volume_affine)
+        nib_io.save(nifti_img, nifti_payload.volume_path)
+
+
 @dataclass
 class XRaySaver(Saver):
     save_ckpt: bool = True
     save_vtp: bool = True
     save_nii: bool = True
+    save_deform_field_nii: bool = True
     
     save_uniformed_time: float = 0.5
     save_phase: float = 0.0
@@ -175,62 +355,10 @@ class XRaySaver(Saver):
         return XRaySaverModule(self)
 
 
-
-class XRaySaverModule(SaverModule):
-    @dataclass
-    class VtpSavePayload:
-        path: Path
-        means: np.ndarray
-        scales: np.ndarray
-        rotations: np.ndarray
-        density: np.ndarray
-
-
-    @dataclass
-    class NiftiSavePayload:
-        volume_path: Path
-        dxyz_volume_path: Path
-        volume: np.ndarray
-        dxyz_volume: np.ndarray
-        volume_affine: np.ndarray
-        dxyz_affine: np.ndarray
-
-
-    @dataclass
-    class SaveOutputsPayload:
-        vtp: XRaySaverModule.VtpSavePayload | None = None
-        nifti: XRaySaverModule.NiftiSavePayload | None = None
-    
+class XRaySaverModule(ThreadedSaverModule):
     def __init__(self, config: XRaySaver):
-        super().__init__()
+        super().__init__(thread_name_prefix="xray-save")
         self.config = config
-        self._save_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="xray-save")
-        self._pending_save: Future | None = None
-
-    @staticmethod
-    def _save_outputs(
-        payload: SaveOutputsPayload,
-    ) -> None:
-        if payload.vtp is not None:
-            pd = pv.PolyData(payload.vtp.means)
-            pd.point_data["density"] = payload.vtp.density
-            pd.point_data["scales"] = payload.vtp.scales
-            pd.point_data["rotations"] = payload.vtp.rotations
-            pd.field_data["model_type"] = np.array(["XrayCoronaryGaussian"])
-            pd.save(payload.vtp.path)
-
-        if payload.nifti is not None:
-            nib_io.save(
-                Nifti1Image(payload.nifti.volume, payload.nifti.volume_affine),
-                str(payload.nifti.volume_path),
-            )
-            nib_io.save(
-                Nifti1Image(payload.nifti.dxyz_volume, payload.nifti.dxyz_affine),
-                str(payload.nifti.dxyz_volume_path),
-            )
-
-    def __del__(self):
-        self._save_executor.shutdown(wait=False)
     
     def save(self, pl_module: GaussianSplatting):
         if pl_module.trainer.global_rank != 0:
@@ -259,94 +387,32 @@ class XRaySaverModule(SaverModule):
             GSParam(xyz=means3D, rotation=rotation, scaling=scales, density=density), deforms
         )
         
-        vtp_payload = self._make_vtp_save_payload(
+        vtp_payload = VtpSavePayload.build_from_gsparam(
             pl_module, 
             source_deformed
         ) if self.config.save_vtp else None
-
-        nifti_payload = self._make_nii_save_payload(
-            pl_module, 
-            source_deformed
-        ) if self.config.save_nii else None
-
-        # save in threads
-        if self._pending_save is not None and not self._pending_save.done():
-            self._pending_save.result()
-
-        payload = self.SaveOutputsPayload(vtp=vtp_payload, nifti=nifti_payload)
-        self._pending_save = self._save_executor.submit(self._save_outputs, payload)
-    
-    
-    def _save_ckpt(self, pl_module: GaussianSplatting):
-        epoch = pl_module.trainer.current_epoch
-        step = pl_module.trainer.global_step
-        output_root = Path(pl_module.hparams["output_path"])
-        ckpt_dir = output_root / "checkpoints"
-        ckpt_dir.mkdir(exist_ok=True)
-        ckpt_path = ckpt_dir / f"epoch={epoch}-step={step}.ckpt"
         
-        pl_module.trainer.save_checkpoint(ckpt_path)
-    
-    
-    def _make_nii_save_payload(
-        self, 
-        pl_module: GaussianSplatting,
-        gs_param: GSParam,
-    ) -> NiftiSavePayload:
         datamodule = pl_module.get_datamodule()
         meta = datamodule.dataparser.meta
         assert isinstance(meta, XRayMeta)
         volume_shape = tuple(meta.volume_size)
         coronary_affine = meta.centering_affine
-        volume = gaussians_to_volume_by_Rasterizer(
-            gs_param.xyz, gs_param.scaling, gs_param.rotation, gs_param.density, volume_shape, coronary_affine
-        )
-        assert isinstance(volume, np.ndarray)
-        dxyz_volume, zoomed_affine = deform_field_to_volume(
-            pl_module.renderer.deform_model, volume_shape, coronary_affine, zoomed_shape=(128, 128, 128),
-            save_uniformed_time=self.config.save_uniformed_time, save_phase=self.config.save_phase
-        )
-        coronary_affine_save = np.array(coronary_affine, copy=True)
-        torch.cuda.empty_cache()  # avoid CUDA OOM
+
+        nifti_payload = NiftiSavePayload.build_from_gsparam(
+            pl_module, 
+            source_deformed,
+            volume_shape,
+            coronary_affine
+        ) if self.config.save_nii else None
         
-        output_root = Path(pl_module.hparams["output_path"])
-        epoch = pl_module.trainer.current_epoch
-        step = pl_module.trainer.global_step
+        deform_field_nii_payload = NiftiSavePayload.build_from_deform_model(
+            pl_module,
+            deform_model,
+            volume_shape,
+            coronary_affine,
+        ) if self.config.save_deform_field_nii else None
 
-        volume_dir = output_root / "volumes"
-        volume_dir.mkdir(parents=True, exist_ok=True)
-        volume_nii_path = volume_dir / f"volume__epoch={epoch}-step={step}.nii.gz"
-        dxyz_volume_nii_path = volume_dir / f"dxyz_volume__epoch={epoch}-step={step}.nii.gz"
-
-        return self.NiftiSavePayload(
-            volume_path=volume_nii_path,
-            dxyz_volume_path=dxyz_volume_nii_path,
-            volume=volume,
-            dxyz_volume=dxyz_volume,
-            volume_affine=coronary_affine_save,
-            dxyz_affine=zoomed_affine,
-        )
-    
-    
-    def _make_vtp_save_payload(
-        self,
-        pl_module: GaussianSplatting,
-        gs_param: GSParam,
-    ) -> VtpSavePayload:
-        
-        output_root = Path(pl_module.hparams["output_path"])
-        step = pl_module.trainer.global_step
-
-        vtp_dir = output_root / "point_cloud"
-        vtp_dir.mkdir(parents=True, exist_ok=True)
-        vtp_path = vtp_dir / f"iteration_{step}.vtp"
-
-        return self.VtpSavePayload(
-            path=vtp_path,
-            means=gs_param.xyz.detach().cpu().numpy().astype(np.float32),
-            scales=gs_param.scaling.detach().cpu().numpy().astype(np.float32),
-            rotations=gs_param.rotation.detach().cpu().numpy().astype(np.float32),
-            density=gs_param.density.detach().cpu().numpy().astype(np.float32),
-        )
+        payload = SaveOutputsPayload(vtp=vtp_payload, nifti=[nifti_payload, deform_field_nii_payload])
+        self._submit_save_task(_save_outputs, payload)
 
         
