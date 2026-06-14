@@ -173,6 +173,9 @@ def _centerline_distances(
         - **centerline_dist_avg**: average symmetric centerline distance (mm).
         - **hd95_cl**: 95th-percentile Hausdorff distance on centerlines (mm).
     """
+    if pred_np.sum() > pred_np.size * 0.2:
+        return float("inf"), float("inf")
+    
     # --- Skeletonize ---
     sk_pred = skeletonize(pred_np, method="lee")       # (D, H, W) bool
     sk_gt = skeletonize(gt_np, method="lee")            # (D, H, W) bool

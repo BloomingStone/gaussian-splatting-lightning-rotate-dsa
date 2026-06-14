@@ -17,7 +17,7 @@ trainer:
             save_vtp: true
             save_nii: true
             save_phase: 0.
-            save_time_or_type: 0.5
+            save_time_or_type: mean+2std
     - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
     - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
     - class_path: internal.callbacks.save_image.SaveImage
@@ -58,6 +58,7 @@ model:
       deform_model_config:
         class_path: internal.deform_models.deform_with_flow.HashGridDeformConfig
         init_args:
+          t_phase_combined: false
           phase_multires: 6
           x_multires: 13
           log2_hashmap_size: 19

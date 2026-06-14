@@ -315,7 +315,9 @@ class CommonImageMetricImpl(MetricImpl):
         except Exception as e:
             import warnings
             warnings.warn(f"Error computing 3D metrics: {e}")
+            print(f"Error computing 3D metrics: {e}")
             return {}
+
 
 @dataclass
 class Metric(Instantiable):

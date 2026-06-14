@@ -89,7 +89,7 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             outputs
         )
 
-        _, image_info, extra_data = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
+        _, image_info, extra_data = batch
         _, gt_image, _ = image_info
         gt_image = self._ensure_gray_nchw(gt_image)
 

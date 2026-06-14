@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Tuple, Dict, Literal, Any
 
 import torch
-from pytorch_lightning import LightningModule
+from lightning import LightningModule
 
 from internal.metrics.metric import Metric, MetricImpl, CommonImageMetricImpl
 from internal.renderers.deformabel_xray_renderer import  XrayRendererOuputs
@@ -114,7 +114,7 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             outputs
         )
 
-        _, image_info, extra_data = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
+        _, image_info, extra_data = batch
         _, gt_image, _ = image_info
         gt_image = self._ensure_gray_nchw(gt_image)
 
@@ -124,4 +124,10 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
         if weight is not None:
             self.add_weighted_validation_metrics(metrics, prog_bar, outputs.gray_image, gt_image, weight)
 
+        metrics.update(self.metric3d)
+        
         return metrics, prog_bar
+    
+    def on_validation_epoch_start(self, pl_module):
+        self.metric3d = self._compute_3d_metrics(pl_module=pl_module)
+        return super().on_validation_epoch_start(pl_module)
