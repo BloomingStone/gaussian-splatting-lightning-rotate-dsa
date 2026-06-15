@@ -1,4 +1,6 @@
-from typing import Tuple, Dict, Any, Callable, cast
+from __future__ import annotations
+
+from typing import Tuple, Dict, Any, Callable, cast, TYPE_CHECKING
 from dataclasses import dataclass, field
 
 import torch
@@ -16,6 +18,9 @@ from .ssim import ssim
 from ..models.gaussian import GaussianModel
 from ..renderers.renderer import RendererOutputs
 from ..instantiate_config import Instantiable
+
+if TYPE_CHECKING:
+    from .metric_3d_utils import SegmentationMetricsComputer
 
 class MetricImpl(torch.nn.Module):
     def __init__(self, config, *args, **kwargs) -> None:
@@ -67,7 +72,7 @@ class metric3DConfig:
     thresholds_absolute: tuple[float, ...] = (0.0344,)
     """Fixed absolute thresholds for volume binarization."""
 
-    thresholds_percentile: tuple[float, ...] = (0.99, 0.995, 0.998)
+    thresholds_percentile: tuple[float, ...] = (0.995, )
 
 
 class CommonImageMetricImpl(MetricImpl):
@@ -75,6 +80,7 @@ class CommonImageMetricImpl(MetricImpl):
         super().__init__(config, *args, **kwargs)
         self.no_state_dict_models: Dict[str, torch.nn.Module] = {}
         self.metric3d: dict[str, torch.Tensor] = {}
+        self._metric3d_computer: SegmentationMetricsComputer | None = None
 
     @staticmethod
     def _create_fused_ssim_adapter() -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
@@ -213,25 +219,38 @@ class CommonImageMetricImpl(MetricImpl):
             Empty dict on any error (logs a warning).
         """
         try:
-            # --- 1. Get GT label & meta ---
+            # --- 1. Get GT label & meta (lazy‑init computer on first call) ---
+            if self._metric3d_computer is None:
+                datamodule = pl_module.get_datamodule()
+                meta = cast(XRayMeta, datamodule.dataparser_outputs.meta)
+                if meta.label_3d_info is None:
+                    return {}  # no GT label available, skip 3D metrics
+
+                label_info = meta.label_3d_info
+                gt_label_np = label_info.data              # (D, H, W) bool  (numpy)
+                if gt_label_np is None:
+                    return {}
+                aabb_roi_np = label_info.aabb              # numpy bool mask
+                coronary_affine = meta.centering_affine
+                spacing = np.diag(coronary_affine)[:3]
+
+                from .metric_3d_utils import SegmentationMetricsComputer
+                self._metric3d_computer = SegmentationMetricsComputer(
+                    gt=gt_label_np,
+                    aabb_roi=aabb_roi_np,
+                    spacing=tuple(spacing),
+                )
+
+            # --- Retrieve cached metadata ---
             datamodule = pl_module.get_datamodule()
             meta = cast(XRayMeta, datamodule.dataparser_outputs.meta)
-            if meta.label_3d_info is None:
-                return {}  # no GT label available, skip 3D metrics
-
             label_info = meta.label_3d_info
-            gt_label = label_info.data                     # (D, H, W) bool  (numpy)
-            if gt_label is None:
-                return {}
-            gt_label = torch.from_numpy(gt_label).to(device=pl_module.device, dtype=torch.bool)  # (D, H, W) bool tensor on the same device as model
-            aabb_roi_np = label_info.aabb                 # numpy bool mask
-
+            assert label_info is not None
+            coronary_affine = meta.centering_affine
+            aabb_roi_np = label_info.aabb
             device = pl_module.device
             aabb_roi = torch.from_numpy(aabb_roi_np).to(device=device, dtype=torch.bool)
-
             volume_shape = tuple(int(x) for x in meta.volume_size)
-            coronary_affine = meta.centering_affine
-            spacing = np.diag(coronary_affine)[:3]
 
             # --- 2. Deform gaussians to the requested cardiac phase ---
             gaussian_model = pl_module.gaussian_model
@@ -273,11 +292,6 @@ class CommonImageMetricImpl(MetricImpl):
                 assert isinstance(vol_pred, torch.Tensor)  # still on CUDA
 
             # --- 4. Segmentation & metrics for each threshold ---
-            from .metric_3d_utils import (
-                compute_all_metrics,
-                compute_density_based_metrics,
-            )
-
             thresholds: list[tuple[str, float]] = []
             cfg = cast(metric3DConfig, self.config.metric3d_cfg)
             for thr in cfg.thresholds_absolute:
@@ -294,18 +308,14 @@ class CommonImageMetricImpl(MetricImpl):
             for thr_key, thr_val in thresholds:
                 pred = ((vol_pred > thr_val) & aabb_roi).to(device=pl_module.device, dtype=torch.bool)       # CUDA bool tensor
                 
-                metrics = compute_all_metrics(pred, gt_label, tuple(spacing))
+                metrics = self._metric3d_computer.compute(pred)                                             # type: ignore[union-attr]
                 for metric_name, metric_val in metrics.items():
                     result[f"metric3D/{thr_key}/{metric_name}"] = torch.tensor(
                         metric_val, dtype=torch.float32, device=device,
                     )
 
             # --- 5. Density-based metrics (threshold-free) ---
-            density_metrics = compute_density_based_metrics(
-                density=vol_pred,
-                gt=gt_label,
-                roi=aabb_roi,
-            )
+            density_metrics = self._metric3d_computer.compute_density(vol_pred)                             # type: ignore[union-attr]
             for metric_name, metric_val in density_metrics.items():
                 result[f"metric3D/density/{metric_name}"] = torch.tensor(
                     metric_val, dtype=torch.float32, device=device,
