@@ -1,33 +1,37 @@
-# 在原有3D形变场的基础上增加density 变化，命名用 with_flow 来区分原来的3D形变场模型
-project: rotate_xray_4d
+project: RotCA-GR
 
 max_steps: 20000
 
-
 trainer:
   log_every_n_steps: 500
-  check_val_every_n_epoch: 20
+  check_val_every_n_epoch: 50
   precision: 16-mixed
   callbacks:
-    - class_path: internal.callbacks.scene_saver.SceneSaver
-      init_args:
-        save_iterations: [1000, 10000, 20000]
-        saver:
-          class_path: internal.savers.x_ray_saver_with_flow.XRaySaver_Flow
-          init_args:
-            save_ckpt: true
-            save_vtp: true
-            save_nii: true
-            save_phase: 0.
-            save_time_or_type: mean+2std
     - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
-    - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
-    - class_path: internal.callbacks.save_image.SaveImage
-      init_args:
-        save_val_output: true
-        max_save_val_output: 10
-        max_image_saving_threads: 2
     - class_path: internal.callbacks.callbacks.ProgressBar
+      init_args:
+        refresh_rate: 50
+    
+    # - class_path: internal.callbacks.scene_saver.SceneSaver
+    #   init_args:
+    #     save_iterations: []
+    #     saver:
+    #       class_path: internal.savers.xray_4d_saver.XRaySaver
+    #       init_args:
+    #         save_ckpt: false
+    #         save_vtp: false
+    #         save_nii: false
+    #         save_phase: 0.
+    
+    # - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
+
+    # - class_path: internal.callbacks.save_image.SaveImage
+    #   init_args:
+    #     save_val_output: true
+    #     max_save_val_output: 0
+    #     max_image_saving_threads: 1
+
+
 
 data:
   parser: 
@@ -50,30 +54,26 @@ data:
         init_args:
           dataset_config:
             image_uint8: false
-
 model:
   renderer:
-    class_path: internal.renderers.deformabel_xray_renderer_with_flow.DeformableXrayRendererWithFlow
+    class_path: internal.renderers.deformabel_xray_renderer.CoronaryDeformableXrayRenderer
     init_args:
       optimization_config:
         enable_ast: true
       deform_model_config:
-        class_path: internal.deform_models.deform_with_flow.HashGridDeformConfig
+        class_path: internal.deform_models.HashGridDeformConfig
         init_args:
-          t_phase_combined: false
-          phase_multires: 6
           x_multires: 13
           log2_hashmap_size: 19
           max_resolution: 2048
   metric:
-    class_path: internal.metrics.rotate_xray_metrics_with_flow.RotateXrayMetrics
+    class_path: internal.metrics.rotate_xray_metrics.RotateXrayMetrics
     init_args:
       fused_ssim: true
       w_gray_loss: 1.0
       w_ssim_loss: 1.0
-      w_d_density: 0.0
   gaussian:
-    class_path: internal.models.xray_coronary_gaussian_with_flow.XrayCoronaryGaussianWithFlow
+    class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
   density:
     class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
     init_args:

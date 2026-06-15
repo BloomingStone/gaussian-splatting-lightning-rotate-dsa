@@ -1,0 +1,73 @@
+project: RotCA-GR
+
+max_steps: 20000
+
+trainer:
+  log_every_n_steps: 500
+  check_val_every_n_epoch: 50
+  precision: 16-mixed
+  callbacks:
+    - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
+    - class_path: internal.callbacks.callbacks.ProgressBar
+      init_args:
+        refresh_rate: 50
+    
+    # - class_path: internal.callbacks.scene_saver.SceneSaver
+    #   init_args:
+    #     save_iterations: []
+    #     saver:
+    #       class_path: internal.savers.xray_4d_saver.XRaySaver
+    #       init_args:
+    #         save_ckpt: false
+    #         save_vtp: false
+    #         save_nii: false
+    #         save_phase: 0.
+    
+    # - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
+
+    # - class_path: internal.callbacks.save_image.SaveImage
+    #   init_args:
+    #     save_val_output: true
+    #     max_save_val_output: 0
+    #     max_image_saving_threads: 1
+
+
+
+data:
+  parser: 
+    class_path: internal.dataparsers.xray_dataparser.parser.XRayDataParserBuilder
+    init_args:
+      meta_loader:
+        class_path: internal.dataparsers.xray_dataparser.meta.XRayMetaLoader
+      cloud_parser:
+        class_path: internal.dataparsers.xray_dataparser.cloud_parsers.RandomCloudParser
+        init_args:
+          num_points: 10_000
+      spliter:
+        class_path: internal.dataparsers.xray_dataparser.splitters.UniformIntervalSpliter
+        init_args:
+          train_ratio: 0.8
+      cameras_builder:
+        class_path: internal.dataparsers.xray_dataparser.cameras_builder.RotateXRayCamerasBuilder
+      dataset_builder:
+        class_path: internal.dataparsers.xray_dataparser.datasets.ImagesDatasetBuilder
+        init_args:
+          dataset_config:
+            image_uint8: false
+model:
+  renderer:
+    class_path: internal.renderers.xray_renderer.XrayRenderer
+  metric:
+    class_path: internal.metrics.rotate_xray_metrics_static.StaticXrayMetrics
+    init_args:
+      fused_ssim: true
+      w_gray_loss: 1.0
+      w_ssim_loss: 1.0
+  gaussian:
+    class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
+  density:
+    class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
+    init_args:
+      densification_interval: 300
+      densify_grad_percentile: 0.98
+      cull_density_threshold: 5e-5

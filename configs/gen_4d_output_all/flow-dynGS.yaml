@@ -1,30 +1,37 @@
 # gaussian model 中增加用傅里叶级数形式记录的密度变化频率分量，渲染时用使用频率分量生成随时间变化密度
-project: rotate_xray_4d
+project: RotCA-GR
 
 max_steps: 20000
 
 trainer:
-  check_val_every_n_epoch: 20
+  log_every_n_steps: 500
+  check_val_every_n_epoch: 50
   precision: 16-mixed
   callbacks:
-    - class_path: internal.callbacks.scene_saver.SceneSaver
-      init_args:
-        save_iterations: [1000, 10000, 20000]
-        saver:
-          class_path: internal.savers.xray_4d_saver.XRaySaver
-          init_args:
-            save_ckpt: true
-            save_vtp: true
-            save_nii: true
-            save_phase: 0.
     - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
-    - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
-    - class_path: internal.callbacks.save_image.SaveImage
-      init_args:
-        save_val_output: true
-        max_save_val_output: 10
-        max_image_saving_threads: 16
     - class_path: internal.callbacks.callbacks.ProgressBar
+      init_args:
+        refresh_rate: 50
+    
+    # - class_path: internal.callbacks.scene_saver.SceneSaver
+    #   init_args:
+    #     save_iterations: []
+    #     saver:
+    #       class_path: internal.savers.xray_4d_saver.XRaySaver
+    #       init_args:
+    #         save_ckpt: false
+    #         save_vtp: false
+    #         save_nii: false
+    #         save_phase: 0.
+    
+    # - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
+
+    # - class_path: internal.callbacks.save_image.SaveImage
+    #   init_args:
+    #     save_val_output: true
+    #     max_save_val_output: 0
+    #     max_image_saving_threads: 1
+
 
 data:
   parser: 

@@ -11,7 +11,7 @@ dynamic = ["version"]
 requires-python = ">=3.10"
 dependencies = ["monai"]
 
-[project.scripts]
+[project.scripts]   # run with `gs-fit`, `gs-val`, etc. (installed as command line scripts, must activate env shell first)
 gs-fit = "internal.entrypoints.gspl:cli_fit"
 gs-val = "internal.entrypoints.gspl:cli_val"
 gs-test = "internal.entrypoints.gspl:cli_test"
@@ -27,6 +27,12 @@ platforms = ["linux-64"]
 cuda = "12.0"
 
 [tool.pixi.activation.env]
+
+[tool.pixi.tasks]   # run with `pixi run <task-name>` (activate env and run the command)
+gs-fit = "python main.py fit"
+gs-val = "python main.py validate"
+gs-test = "python main.py test"
+gs-predict = "python main.py predict"
 
 [tool.pixi.dependencies]
 cuda-version = "12.4.*"
@@ -95,5 +101,3 @@ default = [
     "gsplat-v1",
     "r2-gaussian",
 ]
-
-[tool.pixi.tasks]

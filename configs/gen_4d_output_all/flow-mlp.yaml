@@ -1,33 +1,39 @@
 # 在原有3D形变场的基础上增加density 变化，命名用 with_flow 来区分原来的3D形变场模型
-project: rotate_xray_4d
+# from 4D_dsa_generated/rotate_xray_with_flow.yaml
+project: RotCA-GR
 
 max_steps: 20000
 
 
 trainer:
   log_every_n_steps: 500
-  check_val_every_n_epoch: 20
+  check_val_every_n_epoch: 50
   precision: 16-mixed
   callbacks:
-    - class_path: internal.callbacks.scene_saver.SceneSaver
-      init_args:
-        save_iterations: [1000, 10000, 20000]
-        saver:
-          class_path: internal.savers.x_ray_saver_with_flow.XRaySaver_Flow
-          init_args:
-            save_ckpt: true
-            save_vtp: true
-            save_nii: true
-            save_phase: 0.
-            save_time_or_type: mean+2std
     - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
-    - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
-    - class_path: internal.callbacks.save_image.SaveImage
-      init_args:
-        save_val_output: true
-        max_save_val_output: 10
-        max_image_saving_threads: 2
     - class_path: internal.callbacks.callbacks.ProgressBar
+      init_args:
+        refresh_rate: 50
+    
+    # - class_path: internal.callbacks.scene_saver.SceneSaver
+    #   init_args:
+    #     save_iterations: []
+    #     saver:
+    #       class_path: internal.savers.xray_4d_saver.XRaySaver
+    #       init_args:
+    #         save_ckpt: false
+    #         save_vtp: false
+    #         save_nii: false
+    #         save_phase: 0.
+    
+    # - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
+
+    # - class_path: internal.callbacks.save_image.SaveImage
+    #   init_args:
+    #     save_val_output: true
+    #     max_save_val_output: 0
+    #     max_image_saving_threads: 1
+
 
 data:
   parser: 

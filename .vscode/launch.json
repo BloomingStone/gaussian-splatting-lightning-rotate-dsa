@@ -24,8 +24,8 @@
             "console": "integratedTerminal",
             "args": [
                 "fit",
-                "--config", "configs/rotate_xray_3dgr/rotate_xray_3dgr_static.yaml",
-                "--data.path", "data/rbf_reader_flow_contrast_LCA",
+                "--config", "configs/static/static.yaml",
+                "--data.path", "data/static_diseased_17",
                 "-n", "rotate-xray__static",
                 "-v", "debug",
                 "--overwrite_output",

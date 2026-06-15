@@ -107,3 +107,15 @@ class MyGaussianModel(GaussianModel):
         """从 PolyData 恢复属性"""
         ...
 ```
+
+## 批量运行
+
+```nushell
+for d in (ls data/gen_4d_output_all/flow/) {python main.py fit --output outputs/RotCA-GR/ --config configs/gen_4d_output_all/flow_mlp.yaml  --data.path $d.name -n flow_flow-mlp  -v ($d.name | path basename)  --logger wandb }
+```
+
+已有case 需要跳过
+
+```shell
+CUDA_VISIBLE_DEVICES=0 scripts/train_all.nu data/gen_4d_output_all/flow/ configs/gen_4d_output_all/flow-mlp.yaml outputs/RotCA-GR/ --wandb
+```

@@ -1,5 +1,6 @@
 from typing import Any, Optional, Tuple, cast
 from dataclasses import dataclass
+from enum import StrEnum
 
 import torch
 from torch import Tensor
@@ -8,75 +9,59 @@ from xray_gaussian_rasterization_voxelization import (
     GaussianRasterizationSettings,
     GaussianRasterizer,
 )
-from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 
-from .renderer import Renderer, RendererOutputInfo, RendererOutputTypes
+from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
+from .renderer import Renderer, RendererOutputs
 from ..deform_models import GSParam
 from ..cameras import Camera
-from ..utils.general_utils import get_linear_noise_func
+from ..visualizers import FloatColormapVisualizer, ColorMapName, Visualizer
 
 
 @dataclass
-class DeformableRendererOptimizationConfig:
+class RendererOptimizationConfig:
     lr: float = 1e-3
-    max_steps: int = 40_000
     lr_final_factor: float = 0.002
     eps: float = 1e-8
-    warm_up: int = -1
-    enable_ast: bool = True
-    log_gradients: bool = True
-    grad_log_interval: int = 100
-    density_ramp_steps: int = 2000
 
 
 @dataclass
-class RenderRes:
-    gray_image: Tensor
-    gray_coronary: Tensor | None
-    viewspace_points: Tensor
-    visibility_filter: Tensor
-    radii: Tensor
+class XrayRendererOuputs(RendererOutputs):
+    class ImageTypes(StrEnum):
+        GRAY = "gray"
     
-    deforms_mean: dict[str, Tensor]
-    deforms_var: dict[str, Tensor]
+    class MetaTypes(StrEnum):
+        VIEWSPACE_POINTS = "viewspace_points"
+        VISIBILITY_FILTER = "visibility_filter"
+        RADII = "radii"
     
-    time: Tensor
-    density_mask: Tensor|None = None
-    
-    in_warm_up: bool = False
+    images: dict[ImageTypes, tuple[Tensor, Visualizer|None]]    # type: ignore
+    meta: dict[MetaTypes, Any]   # type: ignore
 
-    def __getitem__(self, item):
-        return getattr(self, item)
-    
-    def __contains__(self, item):
-        return hasattr(self, item)
-    
-    def __len__(self):
-        return len(self.__dict__)
-    
-    def __iter__(self):
-        return iter(self.__dict__)
-    
-    def items(self):
-        output_keys = [
-            "viewspace_points",
-            "visibility_filter",
-            "radii",
-        ]
-        for key in output_keys:
-            yield key, getattr(self, key)
-    
-    def get(self, key: str, defualt_value: Tensor|None) -> Tensor|None:
-        if hasattr(self, key):
-            return getattr(self, key)
-        else:
-            return defualt_value
+    @property
+    def gray_image(self) -> Tensor:
+        return self.images[self.ImageTypes.GRAY][0]
+
+    @property
+    def viewspace_points(self) -> Tensor:
+        return self.meta[self.MetaTypes.VIEWSPACE_POINTS]
+
+    @property
+    def visibility_filter(self) -> Tensor:
+        return self.meta[self.MetaTypes.VISIBILITY_FILTER]
+
+    @property
+    def radii(self) -> Tensor:
+        return self.meta[self.MetaTypes.RADII]
+
+ImgT = XrayRendererOuputs.ImageTypes
+MetaT = XrayRendererOuputs.MetaTypes
+
 
 class XrayRenderer(Renderer):
 
     def __init__(
             self,
-            optimization_config: DeformableRendererOptimizationConfig,
+            optimization_config: RendererOptimizationConfig,
     ) -> None:
         super().__init__()
         self.optimization_config = optimization_config
@@ -90,7 +75,7 @@ class XrayRenderer(Renderer):
         scaling_modifier=1.0,
         render_types: list|None = None,
         **kwargs,
-    ) -> RenderRes:
+    ) -> XrayRendererOuputs:
         pc = cast(XrayCoronaryGaussianModel, pc)
         gs = GSParam(
             xyz=pc.get_means().detach(),
@@ -105,30 +90,17 @@ class XrayRenderer(Renderer):
         radii = meta_whole["radii"]
         visibility_filter = radii > 0
         
-        mask = (gs.density > torch.quantile(gs.density, 0.90)).squeeze()
-        if not torch.any(mask):
-            mask = torch.ones_like(mask, dtype=torch.bool)
-        
-        gray_coronary, _ = self._render(
-            viewpoint_camera,
-            GSParam(
-                xyz=gs.xyz[mask],
-                rotation=gs.rotation[mask],
-                scaling=gs.scaling[mask],
-                density=gs.density[mask],
-            )
+        res = XrayRendererOuputs(
+            images={
+                ImgT.GRAY: (gray_image, FloatColormapVisualizer(ColorMapName.GRAY)),
+            },
+            meta={
+                MetaT.VIEWSPACE_POINTS: viewspace_points,
+                MetaT.VISIBILITY_FILTER: visibility_filter,
+                MetaT.RADII: radii
+            },
         )
-        
-        deforms_mean = pc.deforms_recorder.get_deforms_mean()
-        deforms_var = pc.deforms_recorder.get_deforms_var()
-        
-        res = RenderRes(
-            gray_image, gray_coronary,                  # rendered
-            viewspace_points, visibility_filter, radii, # grad meta
-            deforms_mean, deforms_var,         # deforms and mean & var
-            viewpoint_camera.time, mask,                 # other info     
-            in_warm_up=False
-        )
+
         return res
         
 
@@ -141,7 +113,7 @@ class XrayRenderer(Renderer):
         bg_color: torch.Tensor,
         render_types: list|None = None,
         **kwargs
-    )-> RenderRes:
+    )-> XrayRendererOuputs:
         pc = cast(XrayCoronaryGaussianModel, pc)
         # clone properties
         gs = GSParam(
@@ -150,9 +122,6 @@ class XrayRenderer(Renderer):
             scaling=pc.get_scales(),
             density=pc.get_density(),
         )
-        
-        deforms_mean = pc.deforms_recorder.get_deforms_mean()
-        deforms_var = pc.deforms_recorder.get_deforms_var()
 
         gray_image, meta_whole = self._render(viewpoint_camera, gs)
 
@@ -160,18 +129,16 @@ class XrayRenderer(Renderer):
         radii = meta_whole["radii"]
         visibility_filter = radii > 0
 
-        gray_coronary = None
         
-        mask = (gs.density > torch.quantile(gs.density, 0.90)).squeeze()
-        if not torch.any(mask):
-            mask = torch.ones_like(mask, dtype=torch.bool)
-        
-        return RenderRes(
-            gray_image, gray_coronary,                  # rendered
-            viewspace_points, visibility_filter, radii, # grad meta
-            deforms_mean, deforms_var,         # deforms and mean & var
-            viewpoint_camera.time, mask,                 # other info     
-            in_warm_up=False
+        return XrayRendererOuputs(
+            images={
+                ImgT.GRAY: (gray_image, FloatColormapVisualizer(ColorMapName.GRAY)),
+            },
+            meta={
+                MetaT.VIEWSPACE_POINTS: viewspace_points,
+                MetaT.VISIBILITY_FILTER: visibility_filter,
+                MetaT.RADII: radii
+            },
         )
     
     def _render(
@@ -222,12 +189,3 @@ class XrayRenderer(Renderer):
             self.train_set_length = len(lightning_module.trainer.datamodule.dataparser_outputs.train_set)
         
         total_steps = lightning_module.trainer.max_steps
-        self.smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=total_steps*0.8)
-
-
-    def get_available_outputs(self) -> dict:
-        cmap = {"colormap": "gray"}
-        return {
-            "gray_image": RendererOutputInfo("gray_image", RendererOutputTypes.GRAY, other_kwargs=cmap),
-            "gray_coronary": RendererOutputInfo("gray_coronary", RendererOutputTypes.GRAY, other_kwargs=cmap)
-        }
