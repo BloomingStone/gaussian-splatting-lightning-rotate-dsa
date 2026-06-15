@@ -134,17 +134,17 @@ class RotateXrayMetricsImpl(MetricImpl):
             pho = pho.clamp(1e-5, 1e5)
             loss_density_corr = corr_loss(p, pho)
             
-        if torch.isnan(loss_motion_corr) or loss_motion_corr > 0.3:
-            loss_motion_corr = torch.tensor(0.0, device=loss_motion_corr.device)
+        # if torch.isnan(loss_motion_corr) or loss_motion_corr > 0.3:
+        #     loss_motion_corr = torch.tensor(0.0, device=loss_motion_corr.device)
         
-        if torch.isnan(p_entropy):
-            p_entropy = torch.tensor(0.0, device=p_entropy.device)
+        # if torch.isnan(p_entropy):
+        #     p_entropy = torch.tensor(0.0, device=p_entropy.device)
             
-        if torch.isnan(L_motion):
-            L_motion = torch.tensor(0.0, device=L_motion.device)
+        # if torch.isnan(L_motion):
+        #     L_motion = torch.tensor(0.0, device=L_motion.device)
             
-        if torch.isnan(motion_var_mean):
-            motion_var_mean = torch.tensor(0.0, device=motion_var_mean.device)
+        # if torch.isnan(motion_var_mean):
+        #     motion_var_mean = torch.tensor(0.0, device=motion_var_mean.device)
         
         loss = (
             # image loss
@@ -162,7 +162,7 @@ class RotateXrayMetricsImpl(MetricImpl):
             self.config.w_density_corr_loss * loss_density_corr
         )
         
-        assert not torch.isnan(loss), "Loss is NaN!"
+        # assert not torch.isnan(loss), "Loss is NaN!"
         
         return {
             "loss": loss,

@@ -186,7 +186,7 @@
             "args": [
                 "fit",
                 "--config", "configs/4D_dsa_generated/rotate_xray_with_flow.yaml",
-                "--data.path", "data/rbf_reader_flow_contrast_LCA",
+                "--data.path", "data/gen_4d_output_all/flow/asoca-diseased__Diseased_17__LCA",
                 "-n", "rotate-xray__deformable-with-flow",
                 "-v", "debug",
                 "--overwrite_output",

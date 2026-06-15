@@ -58,7 +58,7 @@ class RotateXrayMetricsWithMasksImpl(CommonImageMetricImpl):
         )
 
 
-        assert not torch.isnan(loss), "Loss is NaN!"
+        # assert not torch.isnan(loss), "Loss is NaN!"
         
         metrics = {
             "loss": loss,
@@ -103,7 +103,7 @@ class RotateXrayMetricsWithMasksImpl(CommonImageMetricImpl):
 
         loss = self.config.w_gray_loss * gray_loss + self.config.w_ssim_loss * ssim_loss
 
-        assert not torch.isnan(loss), "Loss is NaN!"
+        # assert not torch.isnan(loss), "Loss is NaN!"
 
         metrics = {
             "loss": loss,

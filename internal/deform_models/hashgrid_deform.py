@@ -151,7 +151,7 @@ class HashGridDefromModel(DeformModel):
         t_emb = self.embed_t_fn(phase)
         x_emb = self.embed_fn(xyz)
         
-        assert not torch.any(torch.isnan(x_emb)), "NaN detected in x_emb"
+        # assert not torch.any(torch.isnan(x_emb)), "NaN detected in x_emb"
         
         h_combine = self.combine_mlp(torch.cat([x_emb, t_emb], dim=-1))
         

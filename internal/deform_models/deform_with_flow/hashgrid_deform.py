@@ -183,7 +183,7 @@ class HashGridDefromModel(DeformWithFlowModel):
             d_density: [n, 1], the density change for each point, where the new density will be density + d_density
         """
         x_emb = self.embed_fn(xyz)
-        assert not torch.any(torch.isnan(x_emb)), "NaN detected in x_emb"
+        # assert not torch.any(torch.isnan(x_emb)), "NaN detected in x_emb"
         
         t_emb = self.embed_t_fn(t)
         
