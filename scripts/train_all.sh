@@ -6,7 +6,7 @@ usage() {
 Usage: $(basename "$0") <data_root> <config> <output_root> [--wandb] [--dryrun]
 
 Arguments:
-  data_root    数据目录（包含各 case 子目录/符号链接）
+  data_root    数据目录 或 glob 匹配模式（如 data/*LCA）
   config       配置文件路径
   output_root  输出根目录
 
@@ -45,12 +45,6 @@ CONFIG="$2"
 OUTPUT_ROOT="$3"
 
 # --- 校验 ---
-if [[ ! -d "$DATA_ROOT" ]]; then
-    echo "Error: 数据目录 '$DATA_ROOT' 不存在."
-    exit 1
-fi
-echo "Data root: $DATA_ROOT"
-
 if [[ ! -f "$CONFIG" ]]; then
     echo "Error: 配置文件 '$CONFIG' 不存在."
     exit 1
@@ -63,19 +57,48 @@ if [[ ! -d "$OUTPUT_ROOT" ]]; then
 fi
 echo "Output root: $OUTPUT_ROOT"
 
-# --- 计算实验名称 ---
-data_basename=$(basename "$DATA_ROOT")
-config_stem=$(basename "$CONFIG" | sed 's/\.[^.]*$//')
-EXP_NAME="${data_basename}_${config_stem}"
+# --- 收集所有 case（支持 glob 通配符） ---
+shopt -s nullglob
+RAW_MATCHES=($DATA_ROOT)
+shopt -u nullglob
 
-# --- 收集所有 case（目录或符号链接） ---
-CASES=()
-while IFS= read -r item; do
-    CASES+=("$item")
-done < <(find "$DATA_ROOT" -maxdepth 1 \( -type d -o -type l \) ! -name "$(basename "$DATA_ROOT")" | sort)
+if [[ ${#RAW_MATCHES[@]} -eq 0 ]]; then
+    echo "Error: 没有匹配到任何路径: $DATA_ROOT"
+    exit 1
+fi
+
+# 判断是否包含 glob 通配符
+if [[ "$DATA_ROOT" == *[\*\?\[]* ]]; then
+    # glob 模式：直接过滤匹配到的目录/符号链接
+    CASES=()
+    for match in "${RAW_MATCHES[@]}"; do
+        if [[ -d "$match" || -L "$match" ]]; then
+            CASES+=("$match")
+        fi
+    done
+else
+    # 普通目录：列出其下所有子目录/符号链接
+    dir_path="${DATA_ROOT%/}"
+    CASES=()
+    while IFS= read -r item; do
+        CASES+=("$item")
+    done < <(find "$dir_path" -maxdepth 1 \( -type d -o -type l \) ! -name "$(basename "$dir_path")" | sort)
+fi
 
 TOTAL=${#CASES[@]}
-echo "Found $TOTAL cases in $DATA_ROOT."
+echo "Found $TOTAL cases."
+
+# 显示前 5 个 case 做预览
+for ((i = 0; i < TOTAL && i < 5; i++)); do
+    echo "  $(basename "${CASES[$i]}")"
+done
+
+# --- 计算实验名称（取第一个 case 的父目录名 + config 文件主名） ---
+first_case="${CASES[0]}"
+parent_dir=$(dirname "$first_case")
+data_basename=$(basename "$parent_dir")
+config_stem=$(basename "$CONFIG" | sed 's/\.[^.]*$//')
+EXP_NAME="${data_basename}_${config_stem}"
 
 # --- 逐个训练 ---
 for ((i = 0; i < TOTAL; i++)); do
