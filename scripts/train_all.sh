@@ -12,7 +12,7 @@ Arguments:
 
 Options:
   --dryrun     仅打印命令，不执行
-  --           分隔符，之后的所有参数透传给 gs-fit
+  --           分隔符，之后的所有参数透传给 gs-fit (pixi run gs-fit -- ...)
                  示例: -- --logger wandb --trainer.max_steps 10000
   -h, --help   显示帮助信息
 EOF
@@ -126,13 +126,13 @@ for ((i = 0; i < TOTAL; i++)); do
     )
 
     if [[ "$DRYRUN" == true ]]; then
-        echo "python main.py fit ${ALL_ARGS[*]}"
+        echo "pixi run gs-fit -- ${ALL_ARGS[*]}"
         continue
     fi
 
     # 执行训练，失败时记录到 error.log 并继续下一个 case
     set +e
-    python main.py fit "${ALL_ARGS[@]}"
+    pixi run gs-fit -- "${ALL_ARGS[@]}"
     EXIT_CODE=$?
     set -e
 
@@ -142,7 +142,7 @@ for ((i = 0; i < TOTAL; i++)); do
             echo "    config: $CONFIG"
             echo "    data:   $d"
             echo "    output: $output_case_dir"
-            echo "    cmd:    ${CMD_BASE[*]}"
+            echo "    cmd:    pixi run gs-fit -- ${ALL_ARGS[*]}"
         } >> ./error.log
         echo "[$idx/$TOTAL] FAILED $case_name (exit code: $EXIT_CODE, see error.log)"
     fi

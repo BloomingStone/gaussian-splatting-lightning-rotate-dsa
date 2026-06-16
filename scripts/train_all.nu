@@ -50,14 +50,14 @@ def --wrapped main [
         ]
 
         if $dryrun {
-            print $"python main.py fit ($all_args | str join ' ')"
+            print $"pixi run gs-fit -- ($all_args | str join ' ')"
             continue
         }
 
-        let cmd = $"python main.py fit ($all_args | str join ' ')"
+        let cmd = $"pixi run gs-fit -- ($all_args | str join ' ')"
 
         try {
-            ^python ...[main.py fit] ++ $all_args
+            ^pixi ...[run gs-fit --] ++ $all_args
         } catch {|e|
             let log_line = [
                 $"[(date now | format date '%Y-%m-%d %H:%M:%S')] FAILED: ($case_name)"
