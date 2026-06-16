@@ -1,4 +1,5 @@
 #!/usr/bin/env nu
+use std/log
 
 def --wrapped main [
     data_root: path,        # 数据目录
@@ -16,7 +17,7 @@ def --wrapped main [
     let total = ($cases | length)
 
     print $"Found ($total) cases in ($data_root)."
-    print ($cases | first 5)
+    print $"First 5 cases: ($cases | first 5)"
 
     for item in ($cases | enumerate) {
         let idx = ($item.index + 1)
@@ -49,15 +50,16 @@ def --wrapped main [
             ...$extra
         ]
 
+        let cmd = $"pixi run gs-fit -- ($all_args | str join ' ')"
+
         if $dryrun {
-            print $"pixi run gs-fit -- ($all_args | str join ' ')"
+            print $"DRYRUN: ($cmd)"
             continue
         }
 
-        let cmd = $"pixi run gs-fit -- ($all_args | str join ' ')"
 
         try {
-            ^pixi ...[run gs-fit --] ++ $all_args
+            ^pixi run gs-fit -- ...$all_args
         } catch {|e|
             let log_line = [
                 $"[(date now | format date '%Y-%m-%d %H:%M:%S')] FAILED: ($case_name)"
@@ -65,11 +67,11 @@ def --wrapped main [
                 $"    data:   ($d.name)"
                 $"    output: ($output_case_dir)"
                 $"    cmd:    ($cmd)"
+                $"    error:  ($e.msg)"
                 ""
             ] | str join "\n"
 
-            $log_line | save --append ./error.log
-            print $"[($idx)/($total)] FAILED ($case_name) (see error.log)"
+            log error $log_line
         }
     }
 }

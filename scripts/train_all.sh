@@ -130,20 +130,18 @@ for ((i = 0; i < TOTAL; i++)); do
         continue
     fi
 
-    # 执行训练，失败时记录到 error.log 并继续下一个 case
+    # 执行训练，失败时记录到 stderr 并继续下一个 case
     set +e
     pixi run gs-fit -- "${ALL_ARGS[@]}"
     EXIT_CODE=$?
     set -e
 
     if [[ $EXIT_CODE -ne 0 ]]; then
-        {
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAILED: $case_name (exit code: $EXIT_CODE)"
-            echo "    config: $CONFIG"
-            echo "    data:   $d"
-            echo "    output: $output_case_dir"
-            echo "    cmd:    pixi run gs-fit -- ${ALL_ARGS[*]}"
-        } >> ./error.log
-        echo "[$idx/$TOTAL] FAILED $case_name (exit code: $EXIT_CODE, see error.log)"
+        >&2 echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAILED: $case_name (exit code: $EXIT_CODE)"
+        >&2 echo "    config: $CONFIG"
+        >&2 echo "    data:   $d"
+        >&2 echo "    output: $output_case_dir"
+        >&2 echo "    cmd:    pixi run gs-fit -- ${ALL_ARGS[*]}"
+        echo "[$idx/$TOTAL] FAILED $case_name (exit code: $EXIT_CODE)"
     fi
 done
