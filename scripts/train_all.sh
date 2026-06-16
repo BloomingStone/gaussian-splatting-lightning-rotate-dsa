@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") <data_root> <config> <output_root> [--wandb] [--dryrun]
+Usage: $(basename "$0") <data_root> <config> <output_root> [--dryrun] [-- <extra_args>]
 
 Arguments:
   data_root    数据目录 或 glob 匹配模式（如 data/*LCA）
@@ -11,22 +11,23 @@ Arguments:
   output_root  输出根目录
 
 Options:
-  --wandb      使用 wandb 记录日志
   --dryrun     仅打印命令，不执行
+  --           分隔符，之后的所有参数透传给 gs-fit
+                 示例: -- --logger wandb --trainer.max_steps 10000
   -h, --help   显示帮助信息
 EOF
     exit 0
 }
 
 # --- 解析参数 ---
-WANDB=false
 DRYRUN=false
+PASSTHROUGH=()
 POSITIONAL=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --wandb) WANDB=true; shift ;;
         --dryrun) DRYRUN=true; shift ;;
+        --) shift; PASSTHROUGH=("$@"); break ;;
         -h|--help) usage ;;
         *) POSITIONAL+=("$1"); shift ;;
     esac
@@ -115,27 +116,34 @@ for ((i = 0; i < TOTAL; i++)); do
 
     echo "[$idx/$TOTAL] RUN  $case_name"
 
-    CMD_BASE=(
-        python main.py fit
+    ALL_ARGS=(
         --output "$OUTPUT_ROOT"
         --config "$CONFIG"
         --data.path "$d"
         -n "$EXP_NAME"
         -v "$case_name"
+        "${PASSTHROUGH[@]}"
     )
 
     if [[ "$DRYRUN" == true ]]; then
-        if [[ "$WANDB" == true ]]; then
-            echo "pixi run gs-fit -- ${CMD_BASE[*]} --logger wandb"
-        else
-            echo "${CMD_BASE[*]}"
-        fi
+        echo "python main.py fit ${ALL_ARGS[*]}"
         continue
     fi
 
-    if [[ "$WANDB" == true ]]; then
-        pixi run gs-fit -- "${CMD_BASE[@]}" --logger wandb
-    else
-        "${CMD_BASE[@]}"
+    # 执行训练，失败时记录到 error.log 并继续下一个 case
+    set +e
+    python main.py fit "${ALL_ARGS[@]}"
+    EXIT_CODE=$?
+    set -e
+
+    if [[ $EXIT_CODE -ne 0 ]]; then
+        {
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAILED: $case_name (exit code: $EXIT_CODE)"
+            echo "    config: $CONFIG"
+            echo "    data:   $d"
+            echo "    output: $output_case_dir"
+            echo "    cmd:    ${CMD_BASE[*]}"
+        } >> ./error.log
+        echo "[$idx/$TOTAL] FAILED $case_name (exit code: $EXIT_CODE, see error.log)"
     fi
 done

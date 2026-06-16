@@ -1,12 +1,12 @@
 #!/usr/bin/env nu
 
-def main [
-    data_root: path,      # 数据目录
-    config: path,         # 配置文件
-    output_root: path,    # 输出目录
-
-    --wandb          # 使用 wandb
-    --dryrun         # 仅打印命令，不执行
+def --wrapped main [
+    data_root: path,        # 数据目录
+    config: path,           # 配置文件
+    output_root: path,      # 输出目录
+    --dryrun                # 仅打印命令，不执行
+    ...extra: string        # 额外参数（列表），直接透传给 gs-fit
+                            # 如: --logger wandb --trainer.max_steps 5000
 ] {
     let cases = (
         ls $data_root
@@ -40,31 +40,36 @@ def main [
 
         print $"[($idx)/($total)] RUN  ($case_name)"
 
+        let all_args = [
+            "--output", $output_root,
+            "--config", $config,
+            "--data.path", $d.name,
+            "-n", $exp_name,
+            "-v", $case_name,
+            ...$extra
+        ]
+
         if $dryrun {
-            print $"python main.py fit --output ($output_root) --config ($config) --data.path ($d.name) -n ($exp_name) -v ($case_name)"
+            print $"python main.py fit ($all_args | str join ' ')"
             continue
         }
 
-        if $wandb {
-            ^pixi ...[
-                run gs-fit
-                --
-                --output $output_root 
-                --config $config 
-                --data.path $d.name
-                -n $exp_name
-                -v $case_name
-                --logger wandb
-            ]
-        } else {
-            ^python ...[
-                main.py fit
-                --output $output_root
-                --config $config
-                --data.path $d.name
-                -n $exp_name
-                -v $case_name
-            ]
+        let cmd = $"python main.py fit ($all_args | str join ' ')"
+
+        try {
+            ^python ...[main.py fit] ++ $all_args
+        } catch {|e|
+            let log_line = [
+                $"[(date now | format date '%Y-%m-%d %H:%M:%S')] FAILED: ($case_name)"
+                $"    config: ($config)"
+                $"    data:   ($d.name)"
+                $"    output: ($output_case_dir)"
+                $"    cmd:    ($cmd)"
+                ""
+            ] | str join "\n"
+
+            $log_line | save --append ./error.log
+            print $"[($idx)/($total)] FAILED ($case_name) (see error.log)"
         }
     }
 }
