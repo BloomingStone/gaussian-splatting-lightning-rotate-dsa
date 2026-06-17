@@ -23,7 +23,7 @@ trainer:
           init_args:
             save_ckpt: false
             save_vtp: false
-            save_volume: true
+            save_volume: false
             save_label_threshold: 0.0344
             save_time_or_type: 0.5
             save_phase: 0.
