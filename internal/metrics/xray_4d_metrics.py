@@ -230,7 +230,7 @@ class Xray4DMetricsImpl(CommonImageMetricImpl):
                 vol_roi = vol_pred[aabb_roi]               # GPU indexing
                 if vol_roi.numel() > 0:
                     for pct in cfg.thresholds_percentile:
-                        thr_val = float(torch.quantile(vol_roi, pct))
+                        thr_val = float(torch.quantile(vol_roi.cpu(), pct))
                         thresholds.append((f"thd-{pct * 100:.2f}%", thr_val))
 
             result: dict[str, torch.Tensor] = {}
