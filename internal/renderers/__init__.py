@@ -1,2 +1,2 @@
-from .renderer import Renderer, RendererConfig
+from .renderer import Renderer
 from .vanilla_renderer import VanillaRenderer

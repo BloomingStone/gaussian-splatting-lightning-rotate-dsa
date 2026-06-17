@@ -1,4 +1,5 @@
 from typing import cast, override
+from dataclasses import dataclass
 
 import torch
 
@@ -17,17 +18,22 @@ from .deformabel_xray_renderer import (
     MetaT,
 )
 
+@dataclass
+class DeformableXrayRendererWithFlowConfig(DeformableRendererOptimizationConfig):
+    density_ramp_steps: int = 2000   # number of steps to ramp up the density for the flow deforms. This is to stabilize the training in the early stage when the flow deforms are not well trained. If set to 0, there will be no ramping and the full density will be applied from the beginning.
+
 class DeformableXrayRendererWithFlow(CoronaryDeformableXrayRenderer):
     deform_model: DeformWithFlowModel   # type: ignore
     
     @override
     def __init__(
         self,
-        optimization_config: DeformableRendererOptimizationConfig,
+        optimization_config: DeformableXrayRendererWithFlowConfig,
         deform_model_config: DeformWithFlowConfig,
     ):
         super().__init__(optimization_config, deform_model_config)
         self.deform_model_config = deform_model_config
+        self.optimization_config = optimization_config
     
     @override
     def forward(
@@ -131,7 +137,7 @@ class DeformableXrayRendererWithFlow(CoronaryDeformableXrayRenderer):
         deforms = self.deform_model(gs.xyz.detach(), time.detach(), phase.detach())
         
         # apply density amplitude ramp for models that output d_density (with_flow)
-        ramp_steps = getattr(self.optimization_config, "density_ramp_steps", 2000)
+        ramp_steps = self.optimization_config.density_ramp_steps
         warm_up = self.optimization_config.warm_up
         if ramp_steps > 0:
             alpha = float(max(0.0, min(1.0, (step - warm_up) / ramp_steps)))

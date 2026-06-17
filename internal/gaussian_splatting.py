@@ -13,7 +13,7 @@ from jsonargparse.typing import lazy_instance
 
 from .models.gaussian import Gaussian, GaussianModel
 from .models.vanilla_gaussian import VanillaGaussian
-from .renderers import Renderer, VanillaRenderer, RendererConfig
+from .renderers import Renderer, VanillaRenderer
 from .renderers.renderer import RendererOutputs
 from .metrics.metric import Metric
 from .metrics.vanilla_metrics import VanillaMetrics
@@ -32,7 +32,7 @@ class GaussianSplatting(LightningModule):
             background_color: Tuple[float, float, float] = (0., 0., 0.),
             output_path: str|None = None,
             save_val_metrics: bool = True,  # save metric csv during validation/test  # TODO add it to callbacks
-            renderer: Union[Renderer, RendererConfig] = lazy_instance(VanillaRenderer),
+            renderer: Renderer = lazy_instance(VanillaRenderer),
             metric: Metric = lazy_instance(VanillaMetrics),
             density: DensityController = lazy_instance(VanillaDensityController),
             web_viewer: bool = False,
@@ -52,9 +52,6 @@ class GaussianSplatting(LightningModule):
         # setup models
         self.gaussian_model = gaussian.instantiate()
 
-        # instantiate renderer
-        if isinstance(renderer, RendererConfig):
-            renderer = renderer.instantiate()
         self.renderer = renderer
 
         # instantiate density controller

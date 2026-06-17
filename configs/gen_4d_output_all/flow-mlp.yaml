@@ -65,6 +65,7 @@ model:
     init_args:
       optimization_config:
         enable_ast: true
+        density_ramp_steps: 2000
       deform_model_config:
         class_path: internal.deform_models.deform_with_flow.HashGridDeformConfig
         init_args:
