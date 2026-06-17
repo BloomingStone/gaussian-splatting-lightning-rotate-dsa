@@ -15,7 +15,7 @@ trainer:
           init_args:
             save_ckpt: true
             save_vtp: true
-            save_nii: true
+            save_volume: true
             save_phase: 0.
     - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
     - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled

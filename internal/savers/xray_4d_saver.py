@@ -6,9 +6,9 @@ import torch
 from .saver import Saver, ThreadedSaverModule
 from .x_ray_saver import (
     VtpSavePayload,
-    NiftiSavePayload,
     SaveOutputsPayload,
     _save_outputs,
+    build_nii_payloads,
 )
 from ..renderers.xray_4d_renderer import Xray4DRender
 from ..deform_models import Deforms, GSParam
@@ -19,9 +19,10 @@ from ..models.xray_4d_gaussian import Xray4DGaussianModel
 
 @dataclass
 class XRaySaver(Saver):
-    save_ckpt: bool = True
-    save_vtp: bool = True
-    save_nii: bool = True
+    save_ckpt: bool = False
+    save_vtp: bool = False
+    save_volume: bool = False
+    save_label_threshold: float | None = None
     save_phase: float = 0.0
     save_time_or_type: float | Literal["mean", "std", "mean+2std"] = "mean+2std"
     default_save_time: float = 0.5
@@ -89,14 +90,13 @@ class XRaySaverModule(ThreadedSaverModule):
         volume_shape = tuple(meta.volume_size)
         coronary_affine = meta.centering_affine
 
-        nifti_payload = NiftiSavePayload.build_from_gsparam(
-            pl_module, 
-            source_deformed,
-            volume_shape,
-            coronary_affine
-        ) if self.config.save_nii else None
-
-        payload = SaveOutputsPayload(vtp=vtp_payload, nifti=nifti_payload)
+        payload = SaveOutputsPayload(
+            vtp=vtp_payload,
+            nifti=build_nii_payloads(
+                pl_module, source_deformed, volume_shape, coronary_affine,
+                self.config.save_volume, self.config.save_label_threshold,
+            ),
+        )
         self._submit_save_task(_save_outputs, payload)
 
         

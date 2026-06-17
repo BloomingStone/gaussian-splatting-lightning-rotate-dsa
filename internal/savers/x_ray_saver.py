@@ -342,12 +342,58 @@ def _save_outputs(
         nib_io.save(nifti_img, nifti_payload.volume_path)
 
 
+def build_nii_payloads(
+    pl_module: GaussianSplatting,
+    gs_param: GSParam,
+    volume_shape: tuple[int, int, int],
+    coronary_affine: np.ndarray,
+    save_volume: bool,
+    save_label_threshold: float | None,
+) -> tuple[NiftiSavePayload | None, NiftiSavePayload | None]:
+    if save_label_threshold is None and not save_volume:
+        return None, None
+
+    nifti_payload = NiftiSavePayload.build_from_gsparam(
+        pl_module,
+        gs_param,
+        volume_shape,
+        coronary_affine,
+    )
+    if save_label_threshold is not None:
+        label_payload = NiftiSavePayload(
+            volume_path=Path(
+                str(nifti_payload.volume_path)
+                .replace(".nii", f"_label_thr{save_label_threshold:.2f}.nii")
+            ),
+            volume=(nifti_payload.volume >= save_label_threshold).astype(np.uint8),
+            volume_affine=coronary_affine,
+        )
+    else:
+        label_payload = None
+
+    match save_volume, save_label_threshold:
+        case True, None:
+            return nifti_payload, None
+        case False, float():
+            return None, label_payload
+        case True, float():
+            return nifti_payload, label_payload
+        case False, None:
+            return None, None
+        case _:
+            raise ValueError(
+                f"Invalid combination of save_volume and save_label_threshold: "
+                f"{save_volume}, {save_label_threshold}"
+            )
+
+
 @dataclass
 class XRaySaver(Saver):
-    save_ckpt: bool = True
-    save_vtp: bool = True
-    save_nii: bool = True
-    save_deform_field_nii: bool = True
+    save_ckpt: bool = False
+    save_vtp: bool = False
+    save_volume: bool = False
+    save_label_threshold: float | None = None
+    save_deform_field_nii: bool = False
     
     save_uniformed_time: float = 0.5
     save_phase: float = 0.0
@@ -398,13 +444,6 @@ class XRaySaverModule(ThreadedSaverModule):
         volume_shape = tuple(meta.volume_size)
         coronary_affine = meta.centering_affine
 
-        nifti_payload = NiftiSavePayload.build_from_gsparam(
-            pl_module, 
-            source_deformed,
-            volume_shape,
-            coronary_affine
-        ) if self.config.save_nii else None
-        
         deform_field_nii_payload = NiftiSavePayload.build_from_deform_model(
             pl_module,
             deform_model,
@@ -412,7 +451,11 @@ class XRaySaverModule(ThreadedSaverModule):
             coronary_affine,
         ) if self.config.save_deform_field_nii else None
 
-        payload = SaveOutputsPayload(vtp=vtp_payload, nifti=[nifti_payload, deform_field_nii_payload])
+        vol_payload, label_payload = build_nii_payloads(
+            pl_module, source_deformed, volume_shape, coronary_affine,
+            self.config.save_volume, self.config.save_label_threshold,
+        )
+        payload = SaveOutputsPayload(vtp=vtp_payload, nifti=[vol_payload, label_payload, deform_field_nii_payload])
         self._submit_save_task(_save_outputs, payload)
 
         

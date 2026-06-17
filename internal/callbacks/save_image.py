@@ -69,6 +69,8 @@ class SaveImage(Callback):
         Maximum number of batches to save per epoch (-1 = unlimited).
     max_image_saving_threads:
         Number of background threads used for writing images to disk.
+    use_logger:
+        Whether to also log the images to the logger (e.g. TensorBoard or WandB).
     """
 
     def __init__(
@@ -76,11 +78,13 @@ class SaveImage(Callback):
         save_val_output: bool = True,
         max_save_val_output: int = -1,
         max_image_saving_threads: int = 16,
+        use_logger: bool = False,
     ) -> None:
         super().__init__()
         self.save_val_output = save_val_output
         self.max_save_val_output = max_save_val_output
         self.max_image_saving_threads = max_image_saving_threads
+        self.use_logger = use_logger
         self.image_queue: queue.Queue = queue.Queue(maxsize=self.max_image_saving_threads)
         self.image_saving_threads: list[threading.Thread] = []
 
@@ -107,12 +111,14 @@ class SaveImage(Callback):
             image_list.append(item["output_images"][key])
 
         image = torch.concat(image_list, dim=-1)
-        grid = torchvision.utils.make_grid(image)
-        self._log_image(
-            trainer,
-            tag="{}_images/{}".format(item["stage"], item["image_name"].replace("/", "_")),
-            image_tensor=grid,
-        )
+        
+        if self.use_logger:
+            grid = torchvision.utils.make_grid(image)
+            self._log_image(
+                trainer,
+                tag="{}_images/{}".format(item["stage"], item["image_name"].replace("/", "_")),
+                image_tensor=grid,
+            )
 
         image_output_path = os.path.join(
             pl_module.hparams["output_path"],

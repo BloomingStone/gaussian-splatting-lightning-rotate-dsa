@@ -13,24 +13,26 @@ trainer:
       init_args:
         refresh_rate: 50
     
-    # - class_path: internal.callbacks.scene_saver.SceneSaver
-    #   init_args:
-    #     save_iterations: []
-    #     saver:
-    #       class_path: internal.savers.xray_4d_saver.XRaySaver
-    #       init_args:
-    #         save_ckpt: false
-    #         save_vtp: false
-    #         save_nii: false
-    #         save_phase: 0.
+    - class_path: internal.callbacks.scene_saver.SceneSaver
+      init_args:
+        save_iterations: [20000]
+        saver:
+          class_path: internal.savers.xray_4d_saver.XRaySaver
+          init_args:
+            save_ckpt: false
+            save_vtp: false
+            save_volume: false
+            save_label_threshold: 0.0344
+            save_time_or_type: 0.5
+            save_phase: 0.
     
     # - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
 
-    # - class_path: internal.callbacks.save_image.SaveImage
-    #   init_args:
-    #     save_val_output: true
-    #     max_save_val_output: 0
-    #     max_image_saving_threads: 1
+    - class_path: internal.callbacks.save_image.SaveImage
+      init_args:
+        save_val_output: true
+        max_save_val_output: 20
+        max_image_saving_threads: 3
 
 
 data:

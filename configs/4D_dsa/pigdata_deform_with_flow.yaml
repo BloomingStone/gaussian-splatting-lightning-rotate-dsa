@@ -72,5 +72,5 @@ model:
     init_args:
       save_ckpt: false
       save_vtp: false
-      save_nii: true
+      save_volume: true
       save_phase: 0.
