@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Any
+import warnings
 
 import torch
 from torch import nn
@@ -211,7 +212,7 @@ class DeformModel(nn.Module):
     
     def get_phase(self, t_input, phase_input):
         if self.cfg.use_t_as_phase:
-            assert phase_input is None, "phase_input should be None when use_t_as_phase is True"
+            warnings.warn("Using time t as the only input for temporal variation, phase input will be ignored.")
             return t_input
         else:
             assert phase_input is not None, "phase_input should not be None when use_t_as_phase is False"

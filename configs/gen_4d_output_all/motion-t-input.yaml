@@ -66,9 +66,11 @@ model:
       deform_model_config:
         class_path: internal.deform_models.HashGridDeformConfig
         init_args:
+          use_t_as_phase: true    # diff here
           x_multires: 13
           log2_hashmap_size: 19
           max_resolution: 2048
+          
   metric:
     class_path: internal.metrics.rotate_xray_metrics.RotateXrayMetrics
     init_args:
