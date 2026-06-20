@@ -228,11 +228,12 @@ class Phase0InTrainSpliter(XRaySpliter):
 @dataclass
 class AlphaRangedSpliter(XRaySpliter):
     """
-    Split the dataset by a maximum angular range around the first frame.
+    Split the dataset by a maximum angular range centered on the middle frame.
 
-    The first frame's alpha angle is used as the starting angle.
-    All frames whose alpha angle falls within ``[start_angle, start_angle + max_angle_degree]``
-    are assigned to training; the remaining frames go to validation / testing.
+    The middle frame (``n_frames // 2``) is treated as the fully contrast-filled frame.
+    Training frames are those whose alpha angle falls within
+    ``[center_angle - max_angle_degree / 2, center_angle + max_angle_degree / 2]``;
+    all remaining frames are used for validation / testing.
 
     .. note::
 
@@ -241,14 +242,15 @@ class AlphaRangedSpliter(XRaySpliter):
     """
 
     max_angle_degree: float = 180.0
-    """Maximum angular span (in degrees) from the first frame for the training set."""
+    """Full angular span (in degrees) centered on the middle frame for the training set."""
 
     def split(self, data_dir: Path, meta: XRayMeta) -> dict[Stage, list[int]]:
         alphas = np.array([frame.alpha_degree for frame in meta.frames])
-        start_angle = alphas[0]
-        end_angle = start_angle + self.max_angle_degree
+        n = len(alphas)
+        center_angle = alphas[n // 2]
+        half_span = self.max_angle_degree / 2.0
 
-        train_mask = (alphas >= start_angle) & (alphas <= end_angle)
+        train_mask = (alphas >= center_angle - half_span) & (alphas <= center_angle + half_span)
 
         train_idx = np.where(train_mask)[0].tolist()
         val_idx = np.where(~train_mask)[0].tolist()
