@@ -226,6 +226,31 @@ class Phase0InTrainSpliter(XRaySpliter):
         
 
 @dataclass
-class AlphaRengedSpliter(XRaySpliter):
-    pass
-    # TODO
+class AlphaRangedSpliter(XRaySpliter):
+    """
+    Split the dataset by a maximum angular range around the first frame.
+
+    The first frame's alpha angle is used as the starting angle.
+    All frames whose alpha angle falls within ``[start_angle, start_angle + max_angle_degree]``
+    are assigned to training; the remaining frames go to validation / testing.
+
+    .. note::
+
+       This splitter assumes that the alpha angle increases monotonically from the
+       first frame onward (as is typical for rotational X-ray acquisitions).
+    """
+
+    max_angle_degree: float = 180.0
+    """Maximum angular span (in degrees) from the first frame for the training set."""
+
+    def split(self, data_dir: Path, meta: XRayMeta) -> dict[Stage, list[int]]:
+        alphas = np.array([frame.alpha_degree for frame in meta.frames])
+        start_angle = alphas[0]
+        end_angle = start_angle + self.max_angle_degree
+
+        train_mask = (alphas >= start_angle) & (alphas <= end_angle)
+
+        train_idx = np.where(train_mask)[0].tolist()
+        val_idx = np.where(~train_mask)[0].tolist()
+
+        return {"train": train_idx, "val": val_idx, "test": val_idx}
