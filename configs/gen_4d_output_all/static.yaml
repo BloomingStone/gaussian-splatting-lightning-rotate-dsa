@@ -16,7 +16,7 @@ trainer:
       init_args:
         save_iterations: [20000]
         saver:
-          class_path: internal.savers.x_ray_saver_static.XRaySaver
+          class_path: internal.savers.x_ray_saver_static.XRaySaver_Static
           init_args:
             save_ckpt: false
             save_vtp: false
