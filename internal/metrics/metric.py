@@ -301,7 +301,7 @@ class CommonImageMetricImpl(MetricImpl):
                 vol_roi = vol_pred[aabb_roi]               # GPU indexing
                 if vol_roi.numel() > 0:
                     for pct in cfg.thresholds_percentile:
-                        thr_val = float(torch.quantile(vol_roi.cpu(), pct))
+                        thr_val = float(np.quantile(vol_roi.cpu().numpy(), pct))
                         thresholds.append((f"thd-{pct * 100:.2f}%", thr_val))
 
             result: dict[str, torch.Tensor] = {}
@@ -323,9 +323,10 @@ class CommonImageMetricImpl(MetricImpl):
 
             return result
         except Exception as e:
+            import traceback
             import warnings
             warnings.warn(f"Error computing 3D metrics: {e}")
-            print(f"Error computing 3D metrics: {e}\n\n")
+            traceback.print_exc()
             return {}
 
 
