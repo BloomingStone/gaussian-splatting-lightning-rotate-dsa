@@ -25,6 +25,10 @@ class RotateXrayDensityController(DensityController):
     
     densify_grad_percentile: float = 0.98
 
+    # If > 0, use a fixed gradient threshold instead of dynamic percentile-based threshold.
+    # Set to the average grad_threshold from baseline to compare fixed vs dynamic.
+    fixed_grad_threshold: float = -1.0
+
     cull_density_threshold: float = 5e-4
     
     max_n_gaussians: float = 1e6
@@ -93,7 +97,17 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
                     max_screen_size=size_threshold,
                     gaussian_model=gaussian_model,
                     optimizers=optimizers,
+                    pl_module=pl_module,
                 )
+                # log grad threshold for analysis (only on densify steps)
+                if self._grad_threshold is not None:
+                    pl_module.log(
+                        "density/grad_threshold",
+                        self._grad_threshold,
+                        on_step=True,
+                        on_epoch=False,
+                        batch_size=1,
+                    )
 
             if global_step % self.config.density_reset_interval == 0 or \
                     (
@@ -104,7 +118,7 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
     
     
     @override
-    def _densify_and_prune(self, max_screen_size, gaussian_model, optimizers: list):
+    def _densify_and_prune(self, max_screen_size, gaussian_model, optimizers: list, pl_module=None):
         min_density = self.config.cull_density_threshold
         prune_extent = self.prune_extent
 
@@ -112,15 +126,27 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
 
-        # Dynamic threshold: max percentile of grad in recent 5 density-control steps.
+        # Threshold: fixed or dynamic (max percentile of grad in recent 5 density-control steps).
         grad_norm = grads.norm(dim=-1)
         valid_grad_norm = grad_norm[torch.isfinite(grad_norm)]
-        if valid_grad_norm.numel() > 0:
-            grad_percentile = float(torch.quantile(valid_grad_norm, self.config.densify_grad_percentile).item())
-            self._recent_grad_percentile.append(grad_percentile)
-            self._grad_threshold = max(self._recent_grad_percentile)
-        elif self._grad_threshold is None:
-            self._grad_threshold = float(torch.quantile(valid_grad_norm, self.config.densify_grad_percentile).item())
+
+        if self.config.fixed_grad_threshold > 0:
+            self._grad_threshold = self.config.fixed_grad_threshold
+            if pl_module is not None:
+                pl_module.log(
+                    "density/grad_threshold",
+                    self._grad_threshold,
+                    on_step=True,
+                    on_epoch=False,
+                    batch_size=1,
+                )
+        else:
+            if valid_grad_norm.numel() > 0:
+                grad_percentile = float(torch.quantile(valid_grad_norm, self.config.densify_grad_percentile).item())
+                self._recent_grad_percentile.append(grad_percentile)
+                self._grad_threshold = max(self._recent_grad_percentile)
+            elif self._grad_threshold is None:
+                self._grad_threshold = float(torch.quantile(valid_grad_norm, self.config.densify_grad_percentile).item())
 
         # densify
         self._densify_and_clone(grads, gaussian_model, optimizers)
