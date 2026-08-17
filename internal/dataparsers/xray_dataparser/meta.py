@@ -25,6 +25,11 @@ class CArmGeometry:
     dely: MMPerPixel    # Pixel size in y direction, default to delx
     x0: MM = 0.0        # detector principal point x-offset
     y0: MM = 0.0        # detector principal point y-offset
+    orientation_type: Literal["AP", "PA"] = "AP"
+    """
+    Orientation of the camera, AP means the camera is in front of patient. (follows the DICOM)
+    # TODO cite dicom documentation url as Gen-4D did.
+    """
 
 
 @dataclass
