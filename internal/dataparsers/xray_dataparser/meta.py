@@ -46,6 +46,12 @@ class RotatedParameters:
     coordinate_system: str = "RAS"          # X is R, Y is A, Z is S    # TODO use it when build cameras
     parameterization: str = "euler_angles"  # representation of rotation
     convention: str = "ZXY"                 # Camera rotation axis sequence, internal rotation
+    orientation_type: Literal["AP", "PA"] = "AP"
+    """
+    Orientation of the camera, AP means the camera is in front of patient. (follows the DICOM)
+    # TODO cite dicom documentation url as Gen-4D did.
+    """
+    
 
 @dataclass
 class FrameInfo:
@@ -130,6 +136,13 @@ class XRayMetaLoader(MetaLoader[XRayMeta]):
             meta_dict = json.load(f)
 
         rotate_parameters = dict(meta_dict.get("rotated_parameters", meta_dict.get("rotate_parameters", {})))
+        
+        if "orientation_type" in meta_dict.get("additional_info", {}):
+            print(
+                "Warning: 'orientation_type' is found in 'additional_info', but it should be in 'rotated_parameters'. JSON might be in the old format.\n \
+                 Here we will use it to update rotated_parameters.")
+            rotate_parameters["orientation_type"] = meta_dict["additional_info"]["orientation_type"]
+        
         if "total_frame" not in rotate_parameters and "total_frames" in rotate_parameters:
             rotate_parameters["total_frame"] = rotate_parameters["total_frames"]
         if "total_frames" in rotate_parameters:
