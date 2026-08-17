@@ -4,7 +4,7 @@ from pytest import fixture
 
 @fixture
 def test_xray_data_root():
-    return Path("data/rbf_reader_flow_contrast_LCA")
+    return Path("data/gen_4d_output_all/static/asoca-diseased__Diseased_02__LCA")
 
 @fixture
 def test_xray_data_no_flow_root():

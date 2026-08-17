@@ -224,8 +224,10 @@ class FdkCloudParser(XRayCloudParser):
         phases = meta.phase_array[indices].tolist()
         
         # DSA 中 alpha 角为从前向右转。在 RAS 坐标系中即旋转方向从 前（A +Y）转到右（R +X），即绕 Z 轴负向旋转。
-        # degree 转 radian
-        alphas = [-a for a in alphas]
+        # degree 转 radian。
+        # -a 修正 DSA 旋转方向；+π 对齐 ODL 的 source-detector 约定（ODL 源-探测器方向
+        # 与我们相机定义恰好反了 180°，不加 +π 会导致重建体积绕 Z 轴旋转 180°）。
+        alphas = [-a + math.pi for a in alphas]
         
         data = zip(indices, alphas, phases)
         
@@ -291,7 +293,8 @@ class FdkCloudParser(XRayCloudParser):
                 dde         =   geom.sdd - geom.sod,
                 dso         =   geom.sod,
             ), 
-            img_transform = PngOdlTransform()
+            img_transform = PngOdlTransform(),
+            align_ras=False,  # 保持原始 ODL 体素顺序，后续 _sample_points_from_volume 通过 affine 转换坐标
         )
         
         volume = projector.backward_proj(projections, use_filter=self.use_filter)

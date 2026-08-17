@@ -125,10 +125,46 @@ class ConeBeamParams:
 
 
 class ConeBeamProjector:
+    """Cone-beam projector backed by ODL / ASTRA.
+
+    Coordinates & conventions
+    -------------------------
+    * ODL's ``ConeBeamGeometry`` expects monotonically increasing alpha angles
+      (in radians) that describe the **source** rotation around the Z axis
+      (``axis=[0, 0, 1]``).
+    * Our DSA cameras are defined with the source rotating in the *opposite*
+      direction, and the source–detector assignment is 180° rotated relative
+      to ODL's convention.  **Therefore the caller must pass**
+
+          alphas = -original_alpha_radians + π
+
+      to correctly align forward / backward projections with the NIfTI
+      ``centering_affine``.  See ``FdkCloudParser._preprocess_indices_alphas``
+      for the reference implementation.
+
+    * ``centering_affine`` has negative X/Y spacing (e.g. -0.4375 mm/vox),
+      whereas ODL's ``uniform_discr`` always has positive spacing (min_pt →
+      max_pt).  When ``align_ras=True`` (the default), ``backward_proj``
+      automatically flips X and Y axes so that the returned volume is in the
+      same orientation as the NIfTI label (RAS-aligned).
+
+    Parameters
+    ----------
+    param : ConeBeamParams
+        Cone-beam geometry parameters.
+    img_transform : ImageOdlTransform
+        Transform between image domain and ODL projection domain.
+    align_ras : bool
+        When True (default), ``backward_proj`` flips X and Y axes to match
+        the RAS / NIfTI convention (ODL positive spacing → NIfTI negative
+        spacing).  Set to False only when you need the raw ODL volume.
+    """
+
     def __init__(
         self, 
         param: ConeBeamParams,
         img_transform: ImageOdlTransform,
+        align_ras: bool = True,
     ):
         super().__init__()
         self.param = param
@@ -136,8 +172,14 @@ class ConeBeamProjector:
         self.adj_trafo = self.ray_trafo.adjoint
         
         self.img_transform = img_transform
+        self.align_ras = align_ras
 
     def forward_proj(self, x: np.ndarray, to_dtype: DTypeLike = np.float32) -> np.ndarray:
+        # If backward_proj applied XY flip (align_ras=True), undo it before
+        # raytracing — ODL's ray_trafo expects the volume in the original
+        # ODL coordinate system (positive X/Y spacing).
+        if self.align_ras:
+            x = x[::-1, ::-1, :]
         proj = self.ray_trafo(x).asarray()
         proj -= proj.min()
         if proj.max() <= 0:
@@ -147,12 +189,36 @@ class ConeBeamProjector:
         return self.img_transform.odl_to_img(proj, to_dtype)
     
     def backward_proj(self, y: np.ndarray, use_filter: bool) -> np.ndarray:
+        """Reconstruct a 3-D volume from projections.
+
+        Parameters
+        ----------
+        y : (N_angles, H, W) float32
+            Projection images (will be converted to ODL domain via
+            ``img_transform.img_to_odl``).
+        use_filter : bool
+            If True, apply Ram-Lak filtered back-projection (FDK).
+            If False, use the unfiltered adjoint.
+
+        Returns
+        -------
+        volume : (D, H, W) float32
+            Reconstructed volume.  When ``self.align_ras`` is True the X and Y
+            axes are flipped so the result aligns with the NIfTI
+            ``centering_affine`` (ODL positive spacing → NIfTI negative spacing).
+        """
         y = self.img_transform.img_to_odl(y)
         y = add_hanning_window_at_edge(y, edge_width=10)
         if use_filter:
-            return self.fbp_op(y).asarray()
+            volume = self.fbp_op(y).asarray()
         else:
-            return self.adj_trafo(y).asarray()
+            volume = self.adj_trafo(y).asarray()
+
+        # ODL uses positive X/Y spacing (min_pt → max_pt), whereas our
+        # centering_affine has negative X/Y spacing.  Flip to align.
+        if self.align_ras:
+            volume = volume[::-1, ::-1, :]
+        return volume
     
 def add_hanning_window_at_edge(input_proj: np.ndarray, edge_width: int) -> np.ndarray:
     if edge_width <= 0:

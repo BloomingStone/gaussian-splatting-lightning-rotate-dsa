@@ -21,12 +21,7 @@ gs-viewer = "internal.entrypoints.viewer:cli"
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
-platforms = ["linux-64"]
-
-[tool.pixi.system-requirements]
-cuda = "12.0"
-
-[tool.pixi.activation.env]
+platforms = [{ platform = "linux-64", cuda = "12" }]
 
 [tool.pixi.tasks]   # run with `pixi run <task-name>` (activate env and run the command)
 gs-fit = "python main.py fit"
