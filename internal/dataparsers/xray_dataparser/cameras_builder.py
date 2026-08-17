@@ -72,6 +72,7 @@ class RotateXRayCamerasBuilder(CamerasBuilder[XRayMeta]):
         """Build Cameras from XRayMeta."""
         n_cameras = meta.num_frames
         sod = meta.c_arm_geometry.sod
+        orientation_type = meta.rotated_parameters.orientation_type
 
         # GS follows COLMAP orientation, where Z is forward direction of camera and Y is down.
         #
@@ -81,28 +82,37 @@ class RotateXRayCamerasBuilder(CamerasBuilder[XRayMeta]):
         # Note that the Euler Angle uses internal rotation and continues to rotate around the rotated 
         # coordinate axis. The sequence of action of the rotation matrix is opposite to that of the world 
         # coordinate rotation. R_colmap_orient = Rx(90) @ Rz (180) 
-        R_colmap_orient = euler_angles_to_matrix(torch.tensor((torch.pi/2, torch.pi, 0.)), "XZY")
+        if orientation_type == "AP":
+            R_colmap_orient = euler_angles_to_matrix(torch.tensor((torch.pi/2, torch.pi, 0.)), "XZY")
+        elif orientation_type == "PA":
+            R_colmap_orient = euler_angles_to_matrix(torch.tensor((-torch.pi/2, 0., 0.)), "XZY")
+        else:
+            raise ValueError(f"Invalid orientation_type {orientation_type}.")
+        
         M_colmap_orient = torch.eye(4)
         M_colmap_orient[:3, :3] = R_colmap_orient
 
         # Here we use RAS coordiant system, where right side of patient is x axis. RAS -> XYZ
-        # In DSA the primary angle (alpha) is RAO (right anterior oblique), i.e. from A to R, witch is negative 
-        # rotation around z axis.
-        # And similar to secondary angle (beta), so here use negative angles
-        #
+        # TODO copy refence from Gen-4D
         # convention usally is "ZXY", which means the rotation first rotate around Z axis(SI axis) by alpha, 
         # then around X axis (RL axis) by beta
         convention = meta.rotated_parameters.convention
         M_rotation = torch.eye(4)[None].repeat(n_cameras, 1, 1)
-        alpha = torch.from_numpy(-meta.alphas_radians).float()
-        beta = torch.from_numpy(-meta.betas_radians).float()
+        alpha = torch.from_numpy(meta.alphas_radians).float()
+        beta = torch.from_numpy(meta.betas_radians).float()
         angles = torch.stack([alpha, beta, torch.zeros_like(alpha)], dim=-1)
         M_rotation[:, :3, :3] =  euler_angles_to_matrix(angles, convention)
         
         # In RAS system the default position of source/camera is in front of patient. 
         # The souce first translate then rotation
         M_translation = torch.eye(4)
-        M_translation[:3, 3] = torch.tensor([0, sod, 0])
+        if orientation_type == "AP":
+            M_translation[:3, 3] = torch.tensor([0, sod, 0])
+        elif orientation_type == "PA":
+            M_translation[:3, 3] = torch.tensor([0, -sod, 0])
+        else:
+            raise ValueError(f"Invalid orientation_type {orientation_type}.")
+
         M_c2w = M_rotation @ M_translation @ M_colmap_orient
         
         M_w2c = torch.linalg.inv(M_c2w)

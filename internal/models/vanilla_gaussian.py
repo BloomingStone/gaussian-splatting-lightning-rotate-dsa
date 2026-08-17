@@ -120,7 +120,7 @@ class VanillaGaussianModel(
         # Initialize the GS size to be the average dist of the 3 nearest neighbors
         dist2_avg = (knn(fused_point_cloud, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
         dist_avg = torch.sqrt(dist2_avg)
-        scales = torch.log(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
+        scales = self.scale_inverse_activation(dist_avg * init_scale).unsqueeze(-1).repeat(1, 3)  # [N, 3]
 
         # rotations
         rots = torch.zeros((fused_point_cloud.shape[0], 4))
