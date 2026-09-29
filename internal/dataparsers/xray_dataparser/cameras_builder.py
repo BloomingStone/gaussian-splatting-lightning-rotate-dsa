@@ -70,7 +70,7 @@ class RotateXRayCamerasBuilder(CamerasBuilder[XRayMeta]):
         """Build Cameras from XRayMeta."""
         n_cameras = meta.num_frames
         sod = meta.c_arm_geometry.sod
-        orientation_type = meta.rotated_parameters.orientation_type
+        orientation_type = meta.c_arm_geometry.orientation_type
 
         # GS follows COLMAP orientation, where Z is forward direction of camera and Y is down.
         #

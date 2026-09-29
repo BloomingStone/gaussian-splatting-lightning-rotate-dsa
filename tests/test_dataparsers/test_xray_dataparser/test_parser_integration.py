@@ -9,8 +9,8 @@ import pytest
 import torch
 from torch.utils.data import DataLoader
 
-from internal.dataparsers.dataparser import collate_fn
-from internal.dataparsers.xray_dataparser import XRayDataParser
+from internal.dataparsers.dataparser import collate_fn, DataParser
+from internal.dataparsers.xray_dataparser import XRayDataParserBuilder
 from internal.dataparsers.xray_dataparser.cameras_builder import RotateXRayCamerasBuilder
 from internal.dataparsers.xray_dataparser.cloud_parsers import RandomCloudParser
 from internal.dataparsers.xray_dataparser.datasets import (
@@ -23,8 +23,7 @@ from internal.dataparsers.xray_dataparser.meta import XRayMetaLoader
 from internal.dataparsers.xray_dataparser.splitters import ReconstructionSpliter, RenderNewViewsSpliter
 
 ROTATED_XRAY_ROOTS = [
-    Path("data/rbf_reader_flow_contrast_LCA"),
-    Path("data/rbf_reader_flow_contrast_RCA"),
+    Path("data/test_data"),
 ]
 TIFF_ROOTS = [
     Path("data/pigdata"),
@@ -67,8 +66,8 @@ def _save_cloud_xy(xyz, path: Path, title: str) -> None:
     plt.close()
 
 
-def _make_rotated_xray_parser() -> XRayDataParser:
-    return XRayDataParser(
+def _make_rotated_xray_parser() -> DataParser:
+    return XRayDataParserBuilder(
         meta_loader=XRayMetaLoader(),
         cloud_parser=RandomCloudParser(num_points=100_000),
         spliter=RenderNewViewsSpliter(train_ratio=0.8),
@@ -79,11 +78,11 @@ def _make_rotated_xray_parser() -> XRayDataParser:
             )
         ),
         filter_visible_points=True,
-    )
+    ).build()
 
 
-def _make_tiff_parser() -> XRayDataParser:
-    return XRayDataParser(
+def _make_tiff_parser() -> DataParser:
+    return XRayDataParserBuilder(
         meta_loader=XRayMetaLoader(),
         cloud_parser=RandomCloudParser(num_points=100_000),
         spliter=ReconstructionSpliter(),
@@ -93,7 +92,7 @@ def _make_tiff_parser() -> XRayDataParser:
             dataset_config=TiffDatasetConfig(),
         ),
         filter_visible_points=True,
-    )
+    ).build()
 
 
 @pytest.mark.parametrize("data_root", ROTATED_XRAY_ROOTS)

@@ -1,121 +1,31 @@
 # Gaussian Splatting
 
-## TODO
+## 使用方法
 
-- [ ] TODO cfg_args 可能没有用
-- [ ] TODO 自定义从 ckpt 导入和 ply 导入模型
-	- 或者说要求实现 GS 实现各自的loader 从 ply 文件或 ply 对象中加载 GS
-	- [X] DONE 修改使用 VTK 导入点云，而不是 ply
-	- [ ] TODO 现在导入是将 点云和 render 混合一起导入，但这在有运动场的情况下会有问题。需要调整
-- [X] 一些使用 hparams 调用的对象改为直接使用对象
-- [ ] TODO 把3D metric 放入lightning 中，这样每次训练后会自动计算3Dmetric指标。同时需要保证 fit 结束后会生成 metrics.yaml
-	- 使用 pipline B 生成 用 冠脉标签区域 范围内，用固定阈值得到冠脉label + 0.9 0.8 0.7 等百分位或其他阈值自动化提取
-- [ ] TODO 把 vanilla 投影后端从 [[diff_gaussian_rasterization]] 切换到 [[gsplat]] #GS
-- [ ] TODO 实现并运行 viewer
-- [ ] TODO GS 使用 FDK 初始化结果应该返回density (sigma 吸收率), 而不是rbg
+此项目依赖 [pixi](https://pixi.sh/) 配置python环境。系统环境为(仅供参考)
 
-## 存储格式：VTK PolyData (.vtp)
-
-GS 模型的持久化使用 [PyVista PolyData](https://docs.pyvista.org/) 格式（`.vtp` 文件），替代了旧的 PLY 格式。
-
-### PolyData 结构约定
-
-```
-pyvista.PolyData
-├── points       : (N, 3) float32  — Gaussian 中心位置 (means / xyz)
-├── point_data   : dict[str, np.ndarray]  — 各 GS 属性，按模型类型不同
-└── field_data   : dict[str, np.ndarray]  — 全局元信息
+```txt
+OS: Ubuntu 22.04.3 LTS (Jammy Jellyfish) x86_64
+Kernel: Linux 6.8.0-136-generic
+GPU: NVIDIA GeForce RTX 3090
+cuda-runtime:
+    NVIDIA-SMI 580.173.02, Driver
+    Version: 580.173.02
+    CUDA Version: 13.0
+cuda-toolkit(nvcc): release 12.0, V12.0.76
 ```
 
-**field_data 通用字段：**
+解压项目后，然后进入到项目目录中，使用 `pixi install --frozen` 从 `pixi.lock` 安装环境。该方法确保环境的一致性，避免因依赖版本变化引起的问题。
 
-| Key | 类型 | 说明 |
-|-----|------|------|
-| `model_type` | `str` | 模型类型标识，如 `"VanillaGaussian"`、`"XrayCoronaryGaussian"` |
+如果安装失败，可能是由于某些依赖包在当前环境中无法安装。可以尝试以下步骤：
 
----
++ 使用 `pixi install` 重新安装，这将允许pixi根据当前环境自动调整依赖版本。
++ 如果仍然无法安装，检查错误日志，确定是哪个包导致安装失败，并修改 `pixi.toml` 中对应包的版本
 
-### VanillaGaussian (标准球谐模型)
+安装完成后，可以使用 `pixi shell` 进入环境，或者使用 `pixi run <command>` 直接运行命令，例如 `pixi run python XXX.py` 可以运行python脚本。
 
-**point_data：**
+随项目附带了一例测试用数据，可以使用以下命令运行：
 
-| Key | Shape | 说明 |
-|-----|-------|------|
-| `shs_dc` | `(N, 1, 3)` | 球谐 DC 分量（原始值，未激活） |
-| `shs_rest` | `(N, rest_dim, 3)` | 球谐高阶分量，rest_dim = (sh_degree+1)²−1 |
-| `opacities` | `(N, 1)` | 不透明度（原始值，sigmoid 前） |
-| `scales` | `(N, 3)` | 各向异性缩放（原始值，exp 前） |
-| `rotations` | `(N, 4)` | 四元数旋转（原始值） |
-
-**field_data：**
-
-| Key | 类型 | 说明 |
-|-----|------|------|
-| `active_sh_degree` | `int32` | 当前激活的球谐阶数 |
-
----
-
-### XrayCoronaryGaussian (X 射线冠脉模型)
-
-不使用球谐和 opacity，用 density 替代。
-
-**point_data：**
-
-| Key | Shape | 说明 |
-|-----|-------|------|
-| `density` | `(N, 1)` | 密度（原始值，softplus 前） |
-| `scales` | `(N, 3)` | 各向异性缩放（原始值，softplus 前） |
-| `rotations` | `(N, 4)` | 四元数旋转（原始值） |
-
-**可选 point_data（由 `save_motion` 配置控制，默认保存）：**
-
-| Key | Shape | 说明 |
-|-----|-------|------|
-| `d_motion_mean` | `(N, 7)` | 运动统计量 E[motion]，各列为 d_xyz(3) + d_scale(3) + d_angle(1) |
-| `d_motion_2_mean` | `(N, 7)` | 运动统计量 E[motion²] |
-
-加载时若 motion 数据缺失，自动初始化为零。
-
----
-
-### Python API
-
-```python
-# 保存
-model.save_to_vtp("path/to/point_cloud.vtp")
-
-# 加载（需要先实例化对应模型）
-import pyvista as pv
-polydata = pv.read("path/to/point_cloud.vtp")
-model.setup_from_polydata(polydata)
-
-# 导出为 PolyData 对象（不写文件）
-pd = model.to_polydata()
-```
-
-### 自定义模型
-
-子类需实现两个抽象方法：
-
-```python
-class MyGaussianModel(GaussianModel):
-    def to_polydata(self) -> pv.PolyData:
-        """将自身属性导出为 PolyData"""
-        ...
-
-    def setup_from_polydata(self, polydata: pv.PolyData, *args, **kwargs):
-        """从 PolyData 恢复属性"""
-        ...
-```
-
-## 批量运行
-
-```nushell
-for d in (ls data/gen_4d_output_all/flow/) {python main.py fit --output outputs/RotCA-GR/ --config configs/gen_4d_output_all/flow_mlp.yaml  --data.path $d.name -n flow_flow-mlp  -v ($d.name | path basename)  --logger wandb }
-```
-
-已有case 需要跳过
-
-```shell
-CUDA_VISIBLE_DEVICES=0 scripts/train_all.nu data/gen_4d_output_all/flow/ configs/gen_4d_output_all/flow-mlp.yaml outputs/RotCA-GR/ --wandb
+``` bash
+CUDA_VISIBLE_DEVICES=3 pixi run python main.py fit --config configs/gen_4d_output_all/motion.yaml --data.path data/test_data -n recon_test -v v0
 ```

@@ -19,3 +19,4 @@ from .cloud_parsers import (
     CentralLineCloudParser,
 )
 from .splitters import ReconstructionSpliter, RenderNewViewsSpliter
+from .parser import XRayDataParserBuilder

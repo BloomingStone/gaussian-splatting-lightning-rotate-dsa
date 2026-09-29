@@ -25,7 +25,7 @@ class XRayDataParserBuilder(DataParserBuilder):
     dataset_builder: ImagesDatasetBuilder|FrangiImagesDatasetBuilder|TiffDatasetBuilder = field(default_factory=ImagesDatasetBuilder)
     filter_visible_points: bool = True
     
-    def build(self):
+    def build(self) -> DataParser:
         visualizer = GammaVisualizer(gamma=0.1) if isinstance(self.dataset_builder, TiffDatasetBuilder) else None
         
         return DataParser(

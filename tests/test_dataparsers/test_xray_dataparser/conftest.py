@@ -4,11 +4,11 @@ from pytest import fixture
 
 @fixture
 def test_xray_data_root():
-    return Path("data/gen_4d_output_all/static/asoca-diseased__Diseased_02__LCA")
+    return Path("data/test_data")
 
 @fixture
 def test_xray_data_no_flow_root():
-    return Path("data/Diseased_17")
+    return Path("data/test_data_motion")
 
 @fixture
 def test_pigdata_root():
