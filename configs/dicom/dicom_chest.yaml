@@ -1,0 +1,78 @@
+# Static 3D reconstruction directly from a multi-frame rotational-DSA DICOM file.
+#
+#   pixi run gs-fit --config configs/dicom/dicom_chest.yaml --data.path data/dicom
+#
+# The parser reads `data/dicom/RXA_chest.dcm` (187 frames, 634x862, uint16),
+# decodes it in memory and serves the frames as grayscale GT projections.
+# All other components are reused from the xray pipeline.
+project: dicom_chest
+
+max_steps: 20000
+
+trainer:
+  check_val_every_n_epoch: 10
+  precision: 16-mixed
+  callbacks:
+    - class_path: internal.callbacks.scene_saver.SceneSaver
+      init_args:
+        save_iterations: [5000, 10000, 20000]
+        saver:
+          class_path: internal.savers.x_ray_saver_static.XRaySaver_Static
+          init_args:
+            save_ckpt: true
+            save_vtp: true
+            save_volume: true
+    - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
+    - class_path: internal.callbacks.callbacks.KeepRunningIfWebViewerEnabled
+    - class_path: internal.callbacks.save_image.SaveImage
+      init_args:
+        save_val_output: true
+        max_save_val_output: 10
+        max_image_saving_threads: 16
+    - class_path: internal.callbacks.callbacks.ProgressBar
+
+data:
+  parser:
+    class_path: internal.dataparsers.dicom_dataparser.parser.DicomDataParserBuilder
+    init_args:
+      meta_loader:
+        class_path: internal.dataparsers.dicom_dataparser.meta.DicomMetaLoader
+        init_args:
+          dcm_filename: RXA_chest.dcm
+          orientation_type: AP
+          normalization: minmax
+          flip_u: true
+      cloud_parser:
+        class_path: internal.dataparsers.xray_dataparser.cloud_parsers.RandomCloudParser
+        init_args:
+          num_points: 10_000
+      spliter:
+        class_path: internal.dataparsers.xray_dataparser.splitters.UniformIntervalSpliter
+        init_args:
+          train_ratio: 0.8
+      cameras_builder:
+        class_path: internal.dataparsers.dicom_dataparser.cameras_builder.DicomCamerasBuilder
+        init_args:
+          # Ideal-circle alpha/beta + SOD/SDD model. Set to true to use the
+          # vendor per-frame projection matrices stored in this file.
+          use_projection_matrix: false
+      dataset_builder:
+        class_path: internal.dataparsers.dicom_dataparser.datasets.DicomDatasetBuilder
+
+model:
+  renderer:
+    class_path: internal.renderers.xray_renderer.XrayRenderer
+  metric:
+    class_path: internal.metrics.rotate_xray_metrics_static.StaticXrayMetrics
+    init_args:
+      fused_ssim: true
+      w_gray_loss: 1.0
+      w_ssim_loss: 1.0
+  gaussian:
+    class_path: internal.models.xray_coronary_gaussian.XrayCoronaryGaussian
+  density:
+    class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
+    init_args:
+      densification_interval: 300
+      densify_grad_percentile: 0.98
+      cull_density_threshold: 5e-5

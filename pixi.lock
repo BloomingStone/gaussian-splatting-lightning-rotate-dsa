@@ -457,6 +457,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/pure_eval-0.2.4-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pycparser-3.0-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pydantic-2.13.5-pyhcf101f3_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/pydicom-3.0.2-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.21.0-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pyparsing-3.3.3-pyh5ded981_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pysocks-1.7.1-pyha55dd90_7.conda
@@ -6305,7 +6306,7 @@ packages:
   license: BSD-3-Clause
   license_family: BSD
   purls:
-  - pkg:pypi/gitpython?source=compressed-mapping
+  - pkg:pypi/gitpython?source=hash-mapping
   run_exports: {}
   size: 178869
   timestamp: 1788802794188
@@ -7454,6 +7455,18 @@ packages:
   run_exports: {}
   size: 346633
   timestamp: 1787941273167
+- conda: https://conda.anaconda.org/conda-forge/noarch/pydicom-3.0.2-pyhd8ed1ab_0.conda
+  sha256: d71c475519401d4db7934bf837cafd9e62de9f1b763789d64463f8c44a708573
+  md5: 5bacaa5df047efae99be81edcc57e96a
+  depends:
+  - python >=3.10
+  license: MIT
+  license_family: MIT
+  purls:
+  - pkg:pypi/pydicom?source=hash-mapping
+  run_exports: {}
+  size: 1755169
+  timestamp: 1773969850824
 - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.21.0-pyhcf101f3_0.conda
   sha256: f5f015ff1bc3e1b7fc08eee096b1865234189ae0b82bebdb86a5369116e42fa0
   md5: 2882dee445dfa45b0c5afce3ffb7730a

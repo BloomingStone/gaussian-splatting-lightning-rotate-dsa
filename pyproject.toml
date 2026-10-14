@@ -53,6 +53,7 @@ scikit-learn = ">=1.8.0,<2"
 e3nn = ">=0.6.0,<0.7"
 tifffile = ">=2026.3.3,<2027"
 rich = ">=14.0.0,<15"
+pydicom = ">=3.0.2,<4"
 
 [tool.pixi.pypi-options]
 no-build-isolation = [
