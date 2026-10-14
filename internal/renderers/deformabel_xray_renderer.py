@@ -15,7 +15,7 @@ from xray_gaussian_rasterization_voxelization import (
 )
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 
-from .renderer import Renderer, RendererOutputs
+from .renderer import Renderer, RendererOutputInfo, RendererOutputs, RendererOutputTypes
 from ..cameras import Camera
 from ..deform_models import DeformModel, DefromModelConfig, Deforms, GSParam
 from ..utils.general_utils import get_linear_noise_func
@@ -252,6 +252,12 @@ class CoronaryDeformableXrayRenderer(Renderer):
             },
             is_warm_up=is_warm_up
         )
+
+    def get_available_outputs(self) -> dict[str, RendererOutputInfo]:
+        return {
+            ImgT.GRAY: RendererOutputInfo(ImgT.GRAY, RendererOutputTypes.GRAY),
+            ImgT.CORONARY: RendererOutputInfo(ImgT.CORONARY, RendererOutputTypes.GRAY),
+        }
     
     def _render(
         self, 

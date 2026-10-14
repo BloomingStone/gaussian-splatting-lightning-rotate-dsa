@@ -1,4 +1,6 @@
 import os.path
+import traceback
+from pathlib import Path
 from typing import Tuple, List, Dict, Union, Any, Callable, Optional, cast
 from typing_extensions import Self
 
@@ -224,31 +226,52 @@ class GaussianSplatting(LightningModule):
     def on_train_start(self) -> None:
         super().on_train_start()
 
-        if self.hparams["web_viewer"] is True and self.trainer.global_rank == 0:
+        if self.hparams["web_viewer"] is not True or self.trainer.global_rank != 0:
+            return
+
+        try:
             from .web_viewer.training_viewer import TrainingViewer
+
             if self.get_datamodule().hparams["parser"].__class__.__name__.lower() in ["blender", "nsvf", "matrixcity"]:
-                up = torch.tensor([0., 0., 1.])
+                up = torch.tensor([0., 0., 1.]).numpy()
             else:
                 c2w = self.get_datamodule().dataparser_outputs.train_set.cameras.world_to_camera[:, :3, :3]
                 up = c2w[:, :3, 1].mean(dim=0)
-                up = -up / torch.linalg.norm(up)
+                up = (-up / torch.linalg.norm(up)).detach().cpu().numpy()
+
+            output_path = Path(self.hparams["output_path"])
+            cameras_json = output_path / "cameras.json"
+
             self.web_viewer = TrainingViewer(
-                camera_names=self.get_datamodule().dataparser_outputs.train_set.image_names,
-                cameras=self.get_datamodule().dataparser_outputs.train_set.cameras,
-                up_direction=up.cpu().numpy(),
-                camera_center=self.get_datamodule().dataparser_outputs.train_set.cameras.camera_center.mean(dim=0).cpu().numpy(),
+                renderer=self.renderer,
+                background_color=self.background_color,
+                up_direction=up,
+                cameras_json=str(cameras_json) if cameras_json.is_file() else None,
+                output_dir=str(output_path),
             )
-            self.web_viewer.start()
+            # `block=False`: the viser server runs in its own threads. The
+            # training loop services render requests from
+            # `on_train_batch_start` / `on_validation_batch_start`.
+            self.web_viewer.start(block=False)
+            print(
+                "[web_viewer] in-training viewer started on 0.0.0.0:8080. Forward that port from "
+                "your local machine (see README section 3.2) to watch the run."
+            )
+        except Exception:
+            traceback.print_exc()
+            print("[web_viewer] failed to start the in-training viewer; training continues")
+            self.web_viewer = None
 
     def on_train_batch_start(self, batch: BatchT, batch_idx: int):
         if self.web_viewer is not None:
-            raise NotImplementedError("The training viewer is currently not implement.")
-            # self.web_viewer.training_step(
-            #     self.gaussian_model,
-            #     self.renderer,
-            #     self.background_color,
-            #     self.trainer.global_step,
-            # )
+            # Services pending viewer render requests; a no-op when nobody is
+            # connected (the queue is drained with `get_nowait()`).
+            self.web_viewer.training_step(
+                self.gaussian_model,
+                self.renderer,
+                self.background_color,
+                self.trainer.global_step,
+            )
         return super().on_train_batch_start(batch, batch_idx)
 
     def training_step(self, batch: BatchT, batch_idx: int):
@@ -334,13 +357,12 @@ class GaussianSplatting(LightningModule):
     def on_validation_batch_start(self, batch: BatchT, batch_idx: int, dataloader_idx: int = 0) -> None:
         super().on_validation_batch_start(batch, batch_idx, dataloader_idx)
         if self.web_viewer is not None:
-            raise NotImplementedError("The training viewer is currently not implement.")
-            # self.web_viewer.validation_step(
-            #     self.gaussian_model,
-            #     self.renderer,
-            #     self.background_color,
-            #     batch_idx,
-            # )
+            self.web_viewer.validation_step(
+                self.gaussian_model,
+                self.renderer,
+                self.background_color,
+                batch_idx,
+            )
 
     def validation_step(self, batch: BatchT, batch_idx: int, name: str = "val"):
         camera, image_info, _ = batch

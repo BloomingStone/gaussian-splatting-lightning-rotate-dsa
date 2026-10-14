@@ -7,6 +7,7 @@ from typing import Optional, Union, List, Literal
 from lightning.pytorch.cli import LightningCLI, LightningArgumentParser
 
 from .utils.patches import fix_lightning_save_hyperparameters
+from .utils.patches import fix_lightning_ckpt_weights_only
 from .utils.patches import wandb_logger_patch
 
 

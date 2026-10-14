@@ -7,6 +7,7 @@ from typing import Tuple, cast
 from ...models.gaussian import Gaussian
 from ...renderers import RendererConfig
 from ...renderers.vanilla_renderer import VanillaRenderer
+from ..instantiate_config_dict import instantiate_config_dict
 
 
 class GaussianModelLoader:
@@ -89,12 +90,17 @@ class GaussianModelLoader:
     def initialize_model_from_checkpoint(cls, checkpoint: dict, device):
         hparams = checkpoint["hyper_parameters"]
 
-        if isinstance(hparams["gaussian"], Gaussian):
-            model = hparams["gaussian"].instantiate()
+        # `hparams["gaussian"]` is written by LightningCLI as a jsonargparse dict
+        # (`{class_path, init_args}`) for current checkpoints, but older ones
+        # stored an already-built config object. Rebuild the former.
+        gaussian_config = instantiate_config_dict(hparams["gaussian"])
+
+        if isinstance(gaussian_config, Gaussian):
+            model = gaussian_config.instantiate()
             model_state_dict = cls.filter_state_dict_by_prefix(checkpoint["state_dict"], "gaussian_model.", device=device)
         else:
             # convert previous checkpoint to new format
-            sh_degree = hparams["gaussian"].sh_degree
+            sh_degree = gaussian_config.sh_degree
             model_state_dict = cls.filter_state_dict_by_prefix(checkpoint["state_dict"], "gaussian_model.", device=device)
             model_state_dict = {cls.previous_state_dict_key_to_new.get(name): model_state_dict[name] for name in model_state_dict}
             model_state_dict["_active_sh_degree"] = torch.tensor(sh_degree, dtype=torch.int, device=device)
@@ -121,7 +127,9 @@ class GaussianModelLoader:
     def initialize_renderer_from_checkpoint(cls, checkpoint: dict, stage: str, device):
         hparams = checkpoint["hyper_parameters"]
         # extract state dict of renderer
-        renderer = hparams["renderer"]
+        # (rebuild the jsonargparse `{class_path, init_args}` dict, if that is
+        # what the checkpoint stores; older checkpoints keep a built object)
+        renderer = instantiate_config_dict(hparams["renderer"])
         if renderer.__class__.__name__ == "GSPlatRenderer":
             from internal.renderers.gsplat_v1_renderer import GSplatV1Renderer
             renderer = GSplatV1Renderer(

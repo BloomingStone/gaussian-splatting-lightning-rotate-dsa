@@ -1,6 +1,42 @@
+"""Adapt a :class:`~internal.renderers.renderer.Renderer` to the Web viewer.
+
+Current architecture
+--------------------
+
+A renderer declares what it can produce through
+:meth:`~internal.renderers.renderer.Renderer.get_available_outputs`, and returns,
+for every output, the **raw tensor together with the**
+:class:`~internal.visualizers.Visualizer` that turns it into a displayable
+image::
+
+    RendererOutputs.images == {"gray": (tensor, FloatColormapVisualizer(...))}
+
+So this class does not need the old ``build_viewer_output_visualizers``
+machinery (which referenced helper classes that never existed in this
+repository). It only has to:
+
+* pick the requested output and apply the visualizer that came with it;
+* expose the display controls (max clamp + colormap) for ``GRAY`` outputs, which
+  is what both the reconstructed X-ray intensity and depth maps are;
+* guarantee the returned tensor is a ``float (3, H, W)`` image in ``[0, 1]``.
+
+For ``GRAY`` outputs the viewer takes over display normalization with
+:class:`~internal.visualizers.DepthMapVisualizer` so the max-clamp and colormap
+controls are always active. That reproduces the renderer's own
+``FloatColormapVisualizer(GRAY)`` output while adding the controls.
+"""
+
 from typing import Tuple, Dict
 import torch
-from ..renderers.renderer import Renderer
+from torch import Tensor
+
+from ..renderers.renderer import (
+    Renderer,
+    RendererOutputInfo,
+    RendererOutputs,
+    RendererOutputTypes,
+)
+from ..visualizers import ColorMapName, DepthMapVisualizer, IdenticalVisualizer, Visualizer
 
 
 class ViewerRenderer:
@@ -18,35 +54,32 @@ class ViewerRenderer:
         self.background_color = background_color
 
         self.max_depth = 0.
-        self.depth_map_color_map = "turbo"
+        # X-ray projections are grayscale, so default to a gray colormap; the
+        # GUI dropdown can switch this to turbo/viridis/... for depth maps.
+        self.depth_map_color_map = ColorMapName.GRAY
 
-        # TODO: initial value should get from renderer
-        self.output_info: Tuple[str, RendererOutputInfo] = (
-            "rgb",
-            RendererOutputInfo("render"),
-        )
-        self.output_visualizers: Dict[str, OutputVisualizer] = build_viewer_output_visualizers(
-            {"rgb": self.output_info[1]},
-            max_depth_provider=lambda: self.max_depth,
-            colormap_provider=lambda: self.depth_map_color_map,
-            difix_pipeline_provider=lambda: self.difix,
-            difix_enabled_provider=lambda: self.difix_enabled,
-        )
+        # What the renderer can produce, and the currently selected one.
+        self.available_outputs: Dict[str, RendererOutputInfo] = dict(self.renderer.get_available_outputs())
+        if len(self.available_outputs) == 0:
+            raise ValueError(f"{type(self.renderer).__name__}.get_available_outputs() returned nothing")
+        first_name = next(iter(self.available_outputs))
+        self.output_info: Tuple[str, RendererOutputInfo] = (first_name, self.available_outputs[first_name])
 
         self.difix = None
         self.difix_enabled = False
         if difix:
             self._setup_difix()
 
-    def set_output_info(
-            self,
-            name: str,
-            renderer_output_info: RendererOutputInfo,
-    ):
-        self.output_info = (
-            name,
-            renderer_output_info,
-        )
+    @property
+    def output_name(self) -> str:
+        return self.output_info[0]
+
+    @property
+    def output_type(self) -> int:
+        return self.output_info[1].type
+
+    def set_output_info(self, name: str, renderer_output_info: RendererOutputInfo) -> None:
+        self.output_info = (name, renderer_output_info)
 
     def _setup_depth_map_options(self, viewer, server):
         self.max_depth_gui_number = server.gui.add_number(
@@ -59,8 +92,8 @@ class ViewerRenderer:
         )
         self.depth_map_color_map_dropdown = server.gui.add_dropdown(
             label="Color Map",
-            options=["turbo", "viridis", "magma", "inferno", "cividis", "gray"],
-            initial_value=self.depth_map_color_map,
+            options=[c.value for c in ColorMapName],
+            initial_value=str(self.depth_map_color_map),
             visible=False,
         )
 
@@ -69,7 +102,7 @@ class ViewerRenderer:
         def _(event):
             with server.atomic():
                 self.max_depth = self.max_depth_gui_number.value
-                self.depth_map_color_map = self.depth_map_color_map_dropdown.value
+                self.depth_map_color_map = ColorMapName(self.depth_map_color_map_dropdown.value)
                 viewer.rerender_for_all_client()
 
     def _set_depth_map_option_visibility(self, visible: bool):
@@ -85,22 +118,16 @@ class ViewerRenderer:
         # toggle depth map option, only enable when type is `gray`
         self._set_depth_map_option_visibility(renderer_output_info.type == RendererOutputTypes.GRAY)
 
-        if name not in self.output_visualizers:
+        if name not in self.available_outputs:
             raise ValueError(f"Unsupported output name `{name}`")
 
         # update
         self.set_output_info(name, renderer_output_info)
 
     def setup_options(self, viewer, server):
-        available_outputs = self.renderer.get_available_outputs()
+        self.available_outputs = dict(self.renderer.get_available_outputs())
+        available_outputs = self.available_outputs
         first_type_name = list(available_outputs.keys())[0]
-        self.output_visualizers = build_viewer_output_visualizers(
-            available_outputs,
-            max_depth_provider=lambda: self.max_depth,
-            colormap_provider=lambda: self.depth_map_color_map,
-            difix_pipeline_provider=lambda: self.difix,
-            difix_enabled_provider=lambda: self.difix_enabled,
-        )
 
         with server.gui.add_folder("Output"):
             # setup output type dropdown
@@ -150,17 +177,49 @@ class ViewerRenderer:
         self.difix = DifixPipeline.from_pretrained("nvidia/difix", trust_remote_code=True)
         self.difix.to(self.gaussian_model.get_means().device)
 
-    def get_outputs(self, camera, scaling_modifier: float = 1.):
-        render_type, output_info = self.output_info
+    def get_outputs(self, camera, scaling_modifier: float = 1.) -> Tensor:
+        """Render ``camera`` and return a displayable ``(3, H, W)`` image in ``[0, 1]``."""
+        return self.visualize(self.output_name, self.get_raw_output(camera, scaling_modifier))
 
-        render_outputs = self.renderer(
+    def get_raw_output(self, camera, scaling_modifier: float = 1.) -> RendererOutputs:
+        """Render ``camera`` and return the untouched :class:`RendererOutputs`."""
+        return self.renderer(
             camera,
             self.gaussian_model,
             self.background_color,
             scaling_modifier=scaling_modifier,
-            render_types=[render_type],
+            render_types=[self.output_name],
         )
-        image = self.output_visualizers[render_type](render_outputs)
+
+    def _resolve_visualizer(self, name: str, visualizer: Visualizer | None) -> Visualizer:
+        output_info = self.available_outputs.get(name)
+        if output_info is not None and output_info.type == RendererOutputTypes.GRAY:
+            # Intensity / depth: the viewer drives the display so that the max
+            # clamp and colormap controls always take effect.
+            return DepthMapVisualizer(
+                max_depth=self.max_depth if self.max_depth > 0 else None,
+                colormap=self.depth_map_color_map,
+            )
+        if visualizer is not None:
+            # RGB / normal / feature outputs: trust the renderer.
+            return visualizer
+        return IdenticalVisualizer()
+
+    def visualize(self, name: str, render_outputs: RendererOutputs) -> Tensor:
+        """Turn one entry of ``render_outputs.images`` into a ``(3, H, W)`` image."""
+        images = render_outputs.images
+        if name not in images:
+            # The renderer ignored `render_types`; fall back to what it produced.
+            name = next(iter(images))
+
+        image, visualizer = images[name]
+        image = self._resolve_visualizer(name, visualizer).process(image)
+
+        if image.dim() == 2:
+            image = image.unsqueeze(0)
         if image.shape[0] == 1:
             image = image.repeat(3, 1, 1)
-        return image
+        elif image.shape[0] > 3:
+            image = image[:3]
+
+        return torch.clamp(image, min=0., max=1.)

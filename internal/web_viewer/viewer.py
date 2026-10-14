@@ -20,6 +20,17 @@ DROPDOWN_USE_DIRECT_APPEARANCE_EMBEDDING_VALUE = "@Direct"
 
 
 class Viewer:
+    """DEPRECATED -- superseded by :class:`internal.web_viewer.new_viewer.NewViewer`.
+
+    This class descends from upstream vanilla Gaussian Splatting and depends on
+    APIs that no longer exist in this repository (appearance embeddings, the
+    ``build_viewer_output_visualizers`` factories, the ``ui`` panels, gsplat /
+    SegAnyGaussian / Mip-Splatting backends, ...). It is kept only because
+    ``training_viewer.py`` still subclasses it.
+
+    The supported entry point is ``pixi run gs-viewer``, which builds
+    :class:`NewViewer` (see ``internal/entrypoints/viewer.py``).
+    """
     def __init__(
             self,
             model_paths: list[str],

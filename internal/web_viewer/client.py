@@ -49,6 +49,9 @@ class ClientThread(threading.Thread):
             time_value: float = 0.,
             camera_transform=None,
     ):
+        # `appearance_id` is accepted for interface compatibility with upstream
+        # viewer code but unused: this repository's models have no appearance
+        # embedding (`Cameras` no longer carries one).
         # calculate image width and height
         image_height = image_size
         image_width = int(image_height * camera.aspect)
@@ -77,24 +80,25 @@ class ClientThread(threading.Thread):
         T = w2c[:3, 3]
 
         # construct camera
+        # Use the same contract as the dataparsers' camera builders: `Cameras.build`
+        # derives `world_to_camera` / projection matrices / `camera_center` from
+        # R, T and the intrinsics.
         fx = torch.tensor([fov2focal(camera.fov, max(image_width, image_height))], dtype=torch.float)
-        camera = Cameras(
+        return Cameras.build(
+            idx=torch.tensor([0], dtype=torch.int),
             R=R.unsqueeze(0),
             T=T.unsqueeze(0),
             fx=fx,
             fy=fx,
-            cx=torch.tensor([(image_width // 2)], dtype=torch.int),
-            cy=torch.tensor([(image_height // 2)], dtype=torch.int),
-            width=torch.tensor([image_width], dtype=torch.int),
-            height=torch.tensor([image_height], dtype=torch.int),
-            appearance_id=torch.tensor([appearance_id[0]], dtype=torch.int),
-            normalized_appearance_id=torch.tensor([appearance_id[1]], dtype=torch.float),
+            cx=torch.tensor([image_width // 2], dtype=torch.float),
+            cy=torch.tensor([image_height // 2], dtype=torch.float),
+            width=torch.tensor([image_width], dtype=torch.float),
+            height=torch.tensor([image_height], dtype=torch.float),
+            znear=0.01,
+            zfar=1e5,
             time=torch.tensor([time_value], dtype=torch.float),
-            distortion_params=None,
-            camera_type=torch.tensor([0], dtype=torch.int),
+            phase=torch.tensor([0.0], dtype=torch.float),
         )[0]
-
-        return camera
 
     def render_and_send(self):
         with self.client.atomic():

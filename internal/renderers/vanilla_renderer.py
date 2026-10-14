@@ -17,7 +17,7 @@ from torch import Tensor
 
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 
-from .renderer import Renderer
+from .renderer import Renderer, RendererOutputInfo, RendererOutputTypes
 from ..cameras import Camera
 from ..models.gaussian import GaussianModel
 from ..visualizers import Visualizer, FloatColormapVisualizer, ColorMapName

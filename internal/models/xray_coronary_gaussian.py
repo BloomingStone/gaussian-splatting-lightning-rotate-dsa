@@ -348,7 +348,9 @@ class XrayCoronaryGaussianModel(
         self.rotations = self.get_rotations()
         self.density = self.get_density()
 
-        self.scale_activation = _identity_act
+        # `scale_activation` was built as an `nn.Softplus` module in `__init__`,
+        # so it must be swapped via `_set_activation` (see the base class).
+        self._set_activation("scale_activation", _identity_act)
         self.scale_inverse_activation = _identity_act
         self.rotation_activation = _identity_act
         self.rotation_inverse_activation = _identity_act

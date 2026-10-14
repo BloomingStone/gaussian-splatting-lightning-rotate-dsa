@@ -11,7 +11,7 @@ from xray_gaussian_rasterization_voxelization import (
 )
 
 from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
-from .renderer import Renderer, RendererOutputs
+from .renderer import Renderer, RendererOutputInfo, RendererOutputs, RendererOutputTypes
 from ..deform_models import GSParam
 from ..cameras import Camera
 from ..visualizers import FloatColormapVisualizer, ColorMapName, Visualizer
@@ -140,6 +140,11 @@ class XrayRenderer(Renderer):
                 MetaT.RADII: radii
             },
         )
+
+    def get_available_outputs(self) -> dict[str, RendererOutputInfo]:
+        return {
+            ImgT.GRAY: RendererOutputInfo(ImgT.GRAY, RendererOutputTypes.GRAY),
+        }
     
     def _render(
         self, 

@@ -22,6 +22,24 @@ class GaussianModel(nn.Module, ABC):
     def setup_gaussians_container():
         return nn.ParameterDict()
 
+    def _set_activation(self, name: str, activation: Callable) -> None:
+        """Assign an activation callable, dropping any ``nn.Module`` registration.
+
+        Some models build an activation as a module in ``__init__`` (e.g.
+        ``self.scale_activation = nn.Softplus(...)``), which registers it in
+        ``self._modules``. ``nn.Module.__setattr__`` then refuses to replace it
+        with a plain function, which is what ``pre_activate_all_properties()``
+        needs to do when a checkpoint is loaded for inference. The activation is
+        only ever *called*, and ``nn.Softplus`` has no parameters (so it
+        contributes nothing to ``state_dict()``), hence dropping the
+        registration is safe.
+
+        Must be used instead of a plain assignment whenever the previous value
+        of ``name`` was an ``nn.Module``.
+        """
+        self._modules.pop(name, None)
+        object.__setattr__(self, name, activation)
+
     @abstractmethod
     def get_property_names(self) -> Tuple[str, ...]:
         raise NotImplementedError()
