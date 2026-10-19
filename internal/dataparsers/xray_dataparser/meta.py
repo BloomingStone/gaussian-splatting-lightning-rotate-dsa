@@ -28,6 +28,7 @@ class CArmGeometry:
     orientation_type: Literal["AP", "PA"] = "AP"
     """
     Orientation of the camera, AP means the camera is in front of patient.
+    https://dicom.nema.org/medical/dicom/current/output/chtml/part03/sect_C.8.7.5.html#sect_C.8.7.5.1.2
     """
 
 
