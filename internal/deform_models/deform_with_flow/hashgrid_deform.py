@@ -52,6 +52,16 @@ class Scale(nn.Module):
     def forward(self, x):
         return x * self.s
 
+
+class ScaleShift(nn.Module):
+    """y = a * x + b, used to remap tanh output from [-1,1] to [b-a, b+a]."""
+    def __init__(self, a, b):
+        super().__init__()
+        self.a = a
+        self.b = b
+    def forward(self, x):
+        return self.a * x + self.b
+
 @dataclass
 class HashGridDeformConfig(DeformWithFlowConfig):
     D: int = 2  # deepth for each layer of MLP
@@ -75,6 +85,11 @@ class HashGridDeformConfig(DeformWithFlowConfig):
     
     combine_layers: int = 4
     combine_W: int = 128
+
+    d_scaling_min: float = -1.0
+    """Lower bound of d_scaling; new_scale = scale * (1 + d_scaling).
+    -1.0 (default) allows full compression (original behaviour); raising it
+    (e.g. -0.5) prevents needle artifacts from over-compressed scales."""
     
     tcnn: bool = True
     
@@ -156,9 +171,13 @@ class HashGridDefromModel(DeformWithFlowModel):
         self.coronary_props_warp = _linear(emb_x_ch, 1)
         
         self.xyz_warp = _linear(self.cfg.combine_W, 3)
+        # new_scaling = scaling * (1 + d_scaling); remap tanh [-1,1] to
+        # [d_scaling_min, 1] to bound scale compression.
+        _dmin = self.cfg.d_scaling_min
         self.scaling_warp = nn.Sequential(
             _linear(self.cfg.combine_W, 3),
-            nn.Tanh(),      # new_scaling = scaling * (1 + d_scaling), so d_scaling should be in [-1, 1] to avoid negative scaling
+            nn.Tanh(),
+            ScaleShift((1.0 - _dmin) / 2.0, (1.0 + _dmin) / 2.0),
         )
         
         _linear(self.cfg.combine_W, 3)
