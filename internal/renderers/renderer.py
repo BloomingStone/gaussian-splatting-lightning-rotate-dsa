@@ -110,6 +110,13 @@ class Renderer(torch.nn.Module):
     def on_load_checkpoint(self, module, checkpoint):
         pass
 
+    def initialize_from_checkpoint(self, checkpoint: dict) -> None:
+        """
+        Hook to restore renderer-owned submodules (e.g. a deform model) from a
+        checkpoint produced by a previous training stage.  No-op by default.
+        """
+        pass
+
     def get_available_outputs(self) -> dict[str, RendererOutputInfo]:
         """Outputs this renderer can produce, keyed by the name used in
         :attr:`RendererOutputs.images`.

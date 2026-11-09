@@ -98,7 +98,7 @@ class GaussianSplatting(LightningModule):
             )
 
 
-    def _initialize_gaussians_from_trained_model(self):
+    def _initialize_gaussians_from_trained_model(self) -> dict | None:
         # assert self.hparams["gaussian"].extra_feature_dims == 0
 
         from .utils.gaussian_utils.gaussian_model_loader import GaussianModelLoader
@@ -109,28 +109,41 @@ class GaussianSplatting(LightningModule):
             polydata = cast(pv.PolyData, pv.read(str(load_from)))
             self.gaussian_model.setup_from_polydata(polydata)
             self.gaussian_model.to(self.device)
-        else:
-            # load from ckpt
-            gaussian_model, _, _ = GaussianModelLoader.initialize_model_and_renderer_from_checkpoint_file(
-                load_from,
-                device=self.device,
-                eval_mode=False,
-                pre_activate=False,
-            )
-            # replace config
-            self.hparams["gaussians"] = gaussian_model.config
-            self.gaussian_model = cast(GaussianModel, gaussian_model)
+            return None
+
+        # load from ckpt: only rebuild the gaussian model here. The renderer's
+        # deform model is restored later via `renderer.initialize_from_checkpoint`,
+        # which avoids `initialize_model_and_renderer_from_checkpoint_file`'s
+        # assumption that the checkpoint stores a plain renderer config.
+        # Capture the fully-typed stage-2 config object *before* replacing the
+        # model: rebuilding from the checkpoint's plain dict loses nested dataclass
+        # typing (e.g. `optimization` becomes a dict), and also drops stage-2 flags.
+        stage2_gaussian_config = self.gaussian_model.config
+
+        checkpoint = torch.load(load_from, map_location="cpu", weights_only=False)
+        gaussian_model = GaussianModelLoader.initialize_model_from_checkpoint(checkpoint, self.device)
+
+        # reuse the properly-typed stage-2 config (carries freeze_gaussians etc.)
+        gaussian_model.config = stage2_gaussian_config
+
+        # replace config
+        self.hparams["gaussians"] = gaussian_model.config
+        self.gaussian_model = cast(GaussianModel, gaussian_model)
 
         print(f"initialize from {load_from}")
+        return checkpoint
 
     def setup(self, stage: str):
+        checkpoint = None
         if stage == "fit":
             if self.hparams["initialize_from"] is None:
                 self.gaussian_model.setup_from_pcd(xyz=self.get_datamodule().point_cloud.xyz, rgb=self.get_datamodule().point_cloud.rgb / 255.)
             else:
-                self._initialize_gaussians_from_trained_model()
+                checkpoint = self._initialize_gaussians_from_trained_model()
 
         self.renderer.setup(stage=stage, lightning_module=self)
+        if checkpoint is not None:
+            self.renderer.initialize_from_checkpoint(checkpoint)
         self.metric.setup(stage=stage, pl_module=self)
         self.density_controller.setup(stage=stage, pl_module=self)
 

@@ -217,3 +217,12 @@ class DeformModel(nn.Module):
         else:
             assert phase_input is not None, "phase_input should not be None when use_t_as_phase is False"
             return phase_input
+    
+    def configure_trainable(self) -> None:
+        """
+        Hook called after the model is instantiated and before the optimizer is
+        built.  Subclasses can override this to set ``requires_grad`` flags on
+        their parameters according to config, e.g. for two-stage motion / flow
+        training.  By default all parameters stay trainable.
+        """
+        pass

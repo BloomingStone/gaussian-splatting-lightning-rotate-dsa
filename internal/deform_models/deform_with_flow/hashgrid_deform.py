@@ -2,7 +2,7 @@
 Copied from https://github.com/ingra14m/Deformable-3D-Gaussians/blob/main/utils/time_utils.py
 """
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, override
 
 import torch
 import torch.nn as nn
@@ -64,6 +64,14 @@ class HashGridDeformConfig(DeformWithFlowConfig):
     #   x_emb + t_emb -> h_flow -> d_density;
     #   x_emb + phase_emb -> h_mov -> d_xyz, d_rot, d_scale;
     t_phase_combined: bool = True
+    
+    # Two-stage motion / flow separation:
+    #   enable_flow=False  -> freeze the t-guided flow branch (embed_t, combine_mlp,
+    #                         density_warp) and keep d_density at zero (stage 1).
+    #   freeze_motion=True -> freeze everything except the t-guided flow branch
+    #                         (stage 2, after loading stage-1 weights).
+    enable_flow: bool = True
+    freeze_motion: bool = False
     
     combine_layers: int = 4
     combine_W: int = 128
@@ -164,6 +172,38 @@ class HashGridDefromModel(DeformWithFlowModel):
             Scale(0.001),    # limit the density to match original scale of density, which is around 0.001 for x-ray observation
         )
         
+    def _flow_param_prefixes(self) -> tuple[str, ...]:
+        """Parameter-name prefixes that belong to the t-guided flow branch."""
+        return ("embed_t_fn.", "combine_mlp.", "density_warp.")
+
+    @override
+    def configure_trainable(self) -> None:
+        if self.cfg.enable_flow and not self.cfg.freeze_motion:
+            return
+
+        for p in self.parameters():
+            p.requires_grad = True
+
+        flow_prefixes = self._flow_param_prefixes()
+
+        if not self.cfg.enable_flow:
+            assert not self.cfg.t_phase_combined, (
+                "enable_flow=False requires t_phase_combined=False: when combined, "
+                "combine_mlp is shared by the motion and flow branches and cannot be frozen."
+            )
+            for name, p in self.named_parameters():
+                if name.startswith(flow_prefixes):
+                    p.requires_grad = False
+
+        if self.cfg.freeze_motion:
+            assert not self.cfg.t_phase_combined, (
+                "freeze_motion=True requires t_phase_combined=False: when combined, "
+                "combine_mlp is shared by the motion and flow branches and cannot be frozen."
+            )
+            for name, p in self.named_parameters():
+                if not name.startswith(flow_prefixes):
+                    p.requires_grad = False
+        
 
     def forward(
         self, 
@@ -222,6 +262,10 @@ class HashGridDefromModel(DeformWithFlowModel):
         d_rotation = torch.cat([q_w, q_v], dim=-1).to(xyz)
         d_rotation = torch.nn.functional.normalize(d_rotation)
         
-        d_density = self.density_warp(h_flow)
+        if self.cfg.enable_flow:
+            d_density = self.density_warp(h_flow)
+        else:
+            # stage 1: motion-only, keep density unchanged
+            d_density = torch.zeros((xyz.shape[0], 1), device=xyz.device, dtype=xyz.dtype)
 
         return DeformsWithFlow(d_xyz=d_xyz, d_scaling=d_scaling, d_rotation=d_rotation, d_density=d_density)

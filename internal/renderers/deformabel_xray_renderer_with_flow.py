@@ -74,14 +74,19 @@ class DeformableXrayRendererWithFlow(CoronaryDeformableXrayRenderer):
         # use mean + 2*std as the uncertainty-aware density, which is roughly the upper bound of density with 95% confidence if 
         # we assume the deforms follow a normal distribution. 
         # This is to avoid under-estimate the density for points with high uncertainty.
-        d_density_upper= deforms_mean["d_density"].abs() + 2 * deforms_var["d_density"].sqrt()   
+        if getattr(self.deform_model_config, "enable_flow", True):
+            d_density_upper= deforms_mean["d_density"].abs() + 2 * deforms_var["d_density"].sqrt()
+            coronary_density = d_density_upper[mask]
+        else:
+            # stage 1 (motion-only): no flow, visualize the reconstructed static coronary
+            coronary_density = gs.density[mask]
         gray_coronary, _ = self._render(
             viewpoint_camera,
             GSParam(
                 xyz=gs.xyz[mask],
                 rotation=gs.rotation[mask],
                 scaling=gs.scaling[mask],
-                density=d_density_upper[mask],
+                density=coronary_density,
             )
         )
         
@@ -100,6 +105,7 @@ class DeformableXrayRendererWithFlow(CoronaryDeformableXrayRenderer):
                 MetaT.DEFORMS: deforms,
                 MetaT.TIME: viewpoint_camera.time,
                 MetaT.MASK: mask,
+                MetaT.REGULARIZATION: self.deform_model.get_last_regularization() if hasattr(self.deform_model, "get_last_regularization") else None,
             },
             is_warm_up=False
         )
@@ -174,7 +180,8 @@ class DeformableXrayRendererWithFlow(CoronaryDeformableXrayRenderer):
                 MetaT.DEFORMS_MEAN: deforms_mean,
                 MetaT.DEFORMS_VAR: deforms_var,
                 MetaT.DEFORMS: deforms,
-                MetaT.TIME: viewpoint_camera.time
+                MetaT.TIME: viewpoint_camera.time,
+                MetaT.REGULARIZATION: self.deform_model.get_last_regularization() if hasattr(self.deform_model, "get_last_regularization") else None,
             },
             is_warm_up=viewpoint_camera.time.item() <= self.optimization_config.warm_up
         )

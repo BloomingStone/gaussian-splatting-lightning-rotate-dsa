@@ -1,0 +1,75 @@
+# baseline 在「后期帧(>=40) + label 加权」上的评估配置（用于和 stage1-bspline 对比）。
+# 用 gs-val 加载 baseline checkpoint：
+#   pixi run gs-val --config configs/gen_4d_output_all/flow-mlp-baseline-eval-late.yaml \
+#     --ckpt_path outputs/flowml_baseline_ckpt/checkpoints/epoch=117-step=20000.ckpt -n baseline_eval_late
+project: RotCA-GR
+
+
+trainer:
+  check_val_every_n_epoch: 1
+  precision: 16-mixed
+  callbacks:
+    - class_path: internal.callbacks.save_image.SaveImage
+      init_args:
+        save_val_output: true
+        max_save_val_output: 200
+        max_image_saving_threads: 3
+
+
+data:
+  parser:
+    class_path: internal.dataparsers.xray_dataparser.parser.XRayDataParserBuilder
+    init_args:
+      meta_loader:
+        class_path: internal.dataparsers.xray_dataparser.meta.XRayMetaLoader
+      cloud_parser:
+        class_path: internal.dataparsers.xray_dataparser.cloud_parsers.RandomCloudParser
+        init_args:
+          num_points: 10_000
+      spliter:
+        class_path: internal.dataparsers.xray_dataparser.splitters.FrameRangeSpliter
+        init_args:
+          start_frame: 40
+          end_frame: null
+          val_start_frame: 40
+          val_end_frame: null
+          val_ratio: 0.2
+      cameras_builder:
+        class_path: internal.dataparsers.xray_dataparser.cameras_builder.RotateXRayCamerasBuilder
+      dataset_builder:
+        class_path: internal.dataparsers.xray_dataparser.datasets.ImagesDatasetBuilder
+        init_args:
+          dataset_config:
+            image_uint8: false
+            weight_source: label
+
+model:
+  renderer:
+    class_path: internal.renderers.deformabel_xray_renderer_with_flow.DeformableXrayRendererWithFlow
+    init_args:
+      optimization_config:
+        enable_ast: true
+        density_ramp_steps: 2000
+      deform_model_config:
+        class_path: internal.deform_models.deform_with_flow.HashGridDeformConfig
+        init_args:
+          t_phase_combined: false
+          phase_multires: 6
+          x_multires: 13
+          log2_hashmap_size: 19
+          max_resolution: 2048
+  metric:
+    class_path: internal.metrics.rotate_xray_metrics_with_flow.RotateXrayMetrics
+    init_args:
+      fused_ssim: true
+      w_gray_loss: 1.0
+      w_ssim_loss: 1.0
+      w_d_density: 0.0
+  gaussian:
+    class_path: internal.models.xray_coronary_gaussian_with_flow.XrayCoronaryGaussianWithFlow
+  density:
+    class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
+    init_args:
+      densification_interval: 300
+      densify_grad_percentile: 0.98
+      cull_density_threshold: 5e-5

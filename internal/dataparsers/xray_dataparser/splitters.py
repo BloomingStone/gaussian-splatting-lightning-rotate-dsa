@@ -256,3 +256,72 @@ class AlphaRangedSpliter(XRaySpliter):
         val_idx = np.where(~train_mask)[0].tolist()
 
         return {"train": train_idx, "val": val_idx, "test": val_idx}
+
+
+@dataclass
+class FrameRangeSpliter(XRaySpliter):
+    """
+    Split the dataset by frame-position-index ranges.
+
+    Training frames are those whose position index falls within
+    ``[start_frame, end_frame)`` (``end_frame`` is exclusive; ``None`` means
+    ``num_frames``).  Validation frames come from ``[val_start_frame,
+    val_end_frame)`` when that range is given, otherwise from the training range.
+
+    When ``val_ratio > 0`` a uniformly spaced fraction of the validation range is
+    held out.  By default the validation frames are removed from the training
+    range so that all methods evaluate on a clean, identical held-out subset --
+    this matters when comparing e.g. the first-40 contrast-inflow frames across
+    baseline / stage-1 / stage-2 runs.
+    """
+
+    start_frame: int = 0
+    """First frame index of the training range (inclusive)."""
+
+    end_frame: int | None = None
+    """Last frame index of the training range (exclusive). ``None`` = ``num_frames``."""
+
+    val_start_frame: int | None = None
+    """First frame index of the validation range (inclusive). Defaults to ``start_frame``."""
+
+    val_end_frame: int | None = None
+    """Last frame index of the validation range (exclusive). Defaults to ``end_frame``."""
+
+    val_ratio: float = 0.0
+    """Fraction of the validation range to hold out (uniform spacing)."""
+
+    exclude_val_from_train: bool = True
+    """Remove validation frames from the training range."""
+
+    def split(self, data_dir: Path, meta: XRayMeta) -> dict[Stage, list[int]]:
+        n = meta.num_frames
+
+        start = max(0, self.start_frame)
+        end = n if self.end_frame is None else min(self.end_frame, n)
+        assert start < end, f"invalid training range [{start}, {end})"
+
+        val_start = start if self.val_start_frame is None else max(0, self.val_start_frame)
+        val_end = end if self.val_end_frame is None else min(self.val_end_frame, n)
+        assert val_start < val_end, f"invalid validation range [{val_start}, {val_end})"
+
+        val_range = list(range(val_start, val_end))
+        if self.val_ratio > 0 and len(val_range) > 2:
+            m = len(val_range)
+            target_val = int(round(m * self.val_ratio))
+            target_val = max(1, min(target_val, m - 1))
+
+            step = (m - 1) / max(target_val - 1, 1)
+            val_set = {int(round(i * step)) for i in range(target_val)}
+            val_set = {max(0, min(m - 1, v)) for v in val_set}
+            val_idx = [val_range[i] for i in sorted(val_set)]
+        else:
+            val_idx = val_range
+
+        train_range = list(range(start, end))
+        if self.exclude_val_from_train:
+            val_set = set(val_idx)
+            train_idx = [i for i in train_range if i not in val_set]
+        else:
+            train_idx = train_range
+
+        return {"train": train_idx, "val": val_idx, "test": val_idx}

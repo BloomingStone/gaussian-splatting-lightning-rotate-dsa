@@ -25,6 +25,10 @@ class RotateXrayDensityController(DensityController):
     
     densify_grad_percentile: float = 0.98
 
+    # If False, densification / pruning / density-reset are all skipped.
+    # Useful for stage-2 flow-only training where the point cloud is frozen.
+    enable_densification: bool = True
+
     # If > 0, use a fixed gradient threshold instead of dynamic percentile-based threshold.
     # Set to the average grad_threshold from baseline to compare fixed vs dynamic.
     fixed_grad_threshold: float = -1.0
@@ -70,6 +74,8 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         
     @override
     def before_backward(self, outputs: RendererOutputs, batch, gaussian_model, optimizers: list, global_step: int, pl_module) -> None:
+        if not self.config.enable_densification:
+            return
         if global_step >= self.config.densify_until_frac*pl_module.trainer.max_steps:
             return
 
@@ -78,6 +84,8 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
     
     @override
     def after_backward(self, outputs: RendererOutputs, batch, gaussian_model, optimizers: list, global_step: int, pl_module) -> None:
+        if not self.config.enable_densification:
+            return
         if global_step >= self.config.densify_until_frac*pl_module.trainer.max_steps:
             return
 

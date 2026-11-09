@@ -170,13 +170,16 @@ class CommonImageMetricImpl(MetricImpl):
         metrics["w_ssim_loss"] = 1.0 - weighted_ssim
         prog_bar["w_ssim"] = True
         
-        # ── combined psnr + lpips loss with the same weight ──────────────────────────────
-        metrics["w_psnr"] = self.psnr(pred_gray, gt_gray)
+        # ── weighted PSNR (weighted MSE) ──────────────────────────────
+        weighted_mse = (((pred_gray - gt_gray) ** 2) * w).sum() / w_sum
+        weighted_psnr = -10.0 * torch.log10(weighted_mse.clamp_min(1e-8))
+        metrics["w_psnr"] = weighted_psnr
         prog_bar["w_psnr"] = True
 
-        pred_rgb = pred_gray.clamp(0.0, 1.0).repeat(1, 3, 1, 1)
-        gt_rgb = gt_gray.clamp(0.0, 1.0).repeat(1, 3, 1, 1)
-        metrics["w_lpips"] = self.no_state_dict_models["lpips"](pred_rgb, gt_rgb)
+        # ── weighted LPIPS (soft-masked inputs so background ~0 distance) ─
+        pred_masked = (pred_gray * w).clamp(0.0, 1.0).repeat(1, 3, 1, 1)
+        gt_masked = (gt_gray * w).clamp(0.0, 1.0).repeat(1, 3, 1, 1)
+        metrics["w_lpips"] = self.no_state_dict_models["lpips"](pred_masked, gt_masked)
         prog_bar["w_lpips"] = True
 
     def on_parameter_move(self, *args, **kwargs):

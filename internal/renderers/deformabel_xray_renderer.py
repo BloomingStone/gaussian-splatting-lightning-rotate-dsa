@@ -1,4 +1,4 @@
-from typing import Any, Optional, Tuple, cast
+from typing import Any, Optional, Tuple, cast, override
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -42,6 +42,8 @@ class XrayRendererOuputs(RendererOutputs):
         PHASE = "phase"
         
         MASK = "mask"
+        
+        REGULARIZATION = "regularization"
     
     images: dict[ImageTypes, tuple[Tensor, Visualizer|None]]    # type: ignore
     meta: dict[MetaTypes, Any]   # type: ignore
@@ -307,14 +309,34 @@ class CoronaryDeformableXrayRenderer(Renderer):
             self.train_set_length = len(lightning_module.trainer.datamodule.dataparser_outputs.train_set)
         
         self.deform_model = self.deform_model_config.instantiate()
+        self.deform_model.configure_trainable()
         
         total_steps = lightning_module.trainer.max_steps
         self.smooth_term = get_linear_noise_func(lr_init=0.1, lr_final=1e-15, lr_delay_mult=0.01, max_steps=total_steps*0.8)
     
+    @override
+    def initialize_from_checkpoint(self, checkpoint: dict) -> None:
+        prefix = "renderer.deform_model."
+        state_dict = {
+            key[len(prefix):]: value
+            for key, value in checkpoint["state_dict"].items()
+            if key.startswith(prefix)
+        }
+        if len(state_dict) == 0:
+            print("[deform renderer] no deform model state found in checkpoint; skipping deform model initialization")
+            return
+        missing, unexpected = self.deform_model.load_state_dict(state_dict)
+        if missing or unexpected:
+            print(f"[deform renderer] deform model state loaded (missing={missing}, unexpected={unexpected})")
+    
     def training_setup(self, module) -> tuple[list[Optimizer]|None, list[LRScheduler]|None]:
+        params = [p for p in self.deform_model.parameters() if p.requires_grad]
+        if len(params) == 0:
+            return None, None
+
         optimizer = Adam(
             [{
-                "params": list(self.deform_model.parameters()),
+                "params": params,
                 "name": "deform",
             }],
             lr=self.optimization_config.lr,

@@ -33,6 +33,12 @@ class ImagesDatasetConfig:
     #                    w(x) = exp(-d²/2σ²)  outside GT mask
     soft_mask_sigma: float = 20.0
 
+    # Which extra_data weight to expose as `soft_mask_weight`:
+    #   "label" -> binary vessel mask from `label/` with Gaussian falloff
+    #   "flow"  -> flow-only DRR from `flow/` (white=0, dark=1)
+    #   "none"  -> no soft_mask_weight
+    weight_source: Literal["label", "flow", "none"] = "label"
+
 
 @dataclass
 class FrangiImagesDatasetConfig(ImagesDatasetConfig):
@@ -108,6 +114,7 @@ class ImagesDataset(GSDataset):
         masks_paths: list[Path] | None = None,
         other_data_closure: Callable[[int], dict[str, torch.Tensor]] | None = None,
         source_indices: list[int] | None = None,
+        flow_paths: list[Path] | None = None,
     ):
         self.cfg = cfg
         self.cameras = cameras
@@ -115,6 +122,7 @@ class ImagesDataset(GSDataset):
         self.masks_paths = masks_paths
         self.other_data_closure = other_data_closure
         self.source_indices = list(range(len(image_paths))) if source_indices is None else source_indices
+        self.flow_paths = flow_paths
 
         # keep cameras on CPU in dataset worker processes to avoid CUDA init
         self.cameras = self.cameras.to(torch.device("cpu"))
@@ -171,18 +179,35 @@ class ImagesDataset(GSDataset):
 
         return mask.bool()
 
+    def get_flow_weight(self, index: int) -> torch.Tensor | None:
+        """Return (H, W) weight from the flow-only DRR: white background -> 0,
+        darker (more contrast) -> closer to 1."""
+        if self.flow_paths is None:
+            return None
+        img = np.array(Image.open(self.flow_paths[index]), dtype=np.float64)
+        if img.ndim == 3:
+            img = img[..., 0]
+        weight = 1.0 - img / 255.0
+        return torch.from_numpy(weight).float()
+
     def get_extra_data(self, index: int) -> None | dict[str, torch.Tensor]:
         extra: dict[str, torch.Tensor] = {}
         if self.other_data_closure is not None:
             res = self.other_data_closure(self.source_indices[index])
             extra.update(res)
 
-        # soft mask weight based on ground-truth mask
-        mask = self.get_mask(index)
-        if mask is not None:
-            extra["soft_mask_weight"] = self._compute_soft_mask_weight(
-                mask[0], self.cfg.soft_mask_sigma,
-            )
+        # soft mask weight based on the configured source (label mask / flow DRR)
+        weight: torch.Tensor | None = None
+        if self.cfg.weight_source == "label":
+            mask = self.get_mask(index)
+            if mask is not None:
+                weight = self._compute_soft_mask_weight(
+                    mask[0], self.cfg.soft_mask_sigma,
+                )
+        elif self.cfg.weight_source == "flow":
+            weight = self.get_flow_weight(index)
+        if weight is not None:
+            extra["soft_mask_weight"] = weight
 
         return extra if extra else None
 
@@ -217,6 +242,7 @@ class ImagesDataset(GSDataset):
 class ImagesDatasetBuilder(DatasetBuilder[XRayMeta, ImagesDataset]):
     image_dir_name: str = "rotate_dsa"
     mask_dir_name: str = "label"
+    flow_dir_name: str = "flow"
     image_suffix: str = "*.png"
     use_depth_map: bool = True
     depth_map_filename: str = "depth_map.npz"
@@ -241,6 +267,14 @@ class ImagesDatasetBuilder(DatasetBuilder[XRayMeta, ImagesDataset]):
             if len(all_mask_paths) > 0:
                 masks_paths = [all_mask_paths[i] for i in indices]
 
+        flow_paths = None
+        if self.dataset_config.weight_source == "flow":
+            flow_dir = data_dir / self.flow_dir_name
+            if flow_dir.exists():
+                all_flow_paths = sorted(flow_dir.glob(self.image_suffix))
+                if len(all_flow_paths) > 0:
+                    flow_paths = [all_flow_paths[i] for i in indices]
+
         other_data_closure = None
         if self.use_depth_map:
             depth_map_path = data_dir / self.depth_map_filename
@@ -259,6 +293,7 @@ class ImagesDatasetBuilder(DatasetBuilder[XRayMeta, ImagesDataset]):
             masks_paths=masks_paths,
             other_data_closure=other_data_closure,
             source_indices=indices,
+            flow_paths=flow_paths,
         )
 
 

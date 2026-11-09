@@ -76,6 +76,7 @@ class GaussianInits:
 class XrayCoronaryGaussian(Gaussian):
     optimization: OptimizationConfig = field(default_factory=lambda: OptimizationConfig())
     save_motion: bool = True  # 是否在 to_polydata 时保存 motion 统计量
+    freeze_gaussians: bool = False  # True 时冻结全部高斯参数（如两阶段的 flow-only 阶段）
 
     def instantiate(self, *args, **kwargs) -> "XrayCoronaryGaussianModel":
         return XrayCoronaryGaussianModel(self)
@@ -229,6 +230,10 @@ class XrayCoronaryGaussianModel(
     
     @override
     def training_setup(self, module: LightningModule) -> tuple[list[Optimizer], list[LRScheduler]]:
+        if self.config.freeze_gaussians:
+            self.requires_grad_(False)
+            return [], []
+
         # ---- adaptively scaled according to the camera distribution radius
         spatial_lr_scale = self.config.optimization.spatial_lr_scale
         if spatial_lr_scale <= 0:
