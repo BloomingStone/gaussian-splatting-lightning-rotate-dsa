@@ -32,18 +32,20 @@
 2. **r2g 重影**：FDK 初始化携带心跳运动伪影；纯 MLP 形变容量不足；仅 phase 输入无法区分同相位不同时间点的造影剂状态。
 3. **共性模糊**：形变场未能充分融合帧间信息，导致重建为多帧平均而模糊。
 
-## 实验计划
+## 实验计划（三大阶段，依次执行）
 
-| # | 实验名 | 目标 | 关键改动 |
-|---|--------|------|---------|
-| 1 | `r2g-random-init` | 消减 r2g 重影 | r2g 改用随机点云初始化（对齐 stage1），其余不变 |
-| 2 | `stage1-spike` | 消减 stage1 针状伪影 | 定位成因（density_reset / 尺度约束 / hashgrid 分辨率） |
-| 3 | `deform-blur` | 消减共性模糊 | 形变场容量与正则调整 |
+| 阶段 | 实验名 | 目标 | 关键改动 |
+|------|--------|------|---------|
+| ✅ 1 | `r2g-random-init` | 消减 r2g 重影 | r2g 改用随机初始化（**结论：FDK 双刃剑，重影减弱但更模糊**） |
+| ▶ 2 | `stage1-spike` | 消减 stage1 针状伪影 | 定位成因（density_reset / 尺度约束 / hashgrid 高频） |
+| 3 | `r2g-blur` | 消减 r2g 随机初始化模糊 | 配置差异（SSIM 权重 / 3D-TV / 形变模型 / AST） |
+| 4 | `deform-prior` | 优化形变场 | P1 周期约束 + P2 phase 平滑 + P4 BSpline + P5 点云约束 |
 
 ## 关键指标口径
 
 - `spike_score`（背景高频能量比，>1.5 = 针状伪影）
+- `ghost_score`（双谷检测：GT 边缘法线剖面 ≥2 暗谷占比，0~1，重影高）
+- `edge_contrast`（边缘对比度 pred/gt，<1 = 欠重建模糊）
 - `v_ssim`（血管区域 SSIM，低 = 血管错位/重影）
-- `ghost_score`（边缘展宽比 pred/gt，>1 = 重影/模糊）
 - `edge_sharpness`（GT 血管边缘梯度比，低 = 错位/模糊）
 - 通用口径：`psnr` / `ssim`(=1-ssim_loss) / `lpips`
