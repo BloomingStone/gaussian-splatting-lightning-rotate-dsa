@@ -157,8 +157,8 @@ def compute_metrics(gt, pred, label):
     return out
 
 
-def main():
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+def main(args):
+    args.out_dir.mkdir(parents=True, exist_ok=True)
 
     rot_meta = json.load(open(ROOT / "data/example_grids/rotate_dsa.json"))
     rot_frames = {int(f["frame"]): f for f in rot_meta["frames"]}
@@ -166,13 +166,13 @@ def main():
     rows = []
     # grid views 0..9
     for i in range(10):
-        gt = load_gray(GRID_DIR / "dsa" / f"{i:03d}.png")
-        label = load_label(GRID_DIR / "label" / f"{i:03d}.png")
-        s1 = load_gray(STAGE1_RENDERS / f"val_{50 + i:03d}.png")
-        r2 = load_gray(R2G_RENDERS / f"frame_100_phase_0.667_{i:03d}.png")
+        gt = load_gray(args.grid_dir / "dsa" / f"{i:03d}.png")
+        label = load_label(args.grid_dir / "label" / f"{i:03d}.png")
+        s1 = load_gray(args.stage1_dir / "renders" / f"val_{50 + i:03d}.png")
+        r2 = load_gray(args.r2g_dir / "renders" / f"frame_100_phase_0.667_{i:03d}.png")
         rows.append({
             "name": f"grid view {i}",
-            "alpha": json.load(open(GRID_DIR / "meta.json"))["frames"][i]["alpha_degree"],
+            "alpha": json.load(open(args.grid_dir / "meta.json"))["frames"][i]["alpha_degree"],
             "stage1": compute_metrics(gt, s1, label),
             "r2g": compute_metrics(gt, r2, label),
         })
@@ -181,8 +181,8 @@ def main():
     for f in [40, 100, 160]:
         gt = load_gray(ROTATE_DSD / f"{f:03d}.png")
         label = load_label(TRAIN_LABEL_DIR / f"{f:03d}.png")
-        s1 = load_gray(STAGE1_TRAIN / f"stage1_frame{f}.png")
-        r2 = load_gray(R2G_TRAIN / f"r2g_frame{f}.png")
+        s1 = load_gray(args.stage1_dir / "train_frame" / f"stage1_frame{f}.png")
+        r2 = load_gray(args.r2g_dir / "train_frame" / f"r2g_frame{f}.png")
         rows.append({
             "name": f"train frame {f}",
             "alpha": rot_frames[f]["alpha_degree"],
@@ -210,10 +210,16 @@ def main():
         print("-" * len(header))
 
     # save
-    with open(OUT_DIR / "artifact_metrics.json", "w") as f:
+    with open(args.out_dir / "artifact_metrics.json", "w") as f:
         json.dump(rows, f, indent=2)
-    print(f"\nsaved -> {OUT_DIR / 'artifact_metrics.json'}")
+    print(f"\nsaved -> {args.out_dir / 'artifact_metrics.json'}")
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--grid_dir", default=GRID_DIR)
+    p.add_argument("--stage1_dir", default=STAGE1_RENDERS.parent)
+    p.add_argument("--r2g_dir", default=R2G_RENDERS.parent)
+    p.add_argument("--out_dir", default=OUT_DIR)
+    main(p.parse_args())

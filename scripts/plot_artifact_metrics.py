@@ -21,8 +21,8 @@ PANELS = [
 ]
 
 
-def main():
-    rows = json.load(open(OUT_DIR / "artifact_metrics.json"))
+def main(args):
+    rows = json.load(open(args.metrics_dir / "artifact_metrics.json"))
     names = [r["name"] for r in rows]
     x = np.arange(len(names))
 
@@ -46,11 +46,17 @@ def main():
     fig.suptitle("frame_100 (phase 0.667) artifact metrics: stage1 vs r2g",
                  fontsize=14, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.98])
-    out = OUT_DIR / "artifact_metrics_compare.png"
+    out = args.out_dir / f"artifact_metrics_compare_{args.exp_name}.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=110)
     plt.close(fig)
     print(f"saved -> {out}")
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--metrics_dir", default=OUT_DIR)
+    p.add_argument("--out_dir", default=OUT_DIR)
+    p.add_argument("--exp_name", default="")
+    main(p.parse_args())

@@ -43,7 +43,14 @@ def style_box(ax, color: str):
                            edgecolor=color, linewidth=3.0, clip_on=False))
 
 
-def main():
+def main(args):
+    # local overrides from CLI args
+    OUT_DIR = args.out_dir
+    GRID_DIR = args.grid_dir
+    STAGE1_RENDERS = args.stage1_dir / "renders"
+    STAGE1_TRAIN = args.stage1_dir / "train_frame"
+    R2G_RENDERS = args.r2g_dir / "renders"
+    R2G_TRAIN = args.r2g_dir / "train_frame"
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # ---------- metric table ----------
@@ -61,7 +68,7 @@ def main():
             }
             break
 
-    with open(R2G_ROOT / "output/lca_grid_eval/metrics.json") as f:
+    with open(R2G_RENDERS.parent / "metrics.json") as f:
         r2g_metrics = json.load(f)
     r2g = {"psnr": r2g_metrics["mean"]["psnr"], "ssim": r2g_metrics["mean"]["ssim"]}
 
@@ -157,11 +164,18 @@ def main():
         fontsize=12, fontweight="bold", y=1.00,
     )
     fig.tight_layout(rect=[0, 0, 1, 0.97])
-    out_png = OUT_DIR / "frame_100_grid_compare.png"
+    out_png = OUT_DIR / f"frame_100_grid_compare_{args.exp_name}.png"
     fig.savefig(out_png, dpi=110)
     plt.close(fig)
     print(f"\nsaved comparison figure -> {out_png}")
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--grid_dir", default=GRID_DIR)
+    p.add_argument("--stage1_dir", default=STAGE1_RENDERS.parent)
+    p.add_argument("--r2g_dir", default=R2G_RENDERS.parent)
+    p.add_argument("--out_dir", default=OUT_DIR)
+    p.add_argument("--exp_name", default="")
+    main(p.parse_args())
