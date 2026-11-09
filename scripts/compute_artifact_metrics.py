@@ -63,53 +63,52 @@ def count_profile_peaks(profile, min_peak_frac=0.4):
     return float(max(peaks, 1))
 
 
-def ghost_score(gt, pred, vessel, radius=10, edge_quantile=0.90, max_samples=800):
-    """Ghosting / edge-widening score via the normal-direction gradient profile.
+def ghost_score(gt, pred, vessel, radius=8, edge_quantile=0.90,
+                max_samples=800, sigma=0.5):
+    """Double-edge / ghosting score via dark-valley counting on normal-direction
+    intensity profiles.
 
-    At each strong GT vessel edge pixel, sample the gradient-magnitude profile of
-    the prediction along the GT gradient (normal) direction and compute its
-    second moment (width). Ghosting (a vessel edge appearing twice / smeared)
-    widens the profile. Returns pred_width / gt_width (1.0 = no ghosting,
-    >1 = ghosting / blur / misalignment).
+    At each strong GT vessel edge pixel, sample the prediction intensity profile
+    along the GT gradient (normal) direction and count local minima (dark
+    valleys). A vessel edge appearing twice (ghosting) yields >=2 valleys on a
+    single profile. Returns the fraction of edge pixels with >=2 valleys
+    (0 = no ghosting, >0 = ghosting). Matches human judgement.
     """
     gx_gt = sobel(gt, axis=1)
     gy_gt = sobel(gt, axis=0)
-    gmag_gt = np.hypot(gx_gt, gy_gt)
-    gx_p = sobel(pred, axis=1)
-    gy_p = sobel(pred, axis=0)
-    gmag_p = np.hypot(gx_p, gy_p)
-
-    thr = np.quantile(gmag_gt, edge_quantile)
-    edge = (gmag_gt > thr) & vessel
+    gmag = np.hypot(gx_gt, gy_gt)
+    thr = np.quantile(gmag, edge_quantile)
+    edge = (gmag > thr) & vessel
     ys, xs = np.nonzero(edge)
     if len(xs) == 0:
         return float("nan")
 
     step = max(1, len(xs) // max_samples)
     H, W = gt.shape
-    rs = np.arange(-radius, radius + 1)
-
-    def profile_width(img_gmag):
-        widths = []
-        for k in range(0, len(xs), step):
-            y, x = ys[k], xs[k]
-            gx0, gy0 = gx_gt[y, x], gy_gt[y, x]
-            nm = np.hypot(gx0, gy0) + 1e-8
-            nx, ny = gx0 / nm, gy0 / nm
-            prof = []
-            for r in rs:
-                xx = int(round(x + nx * r))
-                yy = int(round(y + ny * r))
-                prof.append(img_gmag[yy, xx] if 0 <= yy < H and 0 <= xx < W else 0.0)
-            prof = np.asarray(prof)
-            s = prof.sum() + 1e-8
-            c = float((rs * prof).sum() / s)
-            widths.append(float(np.sqrt(((rs - c) ** 2 * prof).sum() / s)))
-        return float(np.mean(widths)) if widths else 1.0
-
-    w_gt = profile_width(gmag_gt)
-    w_pred = profile_width(gmag_p)
-    return float(w_pred / (w_gt + EPS))
+    dbl = 0
+    tot = 0
+    for k in range(0, len(xs), step):
+        y, x = ys[k], xs[k]
+        gx0, gy0 = gx_gt[y, x], gy_gt[y, x]
+        nm = np.hypot(gx0, gy0) + 1e-8
+        nx, ny = gx0 / nm, gy0 / nm
+        prof = []
+        for r in range(-radius, radius + 1):
+            xx = int(round(x + nx * r))
+            yy = int(round(y + ny * r))
+            prof.append(pred[yy, xx] if 0 <= yy < H and 0 <= xx < W else 0.0)
+        prof = gaussian_filter1d(np.asarray(prof), sigma)
+        m = prof.mean()
+        s = prof.std() + 1e-8
+        valleys = sum(
+            1 for j in range(1, len(prof) - 1)
+            if prof[j] < prof[j - 1] and prof[j] <= prof[j + 1]
+            and prof[j] < m - 0.5 * s
+        )
+        if valleys >= 2:
+            dbl += 1
+        tot += 1
+    return float(dbl / tot)
 
 
 def compute_metrics(gt, pred, label):

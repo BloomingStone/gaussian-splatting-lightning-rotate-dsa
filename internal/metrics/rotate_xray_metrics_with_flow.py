@@ -236,44 +236,42 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
                 float(g_pred[edge].mean() / (g_gt[edge].mean() + 1e-8)), device=device
             )
 
-        # --- ghosting / edge-widening score (normal-direction gradient profile
-        #     second moment ratio: pred / gt) ---
+        # --- ghosting / double-edge score (fraction of GT vessel-edge pixels
+        #     whose normal-direction intensity profile shows >=2 dark valleys) ---
         gx_gt = sobel(gt, axis=1)
         gy_gt = sobel(gt, axis=0)
         gmag_gt = np.hypot(gx_gt, gy_gt)
-        gx_p = sobel(pred, axis=1)
-        gy_p = sobel(pred, axis=0)
-        gmag_p = np.hypot(gx_p, gy_p)
-
         thr = np.quantile(gmag_gt, 0.90)
         edge = (gmag_gt > thr) & vessel
         ys, xs = np.nonzero(edge)
         if len(xs) > 0:
             step = max(1, len(xs) // 800)
             H, W = gt.shape
-            rs = np.arange(-10, 11)
-
-            def profile_width(img_gmag):
-                widths = []
-                for k in range(0, len(xs), step):
-                    y, x = ys[k], xs[k]
-                    gx0, gy0 = gx_gt[y, x], gy_gt[y, x]
-                    nm = np.hypot(gx0, gy0) + 1e-8
-                    nx, ny = gx0 / nm, gy0 / nm
-                    prof = []
-                    for r in rs:
-                        xx = int(round(x + nx * r))
-                        yy = int(round(y + ny * r))
-                        prof.append(img_gmag[yy, xx] if 0 <= yy < H and 0 <= xx < W else 0.0)
-                    prof = np.asarray(prof)
-                    s = prof.sum() + 1e-8
-                    c = float((rs * prof).sum() / s)
-                    widths.append(float(np.sqrt(((rs - c) ** 2 * prof).sum() / s)))
-                return float(np.mean(widths)) if widths else 1.0
-
-            w_gt = profile_width(gmag_gt)
-            w_pred = profile_width(gmag_p)
-            metrics["artifact/ghost_score"] = torch.tensor(w_pred / (w_gt + 1e-8), device=device)
+            dbl = 0
+            tot = 0
+            for k in range(0, len(xs), step):
+                y, x = ys[k], xs[k]
+                gx0, gy0 = gx_gt[y, x], gy_gt[y, x]
+                nm = np.hypot(gx0, gy0) + 1e-8
+                nx, ny = gx0 / nm, gy0 / nm
+                prof = []
+                for r in range(-8, 9):
+                    xx = int(round(x + nx * r))
+                    yy = int(round(y + ny * r))
+                    prof.append(pred[yy, xx] if 0 <= yy < H and 0 <= xx < W else 0.0)
+                prof = np.asarray(prof)
+                prof = gaussian_filter(prof, sigma=0.5)
+                m = prof.mean()
+                s = prof.std() + 1e-8
+                valleys = sum(
+                    1 for j in range(1, len(prof) - 1)
+                    if prof[j] < prof[j - 1] and prof[j] <= prof[j + 1]
+                    and prof[j] < m - 0.5 * s
+                )
+                if valleys >= 2:
+                    dbl += 1
+                tot += 1
+            metrics["artifact/ghost_score"] = torch.tensor(dbl / tot, device=device)
     
     def on_validation_epoch_start(self, pl_module):
         if self.config.compute_3d_metrics:
