@@ -15,7 +15,8 @@ OUT_DIR = ROOT / "outputs/comparison"
 PANELS = [
     ("spike_score", "spike_score  (needle/spike artifact, lower better)", "r"),
     ("v_ssim", "v_ssim  (vessel misalignment/ghost, higher better)", "b"),
-    ("ghost_score", "ghost_score  (edge widening/ghost, lower better)", "c"),
+    ("ghost_score", "ghost_score  (double-edge ghost, lower better)", "c"),
+    ("edge_contrast", "edge_contrast  (under-reconstruction blur, higher better)", "y"),
     ("edge_sharpness", "edge_sharpness  (misalign/blur, higher better)", "g"),
     ("v_psnr", "v_psnr  (vessel intensity error, higher better)", "m"),
 ]
@@ -26,7 +27,7 @@ def main(args):
     names = [r["name"] for r in rows]
     x = np.arange(len(names))
 
-    fig, axes = plt.subplots(5, 1, figsize=(14, 20))
+    fig, axes = plt.subplots(6, 1, figsize=(14, 24))
     for ax, (key, title, color) in zip(axes, PANELS):
         s1 = [r["stage1"][key] for r in rows]
         r2 = [r["r2g"][key] for r in rows]

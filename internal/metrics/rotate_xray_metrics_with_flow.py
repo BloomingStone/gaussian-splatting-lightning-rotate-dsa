@@ -272,6 +272,26 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
                     dbl += 1
                 tot += 1
             metrics["artifact/ghost_score"] = torch.tensor(dbl / tot, device=device)
+
+            # --- edge contrast ratio (under-reconstruction blur) ---
+            def _mean_range(img):
+                ranges = []
+                for k in range(0, len(xs), step):
+                    y, x = ys[k], xs[k]
+                    gx0, gy0 = gx_gt[y, x], gy_gt[y, x]
+                    nm = np.hypot(gx0, gy0) + 1e-8
+                    nx, ny = gx0 / nm, gy0 / nm
+                    prof = []
+                    for r in range(-6, 7):
+                        xx = int(round(x + nx * r))
+                        yy = int(round(y + ny * r))
+                        prof.append(img[yy, xx] if 0 <= yy < H and 0 <= xx < W else 0.0)
+                    ranges.append(float(np.max(prof) - np.min(prof)))
+                return float(np.mean(ranges)) if ranges else 1.0
+
+            metrics["artifact/edge_contrast"] = torch.tensor(
+                _mean_range(pred) / (_mean_range(gt) + 1e-8), device=device
+            )
     
     def on_validation_epoch_start(self, pl_module):
         if self.config.compute_3d_metrics:

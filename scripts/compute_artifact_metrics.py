@@ -111,6 +111,39 @@ def ghost_score(gt, pred, vessel, radius=8, edge_quantile=0.90,
     return float(dbl / tot)
 
 
+def edge_contrast(gt, pred, vessel, radius=6, edge_quantile=0.90, max_samples=800):
+    """Edge contrast ratio: mean intensity range (max - min) along the normal
+    direction at GT vessel edges, pred / gt. <1 = under-reconstruction blur."""
+    gx_gt = sobel(gt, axis=1)
+    gy_gt = sobel(gt, axis=0)
+    gmag = np.hypot(gx_gt, gy_gt)
+    thr = np.quantile(gmag, edge_quantile)
+    edge = (gmag > thr) & vessel
+    ys, xs = np.nonzero(edge)
+    if len(xs) == 0:
+        return float("nan")
+
+    step = max(1, len(xs) // max_samples)
+    H, W = gt.shape
+
+    def mean_range(img):
+        ranges = []
+        for k in range(0, len(xs), step):
+            y, x = ys[k], xs[k]
+            gx0, gy0 = gx_gt[y, x], gy_gt[y, x]
+            nm = np.hypot(gx0, gy0) + 1e-8
+            nx, ny = gx0 / nm, gy0 / nm
+            prof = []
+            for r in range(-radius, radius + 1):
+                xx = int(round(x + nx * r))
+                yy = int(round(y + ny * r))
+                prof.append(img[yy, xx] if 0 <= yy < H and 0 <= xx < W else 0.0)
+            ranges.append(float(np.max(prof) - np.min(prof)))
+        return float(np.mean(ranges)) if ranges else 1.0
+
+    return float(mean_range(pred) / (mean_range(gt) + EPS))
+
+
 def compute_metrics(gt, pred, label):
     vessel = label.astype(bool)
     bg = ~vessel
@@ -153,6 +186,9 @@ def compute_metrics(gt, pred, label):
     # --- ghosting / double-edge score (normal-direction profile peaks) ---
     out["ghost_score"] = ghost_score(gt, pred, vessel)
 
+    # --- edge contrast ratio (under-reconstruction blur) ---
+    out["edge_contrast"] = edge_contrast(gt, pred, vessel)
+
     return out
 
 
@@ -192,7 +228,7 @@ def main(args):
     # sort by angle
     rows.sort(key=lambda r: r["alpha"])
 
-    metrics = ["psnr", "v_psnr", "v_ssim", "v_l1", "edge_sharpness", "ghost_score", "spike_score"]
+    metrics = ["psnr", "v_psnr", "v_ssim", "v_l1", "edge_sharpness", "ghost_score", "edge_contrast", "spike_score"]
     header = f"{'view':<20}{'alpha':>8}" + "".join(f"{m:>13}" for m in metrics) + f"{'winner':>10}"
     print("=" * len(header))
     print(header)
