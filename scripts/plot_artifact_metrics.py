@@ -57,7 +57,7 @@ def main(args):
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--metrics_dir", default=OUT_DIR)
-    p.add_argument("--out_dir", default=OUT_DIR)
+    p.add_argument("--metrics_dir", default=OUT_DIR, type=Path)
+    p.add_argument("--out_dir", default=OUT_DIR, type=Path)
     p.add_argument("--exp_name", default="")
     main(p.parse_args())
