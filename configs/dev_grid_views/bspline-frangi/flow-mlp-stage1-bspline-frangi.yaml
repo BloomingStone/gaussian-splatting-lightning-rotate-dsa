@@ -83,7 +83,7 @@ model:
       optimization_config:
         enable_ast: true
         density_ramp_steps: 2000
-        lr: 1.0e-2          # 提高形变场学习率（bspline disp_coeff 需要更大 lr）
+        lr: 2.0e-3          # 温和提高形变场学习率（默认 1e-3）
         lr_final_factor: 0.002
       deform_model_config:
         class_path: internal.deform_models.deform_with_flow.BSplineDeformConfig
@@ -100,7 +100,7 @@ model:
       w_ssim_loss: 1.0
       w_d_density: 0.0
       w_flow_gate: 0.0
-      w_frangi: 1.0
+      w_frangi: 1.0          # w = 1 + w_frangi*frangi_mask（背景权重 1，冠脉 2 倍）
       w_manifold: 0.0
       w_field_smooth: 0.0
       compute_3d_metrics: false

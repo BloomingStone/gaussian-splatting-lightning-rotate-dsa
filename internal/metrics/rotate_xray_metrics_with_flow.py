@@ -87,6 +87,9 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
                 w = w.unsqueeze(0).unsqueeze(0)
             elif w.dim() == 3:
                 w = w.unsqueeze(0)
+            # keep background at weight 1 and boost vessels to 1 + w_frangi,
+            # so the background is still constrained while vessels dominate.
+            w = 1.0 + self.config.w_frangi * w
             w_sum = w.sum().clamp_min(1e-8)
             # weighted L1
             gray_loss = (torch.abs(pred_gray - gt_image) * w).sum() / w_sum
