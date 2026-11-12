@@ -36,8 +36,25 @@
 - 完全 Frangi 加权把背景权重压到 0 → 背景无约束，全图 PSNR 暴跌；冠脉也欠重建。
 - lr=1e-2 过高（xyz_var 4.04）。
 
-### 第二次尝试（w=1+w_frangi*frangi + lr=2e-3）
-（训练中）
+### 第二次尝试（w=1+w_frangi*frangi + lr=2e-3）：更差
+| 指标 | spike | bspline-frangi |
+|---|---|---|
+| v_psnr | 28.53 | 8.31 |
+| edge_contrast | 0.778 | 0.124 |
+| v_ssim | 0.856 | 0.064 |
+| 全图 PSNR | 28.35 | 5.84 |
+| xyz_var | ~1.5 | 0.025 |
 
-## 对照
-- stage1-spike（hashgrid + d_scaling_min=-0.5，无 Frangi 加权）。
+- 加权改为 w=1+frangi（背景权重 1），但结果更差：xyz_var 0.025 → bspline 形变场
+  几乎没学到位移（lr=2e-3 过小），整个重建失败。
+- lr 极敏感：1e-2 → xyz_var 4.04（过大）；2e-3 → xyz_var 0.025（过小）。
+
+## 结论
+- **bspline 低频形变场（8³ 控制点）在当前数据上不可行**：对 lr 极敏感，
+  且低频场难以表达冠脉精细非刚体运动。
+- **Frangi 加权无法救回 bspline**：完全加权（背景权重 0）背景失去约束；
+  相对加权（背景权重 1）形变场学不到运动。
+- 用户假设"bspline 失败因背景主导 loss + lr 不够"**未得到验证**——两者调整后
+  依然远差于 stage1-spike（PSNR 5.7~12.8 vs 28.35）。
+- 与之前 exp/bspline 结论一致（3D dice 0.346 vs hashgrid 0.614）：简化形变场
+  方向对重建质量有害。重影根因是单视角稀疏角运动欠定，而非形变场复杂度。
