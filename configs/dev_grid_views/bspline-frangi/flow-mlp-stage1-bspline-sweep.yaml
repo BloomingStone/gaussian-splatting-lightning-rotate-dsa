@@ -1,0 +1,114 @@
+# 实验 bspline-sweep：B-spline 形变场不同控制点数量（16/32/64/128）± Frangi 加权。
+# 通过 CLI 覆盖 grid_resolution 和 w_frangi；本 config 为模板（默认 8 控制点、无 frangi）。
+# 运行时覆盖：
+#   --model.renderer.init_args.deform_model_config.init_args.grid_resolution '[16,16,16]'
+#   --model.metric.init_args.w_frangi 1.0
+project: RotCA-GR
+
+max_steps: 20000
+
+trainer:
+  log_every_n_steps: 500
+  check_val_every_n_epoch: 20
+  precision: 16-mixed
+  callbacks:
+    - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
+    - class_path: internal.callbacks.callbacks.ProgressBar
+      init_args:
+        refresh_rate: 50
+
+    - class_path: internal.callbacks.scene_saver.SceneSaver
+      init_args:
+        save_iterations: [20000]
+        saver:
+          class_path: internal.savers.x_ray_saver_with_flow.XRaySaver_Flow
+          init_args:
+            save_ckpt: true
+            save_vtp: true
+            save_volume: false
+            save_label_threshold: 0.0344
+            save_time_or_type: 0.5
+            save_phase: 0.
+
+    - class_path: internal.callbacks.save_image.SaveImage
+      init_args:
+        save_val_output: true
+        max_save_val_output: 20
+        max_image_saving_threads: 3
+
+data:
+  parser:
+    class_path: internal.dataparsers.xray_dataparser.parser.XRayDataParserBuilder
+    init_args:
+      use_grid_val: true
+      grid_val_loader:
+        class_path: internal.dataparsers.xray_dataparser.grid_val.GridValLoader
+        init_args:
+          phase_stride: 20
+      grid_dataset_config:
+        class_path: internal.dataparsers.xray_dataparser.datasets.ImagesDatasetConfig
+        init_args:
+          image_uint8: false
+          weight_source: none
+      meta_loader:
+        class_path: internal.dataparsers.xray_dataparser.meta.XRayMetaLoader
+      cloud_parser:
+        class_path: internal.dataparsers.xray_dataparser.cloud_parsers.RandomCloudParser
+        init_args:
+          num_points: 10_000
+      spliter:
+        class_path: internal.dataparsers.xray_dataparser.splitters.FrameRangeSpliter
+        init_args:
+          start_frame: 40
+          end_frame: null
+          val_start_frame: 0
+          val_end_frame: 40
+          val_ratio: 0.2
+      cameras_builder:
+        class_path: internal.dataparsers.xray_dataparser.cameras_builder.RotateXRayCamerasBuilder
+      dataset_builder:
+        class_path: internal.dataparsers.xray_dataparser.datasets.FrangiImagesDatasetBuilder
+        init_args:
+          dataset_config:
+            class_path: internal.dataparsers.xray_dataparser.datasets.FrangiImagesDatasetConfig
+            init_args:
+              image_uint8: false
+              weight_source: none
+              frangi_black_ridges: true
+
+model:
+  renderer:
+    class_path: internal.renderers.deformabel_xray_renderer_with_flow.DeformableXrayRendererWithFlow
+    init_args:
+      optimization_config:
+        enable_ast: true
+        density_ramp_steps: 2000
+        lr: 5.0e-3          # 介于失败的 2e-3（太小）与 1e-2（太大）之间
+        lr_final_factor: 0.002
+      deform_model_config:
+        class_path: internal.deform_models.deform_with_flow.BSplineDeformConfig
+        init_args:
+          grid_resolution: [8, 8, 8]
+          phase_multires: 6
+          max_rotation: 0.3
+          enable_flow: false
+  metric:
+    class_path: internal.metrics.rotate_xray_metrics_with_flow.RotateXrayMetrics
+    init_args:
+      fused_ssim: false
+      w_gray_loss: 1.0
+      w_ssim_loss: 1.0
+      w_d_density: 0.0
+      w_flow_gate: 0.0
+      w_frangi: 0.0
+      w_manifold: 0.0
+      w_field_smooth: 0.0
+      compute_3d_metrics: false
+  gaussian:
+    class_path: internal.models.xray_coronary_gaussian_with_flow.XrayCoronaryGaussianWithFlow
+  density:
+    class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
+    init_args:
+      densification_interval: 300
+      densify_grad_percentile: 0.98
+      cull_density_threshold: 5e-5
