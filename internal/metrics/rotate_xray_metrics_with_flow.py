@@ -27,6 +27,14 @@ class RotateXrayMetrics(Metric):
     w_manifold: float = 0.0
     w_field_smooth: float = 0.0
 
+    # Frangi (coronary-prior) weighting of the image losses.  When > 0, the L1
+    # and SSIM losses are reweighted by the Frangi soft mask (vessel = 1,
+    # Gaussian falloff into the background) so a simplified deform field must
+    # still prioritise vessel reconstruction instead of averaging over the
+    # (usually dominant) background.  Requires a dataset that exposes
+    # `frangi_soft_mask` (FrangiImagesDataset).
+    w_frangi: float = 0.0
+
     rgb_diff_loss: Literal["l1", "l2"] = "l1"
 
     lpips_net_type: Literal["vgg", "alex", "squeeze"] = "alex"
@@ -59,15 +67,35 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
         batch: BatchT, 
         outputs: XrayRendererOuputs
     ):
-        _, image_info, _ = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
+        _, image_info, extra_data = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
         _, gt_image, _ = image_info
         gt_image = self._ensure_gray_nchw(gt_image)
         pred_gray = self._ensure_gray_nchw(outputs.gray_image)
-        
-        gray_loss = self.rgb_diff_loss_fn(pred_gray, gt_image)
-        
-        ssim_metric = self.ssim(pred_gray, gt_image)
-        ssim_loss = 1.0 - ssim_metric
+
+        # Frangi (coronary-prior) weighting of the image losses: forces the
+        # simplified deform field to prioritise vessel regions instead of
+        # averaging over the dominant background.
+        frangi_w = None
+        if extra_data is not None:
+            frangi_w = extra_data.get("frangi_soft_mask") or extra_data.get("soft_mask_weight")
+
+        if frangi_w is not None and self.config.w_frangi > 0:
+            w = frangi_w.to(dtype=pred_gray.dtype, device=pred_gray.device)
+            if w.dim() == 2:
+                w = w.unsqueeze(0).unsqueeze(0)
+            elif w.dim() == 3:
+                w = w.unsqueeze(0)
+            w_sum = w.sum().clamp_min(1e-8)
+            # weighted L1
+            gray_loss = (torch.abs(pred_gray - gt_image) * w).sum() / w_sum
+            # soft-masked SSIM: background -> ~0 (ssim ~1 there, no loss), vessel kept
+            from internal.metrics.ssim import ssim as _std_ssim
+            ssim_metric = _std_ssim(pred_gray * w, gt_image * w)
+            ssim_loss = 1.0 - ssim_metric
+        else:
+            gray_loss = self.rgb_diff_loss_fn(pred_gray, gt_image)
+            ssim_metric = self.ssim(pred_gray, gt_image)
+            ssim_loss = 1.0 - ssim_metric
         
         # regularization losses on deforms variance
         d_xyz_var = outputs.deforms_var["d_xyz"]
