@@ -189,15 +189,13 @@ class BSplineDeformModel(DeformWithFlowModel):
     # ------------------------------------------------------------------
     def _displacement(self, xyz: torch.Tensor, phase: torch.Tensor) -> torch.Tensor:
         basis = self.embed_phase_fn(phase)                 # [N, n_phase_basis]
-        cp_disp = torch.einsum("mjc,nj->nmc", self.disp_coeff, basis)  # [N, M, 3]
-        return self._interpolate_bspline(cp_disp, xyz)     # [N, 3]
+        return self._interpolate_bspline(self.disp_coeff, basis, xyz)  # [N, 3]
 
     def _displacement_with_jacobian(
         self, xyz: torch.Tensor, phase: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         basis = self.embed_phase_fn(phase)                 # [N, n_phase_basis]
-        cp_disp = torch.einsum("mjc,nj->nmc", self.disp_coeff, basis)  # [N, M, 3]
-        return self._interpolate_bspline(cp_disp, xyz, return_grad=True)
+        return self._interpolate_bspline(self.disp_coeff, basis, xyz, return_grad=True)
 
     def _rotation_from_jacobian(self, jac: torch.Tensor) -> torch.Tensor:
         # infinitesimal rotation vector = 0.5 * curl(u)
@@ -227,8 +225,19 @@ class BSplineDeformModel(DeformWithFlowModel):
     # B-spline interpolation
     # ------------------------------------------------------------------
     def _interpolate_bspline(
-        self, cp_values: torch.Tensor, xyz: torch.Tensor, return_grad: bool = False,
+        self, cp_coeff: torch.Tensor, basis: torch.Tensor, xyz: torch.Tensor,
+        return_grad: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Interpolate the B-spline control-point displacement at ``xyz``.
+
+        ``cp_coeff``: [M, n_phase_basis, 3] (raw control-point coefficients),
+        ``basis``: [N, n_phase_basis] (phase encoding).
+
+        Control points are gathered *first* (only the 4^3 neighbouring
+        coefficients per point) and then mixed with ``basis``, so the peak
+        intermediate tensor is O(N * 64 * n_basis * 3) instead of O(N * M * 3)
+        — the latter OOMs for large grids (e.g. 128^3).
+        """
         nx, ny, nz = self.grid_resolution
 
         denom = torch.clamp(self.grid_max - self.grid_min, min=1e-6)
@@ -253,11 +262,12 @@ class BSplineDeformModel(DeformWithFlowModel):
         ).reshape(xyz.shape[0], -1).long()
 
         weights = torch.einsum("ni,nj,nk->nijk", wx, wy, wz).reshape(xyz.shape[0], -1)
-        sampled = cp_values.gather(
-            dim=1,
-            index=linear_idx.unsqueeze(-1).expand(-1, -1, 3),
-        )
-        u = (weights.unsqueeze(-1) * sampled).sum(dim=1)
+
+        # gather neighbouring control-point coefficients: [N, 64, n_basis, 3]
+        sampled = cp_coeff[linear_idx]
+        # per-point displacement after mixing with the phase basis: [N, 64, 3]
+        cp_disp = torch.einsum("nkbc,nb->nkc", sampled, basis)
+        u = (weights.unsqueeze(-1) * cp_disp).sum(dim=1)  # [N, 3]
 
         if not return_grad:
             return u
@@ -273,9 +283,9 @@ class BSplineDeformModel(DeformWithFlowModel):
         w_dy = torch.einsum("ni,nj,nk->nijk", wx, dwy, wz).reshape(xyz.shape[0], -1)
         w_dz = torch.einsum("ni,nj,nk->nijk", wx, wy, dwz).reshape(xyz.shape[0], -1)
 
-        du_dx = (w_dx.unsqueeze(-1) * sampled).sum(dim=1)  # [N, 3]
-        du_dy = (w_dy.unsqueeze(-1) * sampled).sum(dim=1)
-        du_dz = (w_dz.unsqueeze(-1) * sampled).sum(dim=1)
+        du_dx = (w_dx.unsqueeze(-1) * cp_disp).sum(dim=1)  # [N, 3]
+        du_dy = (w_dy.unsqueeze(-1) * cp_disp).sum(dim=1)
+        du_dz = (w_dz.unsqueeze(-1) * cp_disp).sum(dim=1)
         jac = torch.stack([du_dx, du_dy, du_dz], dim=-1)   # [N, 3, 3], jac[i, j] = d u_i / d x_j
         return u, jac
 
