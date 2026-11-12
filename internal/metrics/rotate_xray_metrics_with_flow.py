@@ -77,7 +77,9 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
         # averaging over the dominant background.
         frangi_w = None
         if extra_data is not None:
-            frangi_w = extra_data.get("frangi_soft_mask") or extra_data.get("soft_mask_weight")
+            frangi_w = extra_data.get("frangi_soft_mask")
+            if frangi_w is None:
+                frangi_w = extra_data.get("soft_mask_weight")
 
         if frangi_w is not None and self.config.w_frangi > 0:
             w = frangi_w.to(dtype=pred_gray.dtype, device=pred_gray.device)
@@ -88,9 +90,10 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             w_sum = w.sum().clamp_min(1e-8)
             # weighted L1
             gray_loss = (torch.abs(pred_gray - gt_image) * w).sum() / w_sum
-            # soft-masked SSIM: background -> ~0 (ssim ~1 there, no loss), vessel kept
+            # weighted SSIM (per-pixel ssim map, weighted by the Frangi mask)
             from internal.metrics.ssim import ssim as _std_ssim
-            ssim_metric = _std_ssim(pred_gray * w, gt_image * w)
+            ssim_map = _std_ssim(pred_gray, gt_image, size_average=False)  # (B, C, H, W)
+            ssim_metric = (ssim_map * w).sum() / w_sum
             ssim_loss = 1.0 - ssim_metric
         else:
             gray_loss = self.rgb_diff_loss_fn(pred_gray, gt_image)
