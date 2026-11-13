@@ -28,14 +28,14 @@ def run(cmd, env_extra=None):
     return True
 
 
-def train_and_eval(gpu: int, w: float, frangi: bool = False):
+def train_and_eval(gpu: int, w: float, frangi: bool = False, res: int = 32):
     suffix = "-frangi" if frangi else ""
-    name = f"bs32-smooth-{w}{suffix}"
+    name = f"bs{res}-smooth-{w}{suffix}"
     out_dir = ROOT / "outputs" / "dev_grid_views" / "bspline-frangi" / name
     env = {"CUDA_VISIBLE_DEVICES": str(gpu)}
     extra = [
         "--model.renderer.init_args.deform_model_config.init_args.grid_resolution",
-        "[32,32,32]",
+        f"[{res},{res},{res}]",
         "--model.metric.init_args.w_field_smooth",
         str(w),
     ]
@@ -88,10 +88,11 @@ def main():
     p.add_argument("--gpu", type=int, required=True)
     p.add_argument("--weights", nargs="+", type=float, required=True)
     p.add_argument("--frangi", action="store_true", help="同时加 w_frangi=1.0")
+    p.add_argument("--res", type=int, default=32)
     args = p.parse_args()
     for w in args.weights:
-        print(f"\n========== bs32 w_field_smooth={w} frangi={args.frangi} (gpu {args.gpu}) ==========", flush=True)
-        train_and_eval(args.gpu, w, frangi=args.frangi)
+        print(f"\n========== bs{args.res} w_field_smooth={w} frangi={args.frangi} (gpu {args.gpu}) ==========", flush=True)
+        train_and_eval(args.gpu, w, frangi=args.frangi, res=args.res)
 
 
 if __name__ == "__main__":
