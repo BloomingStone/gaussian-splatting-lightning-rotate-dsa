@@ -93,9 +93,12 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             w_sum = w.sum().clamp_min(1e-8)
             # weighted L1
             gray_loss = (torch.abs(pred_gray - gt_image) * w).sum() / w_sum
-            # weighted SSIM (per-pixel ssim map, weighted by the Frangi mask)
+            # weighted SSIM (per-pixel ssim map, weighted by the Frangi mask).
+            # NOTE: compute the per-pixel map in fp32 — under 16-mixed training
+            # the standard SSIM map overflows to [-12, 14] (should be [-1, 1]),
+            # whose huge gradients blow up the deform field.
             from internal.metrics.ssim import ssim as _std_ssim
-            ssim_map = _std_ssim(pred_gray, gt_image, size_average=False)  # (B, C, H, W)
+            ssim_map = _std_ssim(pred_gray.float(), gt_image.float(), size_average=False)  # (B, C, H, W)
             ssim_metric = (ssim_map * w).sum() / w_sum
             ssim_loss = 1.0 - ssim_metric
         else:
