@@ -107,6 +107,12 @@ class CommonImageMetricImpl(MetricImpl):
         if self.config.fused_ssim:
             print("Fused SSIM enabled")
             self.ssim = self._create_fused_ssim_adapter()
+        else:
+            # The standard SSIM implementation is numerically unstable under
+            # 16-mixed precision: its window statistics (conv2d of img*img,
+            # mu^2) overflow, producing huge per-pixel gradients that blow up
+            # the deform field. Always compute it in fp32.
+            self.ssim = lambda pred, gt: ssim(pred.float(), gt.float())
 
     @staticmethod
     def _ensure_gray_nchw(image: torch.Tensor) -> torch.Tensor:
