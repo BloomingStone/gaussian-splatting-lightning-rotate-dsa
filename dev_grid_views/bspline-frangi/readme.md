@@ -82,6 +82,57 @@
   远差于 spike 28.5/30.35）；ghost_score 极低是"血管没重建"的假象。
 - **控制点数量无关**：16→128 结果几乎不变（xyz_var 0.05~0.12，位移仍过小）。
 - **Frangi 加权无帮助**（bs*-f 普遍 ≤ 对应 bs*）。
-- **frangi-only（hashgrid）反而发散**：Frangi 加权让 hashgrid 形变场 xyz_var 爆炸到 8740 → OOM。
-- 最终结论：简化形变场（bspline）方向不可行，Frangi 加权对 hashgrid 也有害（发散）。
-  重影根因是单视角稀疏角运动欠定，需转向多视角/flow 监督或 P3 循环一致性。
+- **frangi-only（hashgrid）曾被认为发散**，但见下方「根因排查」——是标准 SSIM 的
+  autocast 数值 bug 导致，与 Frangi 加权无关。
+
+---
+
+## 根因排查：frangi-only 为何发散（重要修正）
+
+### 现象
+frangi-only（hashgrid + w_frangi=1.0 + fused_ssim=false）训练发散：
+xyz_var 爆炸（8740 / 594000）→ 高斯数量异常增长到 80504 → 投影全黑 → OOM。
+
+### 排查过程（依次排除）
+1. hashgrid + fused_ssim=false + **w_frangi=0** → 仍发散（xyz_var→3390→OOM）→ 排除 Frangi 加权。
+2. stage1-spike config + **fused_ssim=false** → 仍发散（xyz_var 3.26→83→1.77e+4）→ 定位 fused_ssim=false。
+3. fp16 下标准 SSIM per-pixel map 溢出到 [-11.7, 13.7]（应 [-1,1]）→ 数值不稳定。
+4. 仅 `pred.float()` cast 不够——autocast 仍影响 F.conv2d 窗口统计。
+5. **决定性 CUDA 诊断**：autocast(fp16) 内标准 SSIM ssim=1.1426(>1)、梯度 max=7.0；
+   `torch.autocast(enabled=False)` + fp32 后 ssim=0.9977、梯度 max=5.48e-05（差 13 万倍）。
+
+### 根因
+16-mixed 训练下，标准 SSIM（`internal/metrics/ssim.py`，F.conv2d 窗口统计 img*img / mu²）
+在 autocast 上下文溢出，per-pixel SSIM > 1、梯度异常放大 ~1e5 倍，使 hashgrid 无界
+xyz_warp 发散。fused_ssim（fp16 CUDA kernel）本身稳定，故此前 fused_ssim=true 的所有
+实验（stage1-spike 等）不受影响。
+
+### 修复（commit 794eabc）
+- `internal/metrics/metric.py`：非 fused 分支改为
+  `with torch.autocast(device_type=..., enabled=False): ssim(pred.float(), gt.float())`
+- `internal/metrics/rotate_xray_metrics_with_flow.py`：加权 per-pixel ssim_map 同样禁用 autocast。
+
+### frangi-only 重新训练结果（frangi-only-v2，修复后不发散）
+训练稳定（xyz_var ~1.6-2.3，val/psnr 28.40），frame100 13 视角指标 vs stage1-spike：
+
+| metric | stage1-spike | frangi-only | 变化 |
+|---|---|---|---|
+| psnr | 32.96 | 32.57 | -0.39 |
+| v_psnr | 30.55 | 30.85 | +0.30 ✓ |
+| v_ssim | 0.881 | 0.896 | +0.015 ✓ |
+| edge_contrast | 0.816 | 0.843 | +0.027 ✓ |
+| edge_sharpness | 0.747 | 0.774 | +0.027 ✓ |
+| ghost_score | 0.051 | 0.050 | -0.001 ✓ |
+| spike_score | 0.558 | 0.558 | 0.000 |
+
+**修正结论：Frangi 加权对 hashgrid 是轻微正面的**（血管区域 v_psnr/v_ssim、清晰度
+edge_contrast/sharpness 均改善，重影略降，代价是全图 PSNR 略降 0.39）。之前"frangi-only
+发散 / Frangi 对 hashgrid 有害"的结论是 SSIM autocast bug 的假象，予以推翻。
+
+---
+
+## 最终结论（bspline-frangi 实验整体）
+- **bspline 低频形变场（16~128 控制点）在当前数据上不可行**：对 lr 极敏感，
+  低频场难以表达冠脉精细非刚体运动，所有控制点数量 + Frangi 组合均远差于 hashgrid。
+- **Frangi 加权对 hashgrid 轻微正面**（见上表），但不是解决重影的关键手段。
+- 重影根因仍是单视角稀疏角运动欠定，需转向多视角/flow 监督或 P3 循环一致性。
