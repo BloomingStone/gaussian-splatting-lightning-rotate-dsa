@@ -109,10 +109,14 @@ class CommonImageMetricImpl(MetricImpl):
             self.ssim = self._create_fused_ssim_adapter()
         else:
             # The standard SSIM implementation is numerically unstable under
-            # 16-mixed precision: its window statistics (conv2d of img*img,
-            # mu^2) overflow, producing huge per-pixel gradients that blow up
-            # the deform field. Always compute it in fp32.
-            self.ssim = lambda pred, gt: ssim(pred.float(), gt.float())
+            # 16-mixed autocast: its window statistics (conv2d of img*img,
+            # mu^2) overflow, producing per-pixel values > 1 and gradients
+            # ~1e5x too large, which blows up the deform field. Compute it in
+            # fp32 *and* outside the autocast context.
+            def _fp32_ssim(pred, gt):
+                with torch.autocast(device_type=pred.device.type, enabled=False):
+                    return ssim(pred.float(), gt.float())
+            self.ssim = _fp32_ssim
 
     @staticmethod
     def _ensure_gray_nchw(image: torch.Tensor) -> torch.Tensor:
