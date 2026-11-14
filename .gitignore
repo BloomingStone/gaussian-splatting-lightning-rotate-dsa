@@ -5,7 +5,8 @@ renders
 edited
 clusters
 segments
-**/__pycache__# pixi environments
+**/__pycache__
+# pixi environments
 .pixi/*
 !.pixi/config.toml
 
@@ -33,3 +34,6 @@ tests/output/
 temp/
 
 **/.ipynb_checkpoints
+
+# 实验产出目录（本地共用，跨实验/跨分支比较）
+dev_grid_views/
