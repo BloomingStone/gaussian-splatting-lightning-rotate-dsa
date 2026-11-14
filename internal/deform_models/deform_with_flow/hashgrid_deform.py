@@ -6,6 +6,7 @@ from typing import Any, override
 
 import torch
 import torch.nn as nn
+from torch.nn import functional as F
 from .deform_with_flow import DeformWithFlowModel, DeformWithFlowConfig, DeformsWithFlow
 from ..network_factory import NetworkFactory
 from ...encodings.vector_positional_encoding import VectorPositionalEncoding
@@ -90,7 +91,19 @@ class HashGridDeformConfig(DeformWithFlowConfig):
     """Lower bound of d_scaling; new_scale = scale * (1 + d_scaling).
     -1.0 (default) allows full compression (original behaviour); raising it
     (e.g. -0.5) prevents needle artifacts from over-compressed scales."""
-    
+
+    # Spatial-adaptive smoothness on the displacement field.  The insight is
+    # that most of the volume is static and motion is local: a uniform smoothness
+    # term over-smooths the moving vessel while wasting capacity on the static
+    # background.  We therefore penalise ||du/dx||^2 weighted by (1 - normalized
+    # density), so low-density (static background) regions are forced smooth/rigid
+    # while high-density (vessel) regions keep fine deformation freedom.
+    enable_field_smooth: bool = False
+    smooth_density_q_lo: float = 0.05
+    smooth_density_q_hi: float = 0.95
+    smooth_weight_floor: float = 0.05   # keep a tiny weight everywhere so the field is never fully unconstrained
+    smooth_eps: float = 1e-2            # finite-difference step (fraction of scene scale) for the smoothness probe
+
     tcnn: bool = True
     
     x_multires: int = 7
@@ -190,6 +203,8 @@ class HashGridDefromModel(DeformWithFlowModel):
             _linear(self.cfg.combine_W, 1),
             Scale(0.001),    # limit the density to match original scale of density, which is around 0.001 for x-ray observation
         )
+
+        self._last_regularization: dict[str, torch.Tensor] | None = None
         
     def _flow_param_prefixes(self) -> tuple[str, ...]:
         """Parameter-name prefixes that belong to the t-guided flow branch."""
@@ -229,18 +244,23 @@ class HashGridDefromModel(DeformWithFlowModel):
         xyz: torch.Tensor,
         t: torch.Tensor,
         phase: torch.Tensor|None = None,
+        density: torch.Tensor|None = None,
     )-> DeformsWithFlow:
         """
         Forward pass of the deformable model.
         Args:
             xyz: [n, 3] the coordinates of the points to be deformed
             t: [1] the current time, normalized to [0, 1]
+            density: [n, 1] base density of the gaussians (opacity-related), used
+                only to build the spatial weight of the smoothness regularizer.
         Returns:
             d_xyz: [n, 3] \\in R^3, the translation for each point
             d_scaling: [n, 3] \\in [-1, 1], the scaling change for each point, where the new scaling will be scaling * (1 + d_scaling)
             d_rotation: [n, 4] \\in [-0.1*\\sqrt{3}, 0.1*\\sqrt{3}], the rotation for each point in quaternion format (w, x, y, z), where the new rotation will be rotation * d_rotation
             d_density: [n, 1], the density change for each point, where the new density will be density + d_density
         """
+        compute_smooth = self.cfg.enable_field_smooth and self.training and density is not None
+
         x_emb = self.embed_fn(xyz)
         # assert not torch.any(torch.isnan(x_emb)), "NaN detected in x_emb"
         
@@ -287,4 +307,63 @@ class HashGridDefromModel(DeformWithFlowModel):
             # stage 1: motion-only, keep density unchanged
             d_density = torch.zeros((xyz.shape[0], 1), device=xyz.device, dtype=xyz.dtype)
 
+        if compute_smooth:
+            # Finite-difference smoothness probe.  tcnn's hash encoding does not
+            # support double backward, so we cannot take an analytic Jacobian via
+            # autograd.grad(..., create_graph=True).  Instead we evaluate the
+            # displacement at a randomly perturbed neighbour and penalise the
+            # directional derivative: du/dn ~= (u(x+eps*n) - u(x)) / eps.  This
+            # only requires ordinary (first-order) autograd, so gradients flow
+            # back to the network parameters through the extra forward pass.
+            eps = self.cfg.smooth_eps
+            noise = F.normalize(torch.randn_like(xyz), dim=-1)
+            xyz_p = xyz.detach() + eps * noise
+            d_xyz_p = self._dxyz_at(xyz_p, t, phase)  # [N, 3]
+            dir_deriv = (d_xyz_p - d_xyz) / eps        # [N, 3]
+
+            # spatial weight: low density (static background) -> high weight
+            d = density.detach().squeeze(-1)  # [N]
+            lo = torch.quantile(d, self.cfg.smooth_density_q_lo)
+            hi = torch.quantile(d, self.cfg.smooth_density_q_hi)
+            span = (hi - lo).clamp_min(1e-6)
+            d_norm = ((d - lo) / span).clamp(0.0, 1.0)
+            w = (1.0 - d_norm).clamp_min(self.cfg.smooth_weight_floor)  # [N]
+
+            smoothness = (w[:, None] * (dir_deriv ** 2)).mean()
+
+            # manifold: fold-over penalty on det(I + du/dn * n^T) is too weak;
+            # use the squared displacement of the probe instead as a cheap proxy
+            # is not meaningful.  Keep a light L2 on the directional derivative.
+            self._last_regularization = {
+                "smoothness": smoothness,
+                "manifold": torch.zeros((), device=xyz.device, dtype=xyz.dtype),
+            }
+        else:
+            self._last_regularization = None
+
         return DeformsWithFlow(d_xyz=d_xyz, d_scaling=d_scaling, d_rotation=d_rotation, d_density=d_density)
+
+    def _dxyz_at(
+        self,
+        xyz: torch.Tensor,
+        t: torch.Tensor,
+        phase: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Compute the motion displacement d_xyz at xyz.  Used by the main forward
+        and re-used by the finite-difference smoothness probe (which needs the
+        displacement at a perturbed location)."""
+        x_emb = self.embed_fn(xyz)
+        t_emb = self.embed_t_fn(t)
+        if phase is None:
+            h = self.combine_mlp(torch.cat([x_emb, t_emb], dim=-1))
+            h_mov = h
+        else:
+            phase_emb = self.embed_phase_fn(phase)
+            if self.combine_phase_mlp is not None:
+                h_mov = self.combine_phase_mlp(torch.cat([x_emb, phase_emb], dim=-1))
+            else:
+                h_mov = self.combine_mlp(torch.cat([x_emb, t_emb, phase_emb], dim=-1))
+        return self.xyz_warp(h_mov)
+
+    def get_last_regularization(self) -> dict[str, torch.Tensor] | None:
+        return self._last_regularization

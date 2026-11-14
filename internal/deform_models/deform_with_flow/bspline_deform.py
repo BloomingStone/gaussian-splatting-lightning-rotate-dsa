@@ -143,6 +143,7 @@ class BSplineDeformModel(DeformWithFlowModel):
         xyz: torch.Tensor,
         t: torch.Tensor,
         phase: torch.Tensor | None = None,
+        density: torch.Tensor | None = None,
     ) -> DeformsWithFlow:
         self._maybe_init_grid_bounds(xyz)
 

@@ -55,7 +55,7 @@ class DeformableXrayRendererWithFlow(CoronaryDeformableXrayRenderer):
         
         time = viewpoint_camera.time.unsqueeze(0).expand(gs.xyz.shape[0], -1)
         phase = viewpoint_camera.phase.unsqueeze(0).expand(gs.xyz.shape[0], -1)
-        deforms: DeformsWithFlow = self.deform_model(gs.xyz.detach(), time.detach(), phase.detach())
+        deforms: DeformsWithFlow = self.deform_model(gs.xyz.detach(), time.detach(), phase.detach(), density=gs.density)
         gs = self.deform_model.deform(gs, deforms)
         gray_image, meta_whole = self._render(viewpoint_camera, gs)
 
@@ -140,7 +140,7 @@ class DeformableXrayRendererWithFlow(CoronaryDeformableXrayRenderer):
             time = time + ast_noise
             phase = phase + ast_noise
         
-        deforms = self.deform_model(gs.xyz.detach(), time.detach(), phase.detach())
+        deforms = self.deform_model(gs.xyz.detach(), time.detach(), phase.detach(), density=gs.density)
         
         # apply density amplitude ramp for models that output d_density (with_flow)
         ramp_steps = self.optimization_config.density_ramp_steps

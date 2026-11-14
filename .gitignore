@@ -36,4 +36,4 @@ temp/
 **/.ipynb_checkpoints
 
 # 实验产出目录（本地共用，跨实验/跨分支比较）
-dev_grid_views/
+/dev_grid_views/
