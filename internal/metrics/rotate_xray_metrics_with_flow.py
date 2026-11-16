@@ -2,11 +2,29 @@ from dataclasses import dataclass
 from typing import Tuple, Dict, Literal, Any
 
 import torch
+import torch.nn.functional as F
 from lightning import LightningModule
 
 from internal.metrics.metric import Metric, MetricImpl, CommonImageMetricImpl
 from internal.renderers.deformabel_xray_renderer import  XrayRendererOuputs
 from internal.dataparsers.dataparser import BatchT
+
+
+def _quat_to_matrix(q: torch.Tensor) -> torch.Tensor:
+    """q: [..., 4] wxyz -> R: [..., 3, 3]"""
+    w, x, y, z = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+    shape = q.shape[:-1] + (3, 3)
+    R = torch.empty(shape, device=q.device, dtype=q.dtype)
+    R[..., 0, 0] = 1 - 2 * (y * y + z * z)
+    R[..., 0, 1] = 2 * (x * y - w * z)
+    R[..., 0, 2] = 2 * (x * z + w * y)
+    R[..., 1, 0] = 2 * (x * y + w * z)
+    R[..., 1, 1] = 1 - 2 * (x * x + z * z)
+    R[..., 1, 2] = 2 * (y * z - w * x)
+    R[..., 2, 0] = 2 * (x * z - w * y)
+    R[..., 2, 1] = 2 * (y * z + w * x)
+    R[..., 2, 2] = 1 - 2 * (x * x + y * y)
+    return R
 
 
 @dataclass
@@ -26,6 +44,20 @@ class RotateXrayMetrics(Metric):
     # field regularizers exposed by the deform model (BSplineDeformModel)
     w_manifold: float = 0.0
     w_field_smooth: float = 0.0
+
+    # Gaussian shape / compactness regularizers.
+    #   w_aniso > 0  penalises needle-like gaussians (max/min scale > aniso_tau),
+    #                the geometric source of the 3D "spikes".
+    #   w_overlap > 0 penalises gaussian centres falling inside a neighbour's
+    #                ellipsoid (soft cover), so points spread out instead of
+    #                stacking.
+    w_aniso: float = 0.0
+    aniso_tau: float = 5.0
+    w_overlap: float = 0.0
+    overlap_sigma: float = 1.0
+    overlap_k: int = 4
+    overlap_sample: int = 1024
+    overlap_temp: float = 0.2
 
     # Frangi (coronary-prior) weighting of the image losses.  When > 0, the L1
     # and SSIM losses are reweighted by the Frangi soft mask (vessel = 1,
@@ -137,6 +169,48 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
         manifold_loss = reg["manifold"] if reg else torch.zeros((), device=gray_loss.device)
         field_smooth_loss = reg["smoothness"] if reg else torch.zeros((), device=gray_loss.device)
 
+        # Gaussian shape / compactness regularizers (anti-spike / anti-overlap)
+        device = gray_loss.device
+        aniso_loss = torch.zeros((), device=device)
+        if self.config.w_aniso > 0:
+            gs_scales = gaussian_model.get_scales()  # [N, 3] activated
+            s_max = gs_scales.max(dim=-1).values
+            s_min = gs_scales.min(dim=-1).values
+            aniso = s_max / (s_min + 1e-8)
+            aniso_loss = F.relu(aniso - self.config.aniso_tau).mean()
+
+        overlap_loss = torch.zeros((), device=device)
+        if self.config.w_overlap > 0:
+            gs_means = gaussian_model.get_means()      # [N, 3]
+            gs_scales = gaussian_model.get_scales()    # [N, 3]
+            gs_rot = gaussian_model.get_rotations()    # [N, 4] normalized quat
+            n = gs_means.shape[0]
+            m = min(self.config.overlap_sample, n)
+            perm = torch.randperm(n, device=device)[:m]
+            m_means = gs_means[perm]  # [m, 3]
+
+            # euclidean squared distance to every gaussian, exclude self
+            d2 = ((m_means[:, None, :] - gs_means[None, :, :]) ** 2).sum(-1)  # [m, n]
+            d2.scatter_(1, perm[:, None], float("inf"))
+            k = min(self.config.overlap_k, n - 1)
+            _, nn_idx = d2.topk(k, dim=1, largest=False)  # [m, k]
+
+            nn_scales = gs_scales[nn_idx]  # [m, k, 3]
+            nn_rot = gs_rot[nn_idx]        # [m, k, 4]
+            R = _quat_to_matrix(nn_rot)    # [m, k, 3, 3]
+            diff = m_means[:, None, :] - gs_means[nn_idx]  # [m, k, 3]
+
+            # Mahalanobis distance of each sampled centre into the neighbour's
+            # ellipsoid: y = R_j^T (mu_i - mu_j), d2 = ||y / s_j||^2
+            y = torch.einsum("mkd,mkde->mke", diff, R)  # [m, k, 3]
+            d2_maha = ((y / (nn_scales + 1e-8)) ** 2).sum(-1)  # [m, k]
+
+            # soft cover: sigmoid((sigma^2 - d2) / temp), high when centre is inside
+            soft_cover = torch.sigmoid(
+                (self.config.overlap_sigma ** 2 - d2_maha) / self.config.overlap_temp
+            )
+            overlap_loss = soft_cover.max(dim=-1).values.mean()
+
         loss = (
             # image loss
             self.config.w_gray_loss * gray_loss +
@@ -147,7 +221,9 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             self.config.w_xyz_var * d_xyz_var_avg +
             self.config.w_flow_gate * flow_gate_loss +
             self.config.w_manifold * manifold_loss +
-            self.config.w_field_smooth * field_smooth_loss
+            self.config.w_field_smooth * field_smooth_loss +
+            self.config.w_aniso * aniso_loss +
+            self.config.w_overlap * overlap_loss
         )
 
 
@@ -164,6 +240,8 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             "flow_gate_loss": flow_gate_loss,
             "manifold_loss": manifold_loss,
             "field_smooth_loss": field_smooth_loss,
+            "aniso_loss": aniso_loss,
+            "overlap_loss": overlap_loss,
         }
 
 
@@ -178,6 +256,8 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             "flow_gate_loss": True,
             "manifold_loss": False,
             "field_smooth_loss": False,
+            "aniso_loss": False,
+            "overlap_loss": False,
         }
         return metrics, prog_bar
     
