@@ -19,7 +19,6 @@ ROTATE_DSD = ROOT / "data/example_grids/rotate_dsa"
 TRAIN_FRAMES = [40, 100, 160]
 
 HG_DIR = ROOT / "outputs/dev_grid_views/stage1-spike"
-BS_DIR = ROOT / "outputs/dev_grid_views/bspline-frangi/bs32-smooth-0.2-frangi"
 
 
 def load_gray(p: Path) -> np.ndarray:
@@ -34,6 +33,7 @@ def style_box(ax, color: str):
 def main(args):
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
+    bs_dir = Path(args.bs_dir)
 
     meta = json.load(open(GRID_DIR / "meta.json"))
     grid_alphas = [f["alpha_degree"] for f in meta["frames"]]
@@ -44,7 +44,7 @@ def main(args):
     train_alphas = {f: rot_frames[f]["alpha_degree"] for f in TRAIN_FRAMES}
 
     hg_metrics = json.load(open(HG_DIR / "metrics.json"))
-    bs_metrics = json.load(open(BS_DIR / "metrics.json"))
+    bs_metrics = json.load(open(bs_dir / "metrics.json"))
     hg_psnr = {r["idx"]: r["psnr"] for r in hg_metrics["per_image"]}
     bs_psnr = {r["idx"]: r["psnr"] for r in bs_metrics["per_image"]}
 
@@ -53,7 +53,7 @@ def main(args):
         for f in TRAIN_FRAMES
     }
     bs_train_psnr = {
-        f: json.load(open(BS_DIR / "train_frame" / f"stage1_frame{f}_psnr.json"))["psnr"]
+        f: json.load(open(bs_dir / "train_frame" / f"stage1_frame{f}_psnr.json"))["psnr"]
         for f in TRAIN_FRAMES
     }
 
@@ -72,7 +72,7 @@ def main(args):
             i = row["view"]
             gt = load_gray(GRID_DIR / "dsa" / f"{i:03d}.png")
             hg = load_gray(HG_DIR / "renders" / f"val_{50 + i:03d}.png")
-            bs = load_gray(BS_DIR / "renders" / f"val_{50 + i:03d}.png")
+            bs = load_gray(bs_dir / "renders" / f"val_{50 + i:03d}.png")
             p_hg = hg_psnr[50 + i]
             p_bs = bs_psnr[50 + i]
             label = f"α={row['alpha']:+.1f}°\ngrid view {i} (src f{grid_src[i]})"
@@ -81,14 +81,14 @@ def main(args):
             f = row["frame"]
             gt = load_gray(ROTATE_DSD / f"{f:03d}.png")
             hg = load_gray(HG_DIR / "train_frame" / f"stage1_frame{f}.png")
-            bs = load_gray(BS_DIR / "train_frame" / f"stage1_frame{f}.png")
+            bs = load_gray(bs_dir / "train_frame" / f"stage1_frame{f}.png")
             p_hg = hg_train_psnr[f]
             p_bs = bs_train_psnr[f]
             label = f"α={row['alpha']:+.1f}°\ntrain frame {f} (phase 0.667)"
             box = "red" if f == 100 else "gold"
 
         ims = [gt, hg, bs]
-        titles = [label, f"hashgrid\nPSNR={p_hg:.2f}", f"bspline\nPSNR={p_bs:.2f}"]
+        titles = [label, f"hashgrid\nPSNR={p_hg:.2f}", f"{args.bs_name}\nPSNR={p_bs:.2f}"]
         for j, (im, t) in enumerate(zip(ims, titles)):
             ax = axes[r_i, j]
             ax.imshow(im, cmap="gray", vmin=0, vmax=1)
@@ -100,16 +100,16 @@ def main(args):
             else:
                 ax.set_title(t, fontsize=9, pad=4)
 
-    for j, name in enumerate(["GT", "hashgrid (stage1-spike)", "bspline (bs32-smooth-0.2-frangi)"]):
+    for j, name in enumerate(["GT", "hashgrid (stage1-spike)", args.bs_name]):
         fig.text((j + 0.5) / 3.0, 0.985, name, ha="center", va="top",
                  fontsize=12, fontweight="bold")
     fig.suptitle(
-        "frame_100 (phase 0.667): hashgrid vs bspline best configs\n"
+        f"frame_100 (phase 0.667): hashgrid vs {args.bs_name}\n"
         "red box = train frame 100   |   yellow box = train frames 40 / 160",
         fontsize=12, fontweight="bold", y=1.0,
     )
     fig.tight_layout(rect=[0, 0, 1, 0.97])
-    out = out_dir / "frame_100_compare_hashgrid_vs_bspline.png"
+    out = out_dir / f"frame_100_compare_hashgrid_vs_{args.out_name}.png"
     fig.savefig(out, dpi=110)
     plt.close(fig)
     print(f"saved -> {out}")
@@ -119,4 +119,7 @@ if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument("--out_dir", type=Path, default=ROOT / "dev_grid_views/hashgrid-adaptive-smooth")
+    p.add_argument("--bs_dir", type=Path, default=ROOT / "outputs/dev_grid_views/bspline-frangi/bs32-smooth-0.2-frangi")
+    p.add_argument("--bs_name", default="bspline (bs32-smooth-0.2-frangi)")
+    p.add_argument("--out_name", default="bspline")
     main(p.parse_args())
