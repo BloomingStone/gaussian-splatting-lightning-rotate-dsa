@@ -205,6 +205,7 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
 
             # euclidean squared distance to every gaussian, exclude self
             d2 = ((m_means[:, None, :] - gs_means[None, :, :]) ** 2).sum(-1)  # [m, n]
+            d2 = d2.detach()  # only used to pick neighbours (indices), no grad
             d2.scatter_(1, perm[:, None], float("inf"))
             k = min(self.config.overlap_k, n - 1)
             _, nn_idx = d2.topk(k, dim=1, largest=False)  # [m, k]
@@ -264,6 +265,7 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
                 z = p_cam[:, 2]                          # [N] depth
                 xy_s = xy[perm]                          # [m, 2]
                 d2_2d = ((xy_s[:, None, :] - xy[None, :, :]) ** 2).sum(-1)  # [m, n]
+                d2_2d = d2_2d.detach()  # only used to pick neighbours (indices), no grad
                 d2_2d.scatter_(1, perm[:, None], float("inf"))
                 k = min(self.config.depth_conc_k, n - 1)
                 _, nn_idx = d2_2d.topk(k, dim=1, largest=False)  # [m, k]
