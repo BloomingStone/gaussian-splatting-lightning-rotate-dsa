@@ -59,6 +59,20 @@ class RotateXrayMetrics(Metric):
     overlap_sample: int = 1024
     overlap_temp: float = 0.2
 
+    # Depth-concentration regularizers (against the depth ambiguity of the
+    # transmission model).  Two complementary sources of depth spreading:
+    #   w_depth_conc  penalises pairs of gaussians that project onto the same
+    #                 pixel region (2D neighbours) but lie far apart in depth:
+    #                 sum_{2D-near} d_i d_j (z_i - z_j)^2.
+    #   w_depth_scale penalises a single gaussian whose ellipsoid extends too far
+    #                 along the ray direction: relu(sigma_depth - tau), where
+    #                 sigma_depth = ||S R^T v|| and v is the unit ray direction.
+    w_depth_conc: float = 0.0
+    depth_conc_k: int = 4
+    depth_conc_sample: int = 1024
+    w_depth_scale: float = 0.0
+    depth_scale_tau: float = 2.0
+
     # Frangi (coronary-prior) weighting of the image losses.  When > 0, the L1
     # and SSIM losses are reweighted by the Frangi soft mask (vessel = 1,
     # Gaussian falloff into the background) so a simplified deform field must
@@ -211,6 +225,52 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             )
             overlap_loss = soft_cover.max(dim=-1).values.mean()
 
+        # Depth-concentration regularizers: penalise density spreading along the
+        # ray direction (the transmission model integrates depth away, so without
+        # a prior the density can smear uniformly or concentrate at a point).
+        depth_conc_loss = torch.zeros((), device=device)
+        depth_scale_loss = torch.zeros((), device=device)
+        if self.config.w_depth_conc > 0 or self.config.w_depth_scale > 0:
+            gs_means = gaussian_model.get_means()          # [N, 3]
+            gs_density = gaussian_model.get_density().squeeze(-1)  # [N]
+            camera = batch[0]
+            w2c = camera.world_to_camera                   # [4, 4] (transposed layout)
+            campos = camera.camera_center                  # [3]
+
+            # world -> camera coords. w2c is stored transposed:
+            # [[R^T, 0], [T, 1]], so R_view = w2c[:3,:3].T, T_view = w2c[3,:3].
+            R_view = w2c[:3, :3].T
+            T_view = w2c[3, :3]
+            p_cam = gs_means @ R_view.T + T_view           # [N, 3]
+
+            if self.config.w_depth_scale > 0:
+                # sigma_depth = || S R_g^T v || with v the unit ray direction
+                v = gs_means - campos
+                v = v / (v.norm(dim=-1, keepdim=True).clamp_min(1e-8))
+                gs_scales = gaussian_model.get_scales()
+                gs_rot = gaussian_model.get_rotations()
+                Rg = _quat_to_matrix(gs_rot)               # [N, 3, 3] local -> world
+                Rtv = torch.einsum("nd,nde->ne", v, Rg)    # [N, 3] = R_g^T v
+                sigma_depth = (gs_scales * Rtv).norm(dim=-1)  # [N]
+                depth_scale_loss = (
+                    gs_density * F.relu(sigma_depth - self.config.depth_scale_tau)
+                ).mean()
+
+            if self.config.w_depth_conc > 0:
+                n = gs_means.shape[0]
+                m = min(self.config.depth_conc_sample, n)
+                perm = torch.randperm(n, device=device)[:m]
+                xy = p_cam[:, :2] / p_cam[:, 2:3].clamp_min(1e-6)  # [N, 2] normalised 2D
+                z = p_cam[:, 2]                          # [N] depth
+                xy_s = xy[perm]                          # [m, 2]
+                d2_2d = ((xy_s[:, None, :] - xy[None, :, :]) ** 2).sum(-1)  # [m, n]
+                d2_2d.scatter_(1, perm[:, None], float("inf"))
+                k = min(self.config.depth_conc_k, n - 1)
+                _, nn_idx = d2_2d.topk(k, dim=1, largest=False)  # [m, k]
+                dz = z[perm][:, None] - z[nn_idx]       # [m, k] depth difference
+                w_ij = gs_density[perm][:, None] * gs_density[nn_idx]  # [m, k] = d_i d_j
+                depth_conc_loss = (w_ij * (dz ** 2)).mean()
+
         loss = (
             # image loss
             self.config.w_gray_loss * gray_loss +
@@ -223,7 +283,9 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             self.config.w_manifold * manifold_loss +
             self.config.w_field_smooth * field_smooth_loss +
             self.config.w_aniso * aniso_loss +
-            self.config.w_overlap * overlap_loss
+            self.config.w_overlap * overlap_loss +
+            self.config.w_depth_conc * depth_conc_loss +
+            self.config.w_depth_scale * depth_scale_loss
         )
 
 
@@ -242,6 +304,8 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             "field_smooth_loss": field_smooth_loss,
             "aniso_loss": aniso_loss,
             "overlap_loss": overlap_loss,
+            "depth_conc_loss": depth_conc_loss,
+            "depth_scale_loss": depth_scale_loss,
         }
 
 
@@ -258,6 +322,8 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             "field_smooth_loss": False,
             "aniso_loss": False,
             "overlap_loss": False,
+            "depth_conc_loss": False,
+            "depth_scale_loss": False,
         }
         return metrics, prog_bar
     
