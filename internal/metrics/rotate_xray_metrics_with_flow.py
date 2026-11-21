@@ -70,6 +70,14 @@ class RotateXrayMetrics(Metric):
     w_depth_conc: float = 0.0
     depth_conc_k: int = 4
     depth_conc_sample: int = 1024
+    # Stability knobs for the depth-concentration term.  The symmetric
+    # push-pull on depth positions destabilises the density controller
+    # (gaussian count oscillates and densification crashes), so by default we
+    # turn it into a one-sided anchor and schedule it in after densification:
+    depth_conc_detach_target: bool = True   # detach neighbour depth -> one-sided anchor
+    depth_conc_detach_weight: bool = True   # detach density weights d_i d_j
+    depth_conc_clamp: float = 5.0           # huber threshold on |dz| (0 = pure L2)
+    depth_conc_ramp_steps: int = 2000       # linear ramp-in over first N steps (0 = off)
     w_depth_scale: float = 0.0
     depth_scale_tau: float = 2.0
 
@@ -111,7 +119,8 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
         pl_module: LightningModule, 
         gaussian_model, 
         batch: BatchT, 
-        outputs: XrayRendererOuputs
+        outputs: XrayRendererOuputs,
+        step: int = 0,
     ):
         _, image_info, extra_data = batch   # load depth_map as extra_data in internal/dataparsers/rotated_xray_dataparser.py
         _, gt_image, _ = image_info
@@ -269,9 +278,45 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
                 d2_2d.scatter_(1, perm[:, None], float("inf"))
                 k = min(self.config.depth_conc_k, n - 1)
                 _, nn_idx = d2_2d.topk(k, dim=1, largest=False)  # [m, k]
-                dz = z[perm][:, None] - z[nn_idx]       # [m, k] depth difference
-                w_ij = gs_density[perm][:, None] * gs_density[nn_idx]  # [m, k] = d_i d_j
-                depth_conc_loss = (w_ij * (dz ** 2)).mean()
+
+                # depth difference.  Detach the neighbour's depth so the term
+                # becomes a one-sided anchor (pull z_i towards the neighbour
+                # depth) instead of a symmetric push-pull, which destabilises
+                # the density controller.
+                z_i = z[perm][:, None]                    # [m, 1]
+                z_j = z[nn_idx]                           # [m, k]
+                if self.config.depth_conc_detach_target:
+                    z_j = z_j.detach()
+                dz = z_i - z_j                            # [m, k]
+
+                # huber-style depth penalty: quadratic below the clamp, linear
+                # above it, so a few extremely deep pairs cannot dominate the
+                # gradient and trigger gaussian-count oscillations.
+                if self.config.depth_conc_clamp > 0:
+                    adz = dz.abs()
+                    dz_pen = torch.where(
+                        adz < self.config.depth_conc_clamp,
+                        dz ** 2,
+                        2 * self.config.depth_conc_clamp * adz
+                        - self.config.depth_conc_clamp ** 2,
+                    )
+                else:
+                    dz_pen = dz ** 2
+
+                # density weight d_i d_j, optionally detached so the regularizer
+                # does not push density (which fights cull/densify).
+                w_ij = gs_density[perm][:, None] * gs_density[nn_idx]  # [m, k]
+                if self.config.depth_conc_detach_weight:
+                    w_ij = w_ij.detach()
+
+                conc_loss_raw = (w_ij * dz_pen).mean()
+
+                # linear ramp-in over the first ramp_steps so the regularizer
+                # only turns on after the early densification phase stabilises.
+                conc_scale = 1.0
+                if self.config.depth_conc_ramp_steps > 0:
+                    conc_scale = min(1.0, step / self.config.depth_conc_ramp_steps)
+                depth_conc_loss = conc_scale * conc_loss_raw
 
         loss = (
             # image loss
@@ -335,15 +380,19 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             pl_module=pl_module,    # type: ignore
             gaussian_model=gaussian_model,
             batch=batch,
-            outputs=outputs     # type: ignore
+            outputs=outputs,        # type: ignore
+            step=step,
         )
     
     def get_validate_metrics(self, pl_module, gaussian_model, batch, outputs) -> Tuple[Dict[str, Any], Dict[str, bool]]:
+        # validation reports the fully-ramped regularizer value (step irrelevant
+        # since validation does not backprop), so pass a large step.
         metrics, prog_bar = self._get_basic_metrics(
             pl_module,
             gaussian_model,
             batch,
-            outputs
+            outputs,
+            step=10**9,
         )
 
         _, image_info, extra_data = batch

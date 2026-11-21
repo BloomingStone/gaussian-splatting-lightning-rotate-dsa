@@ -27,11 +27,13 @@ def run(cmd, env_extra=None):
     return True
 
 
-def train_and_eval(gpu: int, conc: float, scale: float):
+def train_and_eval(gpu: int, conc: float, scale: float, suffix: str = ""):
     if conc > 0:
         name = f"hs-depth-conc-{conc}"
     else:
         name = f"hs-depth-scale-{scale}"
+    if suffix:
+        name = f"{name}-{suffix}"
     out_dir = ROOT / "outputs" / "dev_grid_views" / "hashgrid-adaptive-smooth" / name
     env = {"CUDA_VISIBLE_DEVICES": str(gpu)}
     extra = [
@@ -81,13 +83,15 @@ def main():
     p.add_argument("--gpu", type=int, required=True)
     p.add_argument("--conc", nargs="+", type=float, default=[])
     p.add_argument("--scale", nargs="+", type=float, default=[])
+    p.add_argument("--suffix", type=str, default="",
+                   help="experiment name suffix, e.g. v2 for the stabilised conc")
     args = p.parse_args()
     for c in args.conc:
         print(f"\n========== w_depth_conc={c} (gpu {args.gpu}) ==========", flush=True)
-        train_and_eval(args.gpu, c, 0.0)
+        train_and_eval(args.gpu, c, 0.0, args.suffix)
     for s in args.scale:
         print(f"\n========== w_depth_scale={s} (gpu {args.gpu}) ==========", flush=True)
-        train_and_eval(args.gpu, 0.0, s)
+        train_and_eval(args.gpu, 0.0, s, args.suffix)
 
 
 if __name__ == "__main__":
