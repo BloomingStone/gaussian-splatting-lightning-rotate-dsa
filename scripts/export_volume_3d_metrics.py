@@ -66,8 +66,19 @@ class Volume3DExporter(Callback):
             print("[Volume3DExporter] volume export failed:")
             traceback.print_exc()
 
-        # stop the validation loop (we only need the 3D export, not the renders)
-        trainer.should_stop = True
+        # We only need the 3D export — skip the 90-frame render pass entirely.
+        # It wastes ~50s/trial and raises peak VRAM (renders peaked higher than
+        # the volume export itself).  Hard-exit after flushing so logs survive.
+        if torch.cuda.is_available():
+            print(
+                f"[Volume3DExporter] done, peak VRAM = "
+                f"{torch.cuda.max_memory_allocated()/1024**2:.1f} MB",
+                flush=True,
+            )
+        import sys
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
     def _export_volume(self, pl_module):
         datamodule = pl_module.get_datamodule()

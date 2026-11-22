@@ -9,7 +9,7 @@ import math
 
 import numpy as np
 import torch
-from monai.losses.cldice import SoftclDiceLoss
+from monai.losses.cldice import soft_skel
 from scipy.spatial import KDTree
 from skimage.morphology import skeletonize
 from monai.metrics import (
@@ -21,7 +21,33 @@ from monai.metrics import (
     get_confusion_matrix,               # type: ignore[import]
 )
 
-_soft_cldice_fn = SoftclDiceLoss(iter_=3, smooth=1.0)
+
+def _soft_cl_dice(
+    gt_fg: torch.Tensor,
+    pred_fg: torch.Tensor,
+    iter_: int = 3,
+    smooth: float = 1.0,
+) -> torch.Tensor:
+    """clDice on the *foreground* channel only, ``(B, 1, D, H, W)``.
+
+    Mathematically identical to MONAI's ``SoftclDiceLoss`` (which one-hot
+    encodes to ``(B, 2, D, H, W)`` and then reduces only over the foreground
+    channel via ``[:, 1:, ...]``), but it never materialises the background
+    channel nor the 2-channel one-hot tensors.  The two skeletonisations are
+    computed sequentially and the first one is freed before the second, which
+    roughly halves peak GPU memory on large 3D volumes.
+
+    Returns clDice in ``[0, 1]`` (higher is better).
+    """
+    skel_pred = soft_skel(pred_fg, iter_)
+    tprec = (torch.sum(skel_pred * gt_fg) + smooth) / (torch.sum(skel_pred) + smooth)
+    del skel_pred
+
+    skel_true = soft_skel(gt_fg, iter_)
+    tsens = (torch.sum(skel_true * pred_fg) + smooth) / (torch.sum(skel_true) + smooth)
+    del skel_true
+
+    return 2.0 * tprec * tsens / (tprec + tsens)
 
 
 def _skeleton_coords(
@@ -146,20 +172,20 @@ class SegmentationMetricsComputer:
         if math.isnan(recall):
             recall = 1.0 if pred_sum == 0 else 0.0
 
-        # ── HD95 ──
+        # ── HD95 (CPU distance transform: faster and lighter than GPU) ──
         if one_empty:
             hd95 = float("inf")
         else:
+            pred_bc_cpu = pred.unsqueeze(0).unsqueeze(0).cpu().float()
+            gt_bc_cpu = torch.from_numpy(self._gt_np).unsqueeze(0).unsqueeze(0).float()
             hd95 = float(
                 compute_hausdorff_distance(
-                    pred_bc, gt_bc, percentile=95, spacing=self._spacing,
+                    pred_bc_cpu, gt_bc_cpu, percentile=95, spacing=self._spacing,
                 ).item()
             )
 
-        # ── Soft clDice ──
-        pred_oh = torch.cat([1.0 - pred_bc, pred_bc], dim=1)
-        gt_oh = torch.cat([1.0 - gt_bc, gt_bc], dim=1)
-        cldice = float((1.0 - _soft_cldice_fn(gt_oh, pred_oh)).item())
+        # ── Soft clDice (foreground-only, ~halves peak GPU memory) ──
+        cldice = float(_soft_cl_dice(gt_bc, pred_bc).item())
 
         # ── Centerline distances (CPU, using cached GT skeleton) ──
         if one_empty:
