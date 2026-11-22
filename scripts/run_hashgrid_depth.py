@@ -81,6 +81,22 @@ def train_and_eval(gpu: int, conc: float, scale: float, suffix: str = "", tau: f
          "--out_dir", str(FIG_DIR),
          "--exp_name", name])
 
+    # 3D volume export + unified shape/topology metrics (single eval entry point)
+    vol_dir = out_dir / "vol3d"
+    vol_env = {"CUDA_VISIBLE_DEVICES": str(gpu), "VOL3D_OUT": str(vol_dir)}
+    vol_cmd = ["pixi", "run", "python", "scripts/export_volume_3d_metrics.py", "validate",
+               "--config", str(CONFIG), "--data.path", "data/example_grids",
+               "--ckpt_path", str(ckpt)] + extra
+    if not run(vol_cmd, vol_env):
+        return
+
+    vol_path = vol_dir / "density_phase0.000.nii.gz"
+    shape_cmd = ["pixi", "run", "python", "scripts/compute_shape_metrics.py",
+                 "--gt", "data/example_grids/coronary_label.nii.gz",
+                 "--vols", f"{name}:{vol_path}",
+                 "--thr", "0.0344", "--tau", "1.0", "2.0"]
+    run(shape_cmd)
+
     print(f"==== {name} 完成 ====", flush=True)
 
 
