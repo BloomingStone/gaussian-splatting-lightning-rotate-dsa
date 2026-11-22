@@ -28,7 +28,9 @@ def run(cmd, env_extra=None):
 
 
 def train_and_eval(gpu: int, conc: float, scale: float, suffix: str = ""):
-    if conc > 0:
+    if conc > 0 and scale > 0:
+        name = f"hs-depth-scale-{scale}-conc-{conc}"
+    elif conc > 0:
         name = f"hs-depth-conc-{conc}"
     else:
         name = f"hs-depth-scale-{scale}"
@@ -85,7 +87,13 @@ def main():
     p.add_argument("--scale", nargs="+", type=float, default=[])
     p.add_argument("--suffix", type=str, default="",
                    help="experiment name suffix, e.g. v2 for the stabilised conc")
+    p.add_argument("--pair", nargs=2, type=float, default=None, metavar=("CONC", "SCALE"),
+                   help="run a combined experiment: --pair CONC SCALE (both > 0)")
     args = p.parse_args()
+    if args.pair is not None:
+        c, s = args.pair
+        print(f"\n========== w_depth_conc={c} + w_depth_scale={s} (gpu {args.gpu}) ==========", flush=True)
+        train_and_eval(args.gpu, c, s, args.suffix)
     for c in args.conc:
         print(f"\n========== w_depth_conc={c} (gpu {args.gpu}) ==========", flush=True)
         train_and_eval(args.gpu, c, 0.0, args.suffix)
