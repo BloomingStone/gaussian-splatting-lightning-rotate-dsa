@@ -25,6 +25,7 @@ n_br / br_len_mean（拓扑）。
         --thr 0.0344 --tau 1.0 2.0
 """
 import argparse
+from pathlib import Path
 
 import numpy as np
 import nibabel as nib
@@ -212,6 +213,13 @@ def _fmt(v, w, prec=3):
     return f"{v:>{w}.{prec}f}"
 
 
+def _clean(x):
+    """JSON-friendly float; inf/nan -> None."""
+    if isinstance(x, float) and (np.isinf(x) or np.isnan(x)):
+        return None
+    return float(x)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--gt", type=str, required=True)
@@ -220,6 +228,8 @@ def main():
                    help="binarisation thresholds (default 0.0344)")
     p.add_argument("--tau", type=float, nargs="+", default=[1.0, 2.0],
                    help="NSD tolerance in mm")
+    p.add_argument("--json", type=str, default=None,
+                   help="optional path to dump all metrics as JSON")
     args = p.parse_args()
 
     gt_img = nib.load(args.gt)
@@ -254,12 +264,14 @@ def main():
     print(f"spacing={tuple(round(float(s), 4) for s in spacing)}  bbox={tuple(mx - mn + 1)}")
     print()
 
+    all_results = {}
     for thr in args.thr:
         print(f"===== threshold {thr} =====")
         header = (f"{'name':<16} " + " ".join(f"{'NSD'+str(t).rstrip('0').rstrip('.'):>6}" for t in args.tau)
                   + f" {'ASSD':>6} {'dist_cl':>8} {'cldice':>7} {'dice':>6} {'prec':>6} {'rec':>6} {'hd95':>6}"
                   + f" {'roc_auc':>7} {'pr_auc':>7} {'n_jct':>6} {'n_br':>6} {'br_len':>7} {'W1_len':>7}")
         print(header)
+        thr_results = []
         for name, path in specs:
             vol = np.asarray(nib.load(path).get_fdata(), dtype=np.float32)
             pred = ((vol > thr) & aabb).astype(np.uint8)
@@ -279,6 +291,28 @@ def main():
             p_stats = skeleton_graph_stats(pred_sk, spacing)
             w1_len = wasserstein1(p_stats["branch_lens"], gt_stats["branch_lens"])
 
+            # record all metrics (JSON-friendly)
+            m = {
+                "name": name,
+                "dice": _clean(seg['dice']),
+                "precision": _clean(seg['precision']),
+                "recall": _clean(seg['recall']),
+                "hd95": _clean(seg['hd95']),
+                "cldice": _clean(seg['cldice']),
+                "dist_avg_cl": _clean(seg['dist_avg_cl']),
+                "soft_dice": _clean(dens['soft_dice']),
+                "roc_auc": _clean(dens['roc_auc']),
+                "pr_auc": _clean(dens['pr_auc']),
+                "assd": _clean(assd),
+                "n_junctions": int(p_stats['n_junctions']),
+                "n_branches": int(p_stats['n_branches']),
+                "branch_len_mean": float(p_stats['branch_len_mean']),
+                "w1_len": _clean(w1_len),
+            }
+            for i, t in enumerate(args.tau):
+                m[f"NSD{str(t).rstrip('0').rstrip('.')}"] = float(nsds[i])
+            thr_results.append(m)
+
             cells = [f"{name:<16}"]
             cells += [f"{x:>6.3f}" for x in nsds]
             cells += [_fmt(assd, 6, 2), _fmt(seg['dist_avg_cl'], 8, 3), f"{seg['cldice']:>7.3f}"]
@@ -288,7 +322,23 @@ def main():
             cells += [f"{p_stats['n_junctions']:>6}", f"{p_stats['n_branches']:>6}",
                       f"{p_stats['branch_len_mean']:>7.2f}", f"{w1_len:>7.2f}"]
             print("".join(cells))
+        all_results[str(thr)] = thr_results
         print()
+
+    if args.json:
+        import json
+        payload = {
+            "gt": {
+                "n_endpoints": int(gt_stats['n_endpoints']),
+                "n_junctions": int(gt_stats['n_junctions']),
+                "n_branches": int(gt_stats['n_branches']),
+                "branch_len_mean": float(gt_stats['branch_len_mean']),
+            },
+            "spacing": [float(s) for s in spacing],
+            "results": all_results,
+        }
+        Path(args.json).write_text(json.dumps(payload, indent=2))
+        print(f"saved -> {args.json}")
 
 
 if __name__ == "__main__":
