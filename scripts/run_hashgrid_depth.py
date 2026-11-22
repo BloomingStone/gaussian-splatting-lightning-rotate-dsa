@@ -27,13 +27,15 @@ def run(cmd, env_extra=None):
     return True
 
 
-def train_and_eval(gpu: int, conc: float, scale: float, suffix: str = ""):
+def train_and_eval(gpu: int, conc: float, scale: float, suffix: str = "", tau: float | None = None):
     if conc > 0 and scale > 0:
         name = f"hs-depth-scale-{scale}-conc-{conc}"
     elif conc > 0:
         name = f"hs-depth-conc-{conc}"
     else:
         name = f"hs-depth-scale-{scale}"
+    if tau is not None:
+        name = f"{name}-tau{tau}"
     if suffix:
         name = f"{name}-{suffix}"
     out_dir = ROOT / "outputs" / "dev_grid_views" / "hashgrid-adaptive-smooth" / name
@@ -42,6 +44,8 @@ def train_and_eval(gpu: int, conc: float, scale: float, suffix: str = ""):
         "--model.metric.init_args.w_depth_conc", str(conc),
         "--model.metric.init_args.w_depth_scale", str(scale),
     ]
+    if tau is not None:
+        extra += ["--model.metric.init_args.depth_scale_tau", str(tau)]
 
     cmd = ["pixi", "run", "gs-fit", "--config", str(CONFIG),
            "--data.path", "data/example_grids",
@@ -89,17 +93,19 @@ def main():
                    help="experiment name suffix, e.g. v2 for the stabilised conc")
     p.add_argument("--pair", nargs=2, type=float, default=None, metavar=("CONC", "SCALE"),
                    help="run a combined experiment: --pair CONC SCALE (both > 0)")
+    p.add_argument("--tau", type=float, default=None,
+                   help="override depth_scale_tau (default: keep config value 2.0)")
     args = p.parse_args()
     if args.pair is not None:
         c, s = args.pair
-        print(f"\n========== w_depth_conc={c} + w_depth_scale={s} (gpu {args.gpu}) ==========", flush=True)
-        train_and_eval(args.gpu, c, s, args.suffix)
+        print(f"\n========== w_depth_conc={c} + w_depth_scale={s} tau={args.tau} (gpu {args.gpu}) ==========", flush=True)
+        train_and_eval(args.gpu, c, s, args.suffix, args.tau)
     for c in args.conc:
-        print(f"\n========== w_depth_conc={c} (gpu {args.gpu}) ==========", flush=True)
-        train_and_eval(args.gpu, c, 0.0, args.suffix)
+        print(f"\n========== w_depth_conc={c} tau={args.tau} (gpu {args.gpu}) ==========", flush=True)
+        train_and_eval(args.gpu, c, 0.0, args.suffix, args.tau)
     for s in args.scale:
-        print(f"\n========== w_depth_scale={s} (gpu {args.gpu}) ==========", flush=True)
-        train_and_eval(args.gpu, 0.0, s, args.suffix)
+        print(f"\n========== w_depth_scale={s} tau={args.tau} (gpu {args.gpu}) ==========", flush=True)
+        train_and_eval(args.gpu, 0.0, s, args.suffix, args.tau)
 
 
 if __name__ == "__main__":
