@@ -92,6 +92,10 @@ class HashGridDeformConfig(DeformWithFlowConfig):
     -1.0 (default) allows full compression (original behaviour); raising it
     (e.g. -0.5) prevents needle artifacts from over-compressed scales."""
 
+    # Disable the rotation warp entirely: d_rotation is forced to the identity
+    # quaternion.  Rotation output may couple with viewpoint and overfit.
+    enable_rotation: bool = True
+
     # Spatial-adaptive smoothness on the displacement field.  The insight is
     # that most of the volume is static and motion is local: a uniform smoothness
     # term over-smooths the moving vessel while wasting capacity on the static
@@ -212,10 +216,13 @@ class HashGridDefromModel(DeformWithFlowModel):
         )
         
         _linear(self.cfg.combine_W, 3)
-        self.axial_angle_warp = nn.Sequential(
-            _linear(self.cfg.combine_W, 3),
-            nn.Tanh(),      # w = |\vec{v}| <= \sqrt(1+1+1) = 1.73 rad = 99.2 degree  
-        )
+        if self.cfg.enable_rotation:
+            self.axial_angle_warp = nn.Sequential(
+                _linear(self.cfg.combine_W, 3),
+                nn.Tanh(),      # w = |\vec{v}| <= sqrt(1+1+1) = 1.73 rad = 99.2 degree  
+            )
+        else:
+            self.axial_angle_warp = None
         
         self.density_warp = nn.Sequential(
             _linear(self.cfg.combine_W, 1),
@@ -324,17 +331,22 @@ class HashGridDefromModel(DeformWithFlowModel):
         d_xyz = self.xyz_warp(h_mov)
         d_scaling = self.scaling_warp(h_mov)
         
-        # \omega = |\vec{v}|
-        # q = (\cos(\omega/2), \frac{\vec{v}}{\omega} \cdot \sin(\omega/2))
-        #   = (\cos(\omega/2), vec{v}/2 \cdot \text{sinc}(\frac{\omega}{2\pi}))
-        # torch.sinc(x) = sin(pi*x)/(pi*x)
-        axial_angle: torch.Tensor = self.axial_angle_warp(h_mov).float()
-        omega = torch.sqrt(torch.sum(axial_angle**2, dim=-1, keepdim=True) + 1e-10)
-        q_w = torch.cos(omega / 2.)
-        q_v = axial_angle / 2. * torch.sinc(omega / (2. * torch.pi))
-        
-        d_rotation = torch.cat([q_w, q_v], dim=-1).to(xyz)
-        d_rotation = torch.nn.functional.normalize(d_rotation)
+        if self.axial_angle_warp is not None:
+            # \omega = |\vec{v}|
+            # q = (\cos(\omega/2), \frac{\vec{v}}{\omega} \cdot \sin(\omega/2))
+            #   = (\cos(\omega/2), vec{v}/2 \cdot \text{sinc}(\frac{\omega}{2\pi}))
+            # torch.sinc(x) = sin(pi*x)/(pi*x)
+            axial_angle: torch.Tensor = self.axial_angle_warp(h_mov).float()
+            omega = torch.sqrt(torch.sum(axial_angle**2, dim=-1, keepdim=True) + 1e-10)
+            q_w = torch.cos(omega / 2.)
+            q_v = axial_angle / 2. * torch.sinc(omega / (2. * torch.pi))
+            
+            d_rotation = torch.cat([q_w, q_v], dim=-1).to(xyz)
+            d_rotation = torch.nn.functional.normalize(d_rotation)
+        else:
+            # rotation warp disabled: identity quaternion, no rotation change
+            d_rotation = xyz.new_zeros((xyz.shape[0], 4))
+            d_rotation[:, 0] = 1.0
         
         if self.cfg.enable_flow:
             d_density = self.density_warp(h_flow)
