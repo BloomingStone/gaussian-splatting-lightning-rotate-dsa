@@ -126,6 +126,14 @@ class Volume3DExporter(Callback):
         print(f"[Volume3DExporter] saved volume -> {out_path} "
               f"(shape {vol_np.shape}, min {vol_np.min():.5f}, max {vol_np.max():.5f})")
 
+        # 预测冠脉分割标签（density 阈值化，affine 与 GT label 一致，可直接对比）
+        thr = float(os.environ.get("VOL3D_THRESHOLD", "0.0344"))
+        pred_label = (vol_np > thr).astype(np.uint8)
+        label_path = self.out_dir / f"coronary_pred_phase{self.phase:.3f}.nii.gz"
+        nib.save(Nifti1Image(pred_label, affine=coronary_affine), label_path)
+        print(f"[Volume3DExporter] saved predicted coronary label -> {label_path} "
+              f"(threshold {thr}, voxels {int(pred_label.sum())})")
+
 
 class Export3DCLI(CLI):
     def before_validate(self):
