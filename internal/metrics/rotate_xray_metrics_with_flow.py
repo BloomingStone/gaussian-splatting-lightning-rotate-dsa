@@ -41,6 +41,16 @@ class RotateXrayMetrics(Metric):
     flow_gate_quantile: float = 0.5
     flow_gate_sharpness: float = 10.0
 
+    # d_density flow smoothness regularizers:
+    #   spatial  — penalise (d_density_i - d_density_j)^2 between 3D k-NN gaussians,
+    #              so the contrast flow is smooth in space.
+    #   temporal — read the finite-difference probe ||d_density(t+dt)-d_density(t)||^2
+    #              exposed by the deform model (flow_temporal_smooth).
+    w_flow_spatial_smooth: float = 0.0
+    flow_smooth_k: int = 4
+    flow_smooth_sample: int = 1024
+    w_flow_temporal_smooth: float = 0.0
+
     # field regularizers exposed by the deform model (BSplineDeformModel)
     w_manifold: float = 0.0
     w_field_smooth: float = 0.0
@@ -187,10 +197,33 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             gate = torch.sigmoid(-self.config.flow_gate_sharpness * (base_density.detach() - threshold))
             flow_gate_loss = (d_density.abs() * gate).mean()
 
-        # manifold / field-smoothness regularizers from the deform model
+        # spatial smoothness of d_density: penalise (d_density_i - d_density_j)^2
+        # between 3D k-NN gaussians so the contrast flow is spatially coherent.
+        flow_spatial_smooth_loss = torch.zeros((), device=gray_loss.device)
+        if self.config.w_flow_spatial_smooth > 0 and d_density is not None:
+            gs_means = gaussian_model.get_means()          # [N, 3]
+            n = gs_means.shape[0]
+            m = min(self.config.flow_smooth_sample, n)
+            perm = torch.randperm(n, device=gray_loss.device)[:m]
+            m_means = gs_means[perm]                        # [m, 3]
+            d2 = ((m_means[:, None, :] - gs_means[None, :, :]) ** 2).sum(-1)  # [m, n]
+            d2 = d2.detach()
+            d2.scatter_(1, perm[:, None], float("inf"))
+            k = min(self.config.flow_smooth_k, n - 1)
+            _, nn_idx = d2.topk(k, dim=1, largest=False)    # [m, k]
+            dd = d_density.squeeze(-1)                       # [N]
+            dd_i = dd[perm][:, None]                         # [m, 1]
+            dd_j = dd[nn_idx]                                # [m, k]
+            flow_spatial_smooth_loss = ((dd_i - dd_j) ** 2).mean()
+
+        # manifold / field-smoothness / flow-temporal regularizers from the deform model
         reg = outputs.meta.get(XrayRendererOuputs.MetaTypes.REGULARIZATION) if outputs.meta is not None else None
         manifold_loss = reg["manifold"] if reg else torch.zeros((), device=gray_loss.device)
         field_smooth_loss = reg["smoothness"] if reg else torch.zeros((), device=gray_loss.device)
+        flow_temporal_loss = (
+            reg.get("flow_temporal", torch.zeros((), device=gray_loss.device))
+            if reg else torch.zeros((), device=gray_loss.device)
+        )
 
         # Gaussian shape / compactness regularizers (anti-spike / anti-overlap)
         device = gray_loss.device
@@ -327,6 +360,8 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             self.config.w_d_density * d_density_upper_avg + 
             self.config.w_xyz_var * d_xyz_var_avg +
             self.config.w_flow_gate * flow_gate_loss +
+            self.config.w_flow_spatial_smooth * flow_spatial_smooth_loss +
+            self.config.w_flow_temporal_smooth * flow_temporal_loss +
             self.config.w_manifold * manifold_loss +
             self.config.w_field_smooth * field_smooth_loss +
             self.config.w_aniso * aniso_loss +
@@ -347,6 +382,8 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             "d_density_std": d_density_std.mean(),
             "xyz_var": d_xyz_var_avg,
             "flow_gate_loss": flow_gate_loss,
+            "flow_spatial_smooth_loss": flow_spatial_smooth_loss,
+            "flow_temporal_loss": flow_temporal_loss,
             "manifold_loss": manifold_loss,
             "field_smooth_loss": field_smooth_loss,
             "aniso_loss": aniso_loss,
@@ -365,6 +402,8 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             "d_density_std": False,
             "xyz_var": True,
             "flow_gate_loss": True,
+            "flow_spatial_smooth_loss": False,
+            "flow_temporal_loss": False,
             "manifold_loss": False,
             "field_smooth_loss": False,
             "aniso_loss": False,

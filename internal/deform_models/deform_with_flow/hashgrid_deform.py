@@ -87,7 +87,13 @@ class HashGridDeformConfig(DeformWithFlowConfig):
     #                         (stage 2, after loading stage-1 weights).
     enable_flow: bool = True
     freeze_motion: bool = False
-    
+
+    # Temporal smoothness of the flow field: penalise
+    # ||d_density(t+dt) - d_density(t)||^2 via a finite-difference probe along
+    # the time axis (mirrors the spatial field-smoothness probe).
+    flow_temporal_smooth: bool = False
+    flow_temporal_eps: float = 0.05
+
     combine_layers: int = 4
     combine_W: int = 128
 
@@ -373,10 +379,23 @@ class HashGridDefromModel(DeformWithFlowModel):
         
         if self.cfg.enable_flow:
             d_density = self.density_warp(h_flow)
+            if self.cfg.flow_temporal_smooth and self.training:
+                # finite-difference probe along the time axis: penalise
+                # ||d_density(t+dt) - d_density(t)||^2 so the contrast flow
+                # evolves smoothly in time.
+                dt = self.cfg.flow_temporal_eps
+                t_p = (t.detach() + dt).clamp(0.0, 1.0)
+                phase_p = phase.detach() if phase is not None else None
+                d_density_p = self._d_density_at(xyz.detach(), t_p, phase_p)
+                flow_temporal = ((d_density - d_density_p) / dt).pow(2).mean()
+            else:
+                flow_temporal = None
         else:
             # stage 1: motion-only, keep density unchanged
             d_density = torch.zeros((xyz.shape[0], 1), device=xyz.device, dtype=xyz.dtype)
+            flow_temporal = None
 
+        reg: dict[str, torch.Tensor] = {}
         if compute_smooth:
             # Finite-difference smoothness probe.  tcnn's hash encoding does not
             # support double backward, so we cannot take an analytic Jacobian via
@@ -404,12 +423,13 @@ class HashGridDefromModel(DeformWithFlowModel):
             # manifold: fold-over penalty on det(I + du/dn * n^T) is too weak;
             # use the squared displacement of the probe instead as a cheap proxy
             # is not meaningful.  Keep a light L2 on the directional derivative.
-            self._last_regularization = {
-                "smoothness": smoothness,
-                "manifold": torch.zeros((), device=xyz.device, dtype=xyz.dtype),
-            }
-        else:
-            self._last_regularization = None
+            reg["smoothness"] = smoothness
+            reg["manifold"] = torch.zeros((), device=xyz.device, dtype=xyz.dtype)
+
+        if flow_temporal is not None:
+            reg["flow_temporal"] = flow_temporal
+
+        self._last_regularization = reg if reg else None
 
         return DeformsWithFlow(d_xyz=d_xyz, d_scaling=d_scaling, d_rotation=d_rotation, d_density=d_density)
 
@@ -434,6 +454,27 @@ class HashGridDefromModel(DeformWithFlowModel):
             else:
                 h_mov = self.combine_mlp(torch.cat([x_emb, t_emb, phase_emb], dim=-1))
         return self.xyz_warp(h_mov)
+
+    def _d_density_at(
+        self,
+        xyz: torch.Tensor,
+        t: torch.Tensor,
+        phase: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Compute the flow density change d_density at (xyz, t).  Used by the
+        main forward and re-used by the temporal-smoothness probe (which needs
+        d_density at a perturbed time t+dt)."""
+        x_emb = self.embed_fn(xyz)
+        t_emb = self.embed_t_fn(t)
+        if phase is None:
+            h_flow = self.combine_mlp(torch.cat([x_emb, t_emb], dim=-1))
+        else:
+            phase_emb = self.embed_phase_fn(phase)
+            if self.combine_phase_mlp is not None:
+                h_flow = self.combine_mlp(torch.cat([x_emb, t_emb], dim=-1))
+            else:
+                h_flow = self.combine_mlp(torch.cat([x_emb, t_emb, phase_emb], dim=-1))
+        return self.density_warp(h_flow)
 
     def get_last_regularization(self) -> dict[str, torch.Tensor] | None:
         return self._last_regularization
