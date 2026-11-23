@@ -46,6 +46,9 @@ def _n_gpus() -> int:
 def run(cmd, env_extra=None):
     print(">> " + " ".join(str(c) for c in cmd), flush=True)
     env = dict(os.environ)
+    # 减少 CUDA allocator 碎片/预留浪费：两个 worker 同卡并行时，导出阶段
+    # （峰值 ~3.6GB allocated / ~5.1GB driver）容易叠加 OOM。
+    env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     if env_extra:
         env.update(env_extra)
     r = subprocess.run(cmd, cwd=ROOT, env=env)
