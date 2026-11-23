@@ -1,9 +1,11 @@
 """Optuna 超参搜索：深度集中正则的 w_depth_conc / w_depth_scale / depth_scale_tau。
 
 搜索空间（贝叶斯 TPE）：
-    w_depth_conc     ∈ [0.1, 2.0]  (log)
-    w_depth_scale    ∈ [0.5, 3.0]
-    depth_scale_tau  ∈ [1.0, 4.0]
+    w_depth_conc     ∈ [0.05, 0.5]  (log)
+    w_depth_scale    ∈ [1.5, 3.5]
+    depth_scale_tau  ∈ [1.0, 2.5]
+    max_resolution   ∈ {128, 256, 512}          (hashgrid 形变场最高分辨率)
+    max_rotation     ∈ {0.1, 0.2, 0.3, 0.5} rad (旋转软钳制幅度)
 
 主目标（单目标合成，相对 spike 基线的等权相对改进，越大越好）：
     score = +(NSD1-0.936)/0.936 -(assd-0.69)/0.69 -(dist_avg_cl-1.396)/1.396
@@ -53,19 +55,22 @@ def run(cmd, env_extra=None):
     return True
 
 
-def name_of(conc: float, scale: float, tau: float) -> str:
-    return f"hs-depth-scale-{scale}-conc-{conc}-tau{tau}"
+def name_of(conc: float, scale: float, tau: float, maxres: int, maxrot: float) -> str:
+    return f"hs-depth-scale-{scale}-conc-{conc}-tau{tau}-res{maxres}-rot{maxrot}"
 
 
-def train_eval_and_metrics(gpu: int, conc: float, scale: float, tau: float) -> dict | None:
+def train_eval_and_metrics(gpu: int, conc: float, scale: float, tau: float,
+                           maxres: int, maxrot: float) -> dict | None:
     """一次完整实验：训练 + 导出 3D 体积 + 统一 shape/topology 指标，返回指标 dict。"""
-    name = name_of(conc, scale, tau)
+    name = name_of(conc, scale, tau, maxres, maxrot)
     out_dir = OUT_ROOT / name
     env = {"CUDA_VISIBLE_DEVICES": str(gpu)}
     extra = [
         "--model.metric.init_args.w_depth_conc", f"{conc}",
         "--model.metric.init_args.w_depth_scale", f"{scale}",
         "--model.metric.init_args.depth_scale_tau", f"{tau}",
+        "--model.renderer.init_args.deform_model_config.init_args.max_resolution", f"{maxres}",
+        "--model.renderer.init_args.deform_model_config.init_args.max_rotation", f"{maxrot}",
     ]
 
     # 1. 训练
@@ -109,12 +114,14 @@ def train_eval_and_metrics(gpu: int, conc: float, scale: float, tau: float) -> d
 
 
 def objective(trial: optuna.Trial) -> float:
-    conc = trial.suggest_float("w_depth_conc", 0.1, 2.0, log=True)
-    scale = trial.suggest_float("w_depth_scale", 0.5, 3.0)
-    tau = trial.suggest_float("depth_scale_tau", 1.0, 4.0)
+    conc = trial.suggest_float("w_depth_conc", 0.05, 0.5, log=True)
+    scale = trial.suggest_float("w_depth_scale", 1.5, 3.5)
+    tau = trial.suggest_float("depth_scale_tau", 1.0, 2.5)
+    maxres = trial.suggest_categorical("max_resolution", [128, 256, 512])
+    maxrot = trial.suggest_categorical("max_rotation", [0.1, 0.2, 0.3, 0.5])
 
     gpu = trial.number % _n_gpus()
-    m = train_eval_and_metrics(gpu, conc, scale, tau)
+    m = train_eval_and_metrics(gpu, conc, scale, tau, maxres, maxrot)
     if m is None:
         return float("-inf")
 
@@ -160,7 +167,8 @@ def main():
     for t in trials[:10]:
         ua = t.user_attrs
         print(f"  #{t.number} score={t.value:.4f} "
-              f"conc={t.params['w_depth_conc']:.3f} scale={t.params['w_depth_scale']:.3f} tau={t.params['depth_scale_tau']:.3f} | "
+              f"conc={t.params['w_depth_conc']:.3f} scale={t.params['w_depth_scale']:.3f} tau={t.params['depth_scale_tau']:.3f} "
+              f"res={t.params['max_resolution']} rot={t.params['max_rotation']} | "
               f"NSD1={ua.get('NSD1')} assd={ua.get('assd')} dist_cl={ua.get('dist_avg_cl')} "
               f"pr_auc={ua.get('pr_auc')} w1_len={ua.get('w1_len')}")
 

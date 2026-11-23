@@ -95,6 +95,11 @@ class HashGridDeformConfig(DeformWithFlowConfig):
     # Disable the rotation warp entirely: d_rotation is forced to the identity
     # quaternion.  Rotation output may couple with viewpoint and overfit.
     enable_rotation: bool = True
+    # Soft-clamp the rotation angle (rad): |omega| is smoothly saturated at
+    # max_rotation via tanh.  None = no clamp (original behaviour, up to
+    # sqrt(3) ~= 1.73 rad).  Smaller values keep rotation's topology-preserving
+    # benefit while preventing large view-coupled rotations.
+    max_rotation: float | None = None
 
     # Spatial-adaptive smoothness on the displacement field.  The insight is
     # that most of the volume is static and motion is local: a uniform smoothness
@@ -338,6 +343,12 @@ class HashGridDefromModel(DeformWithFlowModel):
             # torch.sinc(x) = sin(pi*x)/(pi*x)
             axial_angle: torch.Tensor = self.axial_angle_warp(h_mov).float()
             omega = torch.sqrt(torch.sum(axial_angle**2, dim=-1, keepdim=True) + 1e-10)
+            if self.cfg.max_rotation is not None:
+                # soft-clamp |omega| at max_rotation (tanh saturation), then
+                # rescale the axis-angle vector accordingly.
+                clamped_omega = torch.tanh(omega / self.cfg.max_rotation) * self.cfg.max_rotation
+                axial_angle = axial_angle * (clamped_omega / (omega + 1e-10))
+                omega = clamped_omega
             q_w = torch.cos(omega / 2.)
             q_v = axial_angle / 2. * torch.sinc(omega / (2. * torch.pi))
             
