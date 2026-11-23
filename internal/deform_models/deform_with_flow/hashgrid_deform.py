@@ -111,7 +111,14 @@ class HashGridDeformConfig(DeformWithFlowConfig):
     log2_hashmap_size: int = 7
     base_resolution: int = 16
     max_resolution: int = 128
-    
+
+    # Coarse-to-fine level scheduling: progressively activate hashgrid level
+    # groups to prevent high-frequency overfitting (coronary fragmentation)
+    # before the low-frequency vessel skeleton is established.
+    hashgrid_coarse_to_fine: bool = False
+    hashgrid_ctf_groups: tuple[int, ...] = (5, 4, 4)   # levels per group (sum == x_multires)
+    hashgrid_ctf_schedule: tuple[int, ...] = (4000, 12000)  # step at which group 1..k-1 activates
+
     def instantiate(self, *args, **kwargs) -> Any:
         return HashGridDefromModel(self)
 
@@ -125,13 +132,24 @@ class HashGridDefromModel(DeformWithFlowModel):
         self.network_factory = NetworkFactory(tcnn=cfg.tcnn)
         self.cfg = cfg
 
-        self.embed_fn = self.network_factory.get_hashgrid_encoding(
-            n_levels            =self.cfg.x_multires,
-            n_features_per_level=self.cfg.n_features_per_level,
-            log2_hashmap_size   =self.cfg.log2_hashmap_size,
-            base_resolution     =self.cfg.base_resolution,
-            max_resolution      =self.cfg.max_resolution
-        )
+        if self.cfg.hashgrid_coarse_to_fine:
+            from ..network_factory import CoarseToFineHashGridEncoding
+            self.embed_fn = CoarseToFineHashGridEncoding(
+                n_levels=self.cfg.x_multires,
+                n_features_per_level=self.cfg.n_features_per_level,
+                log2_hashmap_size=self.cfg.log2_hashmap_size,
+                base_resolution=self.cfg.base_resolution,
+                max_resolution=self.cfg.max_resolution,
+                group_levels=self.cfg.hashgrid_ctf_groups,
+            )
+        else:
+            self.embed_fn = self.network_factory.get_hashgrid_encoding(
+                n_levels            =self.cfg.x_multires,
+                n_features_per_level=self.cfg.n_features_per_level,
+                log2_hashmap_size   =self.cfg.log2_hashmap_size,
+                base_resolution     =self.cfg.base_resolution,
+                max_resolution      =self.cfg.max_resolution
+            )
         emb_x_ch = self.embed_fn.get_output_n_channels()
         
         self.embed_t_fn = VectorPositionalEncoding(
@@ -205,7 +223,24 @@ class HashGridDefromModel(DeformWithFlowModel):
         )
 
         self._last_regularization: dict[str, torch.Tensor] | None = None
-        
+
+    def set_step(self, step: int) -> None:
+        """Update coarse-to-fine level gates from the current training step.
+
+        Group 0 is always active; group k (k >= 1) activates once ``step``
+        reaches ``hashgrid_ctf_schedule[k-1]``.  No-op when coarse-to-fine is
+        disabled (the default embedding has no per-level gates).
+        """
+        if not self.cfg.hashgrid_coarse_to_fine:
+            return
+        n_groups = len(self.cfg.hashgrid_ctf_groups)
+        assert len(self.cfg.hashgrid_ctf_schedule) == n_groups - 1, (
+            f"hashgrid_ctf_schedule 长度应为组数-1={n_groups - 1}，"
+            f"实际 {len(self.cfg.hashgrid_ctf_schedule)}"
+        )
+        gates = [1.0] + [1.0 if step >= thr else 0.0 for thr in self.cfg.hashgrid_ctf_schedule]
+        self.embed_fn.set_gates(gates)
+
     def _flow_param_prefixes(self) -> tuple[str, ...]:
         """Parameter-name prefixes that belong to the t-guided flow branch."""
         return ("embed_t_fn.", "combine_mlp.", "density_warp.")

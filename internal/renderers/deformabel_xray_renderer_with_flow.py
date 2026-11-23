@@ -34,7 +34,14 @@ class DeformableXrayRendererWithFlow(CoronaryDeformableXrayRenderer):
         super().__init__(optimization_config, deform_model_config)
         self.deform_model_config = deform_model_config
         self.optimization_config = optimization_config
-    
+
+    @override
+    def before_training_step(self, step: int, module) -> None:
+        # Forward the current training step to the deform model so it can
+        # update coarse-to-fine hashgrid level gates (no-op if disabled).
+        if hasattr(self.deform_model, "set_step"):
+            self.deform_model.set_step(step)
+
     @override
     def forward(
         self,

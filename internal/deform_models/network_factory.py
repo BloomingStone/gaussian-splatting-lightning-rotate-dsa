@@ -180,6 +180,94 @@ class HashGridEncoding(nn.Module):
         return self.n_levels * self.n_features_per_level
 
 
+class CoarseToFineHashGridEncoding(nn.Module):
+    """tcnn hash grid split into level *groups*, each gated independently for
+    coarse-to-fine scheduling.
+
+    The single ``tcnn.Encoding(HashGrid)`` is a black box that concatenates all
+    levels, so it cannot expose per-level masks.  We instead build one tcnn
+    encoding per group of consecutive levels (e.g. ``(5, 4, 4)`` → L0-4, L5-8,
+    L9-12) and scale each group's output by a runtime gate.  Because the level
+    resolution ladder is uniform in log-space, every group's per-level scale
+    factor is identical, so the group split reproduces the original resolution
+    ladder *exactly* — only the gate values differ from 1.
+    """
+
+    def __init__(
+        self,
+        n_levels: int = 13,
+        n_features_per_level: int = 4,
+        log2_hashmap_size: int = 19,
+        base_resolution: int = 16,
+        max_resolution: int = 2048,
+        group_levels: tuple[int, ...] = (5, 4, 4),
+    ) -> None:
+        super().__init__()
+        assert sum(group_levels) == n_levels, f"{sum(group_levels)} != {n_levels}"
+        self.n_levels = n_levels
+        self.n_features_per_level = n_features_per_level
+        self.n_output_channels = n_levels * n_features_per_level
+        self.scene_min = -150.0
+        self.scene_max = 150.0
+        self.scene_range = self.scene_max - self.scene_min
+
+        if n_levels > 1:
+            growth = np.exp((np.log(max_resolution) - np.log(base_resolution)) / (n_levels - 1))
+        else:
+            growth = 1.0
+        resolutions = [int(base_resolution * (growth ** level)) for level in range(n_levels)]
+
+        import tinycudann as tcnn
+        self.encoders = nn.ModuleList()
+        start = 0
+        for g in group_levels:
+            end = start + g
+            g_base = resolutions[start]
+            if g > 1:
+                g_growth = np.exp((np.log(resolutions[end - 1]) - np.log(g_base)) / (g - 1))
+            else:
+                g_growth = 1.0
+            enc = tcnn.Encoding(
+                n_input_dims=3,
+                encoding_config={
+                    "otype": "HashGrid",
+                    "n_levels": g,
+                    "n_features_per_level": n_features_per_level,
+                    "log2_hashmap_size": log2_hashmap_size,
+                    "base_resolution": g_base,
+                    "per_level_scale": g_growth,
+                    "interpolation": "Smoothstep",
+                },
+            )
+            self.encoders.append(enc)
+            start = end
+
+        # Runtime per-group gates (CPU floats).  Deliberately NOT a buffer so
+        # they are not persisted: every training run re-schedules from step 0.
+        self.group_gates: list[float] = [1.0] * len(group_levels)
+
+    def set_gates(self, gates) -> None:
+        self.group_gates = [float(g) for g in gates]
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_norm = ((x - self.scene_min) / self.scene_range).clamp(0.0, 1.0)
+        outs: list[torch.Tensor] = []
+        for enc, gate in zip(self.encoders, self.group_gates):
+            if gate > 0.0:
+                out = enc(x_norm)
+                if gate != 1.0:
+                    out = out * gate
+                outs.append(out)
+            else:
+                # Gated off: skip the tcnn call entirely and emit zeros.
+                n = enc.n_output_dims
+                outs.append(torch.zeros(x_norm.shape[0], n, device=x_norm.device, dtype=x_norm.dtype))
+        return torch.cat(outs, dim=-1)
+
+    def get_output_n_channels(self):
+        return self.n_output_channels
+
+
 class NetworkFactory:
     seed: int = 1337
 
