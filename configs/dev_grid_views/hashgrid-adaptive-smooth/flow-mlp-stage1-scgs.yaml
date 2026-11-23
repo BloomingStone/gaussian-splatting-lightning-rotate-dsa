@@ -1,0 +1,112 @@
+# 实验 scgs：在 stage1 深度正则基础上，把形变场从 hashgrid 换成
+# SC-GS 风格的稀疏控制点（可学习控制点位置 + KNN 蒙皮权重 + 每点 6-DoF 刚性变换）。
+# 控制点数量远少于高斯 → 位移场天然低频，治理 hashgrid 高频过拟合导致的冠脉破碎。
+# 运行时 CLI 覆盖 w_depth_conc / w_depth_scale / n_control_points / k_nearest。
+project: RotCA-GR
+
+max_steps: 20000
+
+trainer:
+  log_every_n_steps: 500
+  check_val_every_n_epoch: 20
+  precision: 16-mixed
+  callbacks:
+    - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
+    - class_path: internal.callbacks.callbacks.ProgressBar
+      init_args:
+        refresh_rate: 50
+
+    - class_path: internal.callbacks.scene_saver.SceneSaver
+      init_args:
+        save_iterations: [20000]
+        saver:
+          class_path: internal.savers.x_ray_saver_with_flow.XRaySaver_Flow
+          init_args:
+            save_ckpt: true
+            save_vtp: true
+            save_volume: false
+            save_label_threshold: 0.0344
+            save_time_or_type: 0.5
+            save_phase: 0.
+
+    - class_path: internal.callbacks.save_image.SaveImage
+      init_args:
+        save_val_output: true
+        max_save_val_output: 20
+        max_image_saving_threads: 3
+
+data:
+  parser:
+    class_path: internal.dataparsers.xray_dataparser.parser.XRayDataParserBuilder
+    init_args:
+      use_grid_val: true
+      grid_val_loader:
+        class_path: internal.dataparsers.xray_dataparser.grid_val.GridValLoader
+        init_args:
+          phase_stride: 20
+      grid_dataset_config:
+        class_path: internal.dataparsers.xray_dataparser.datasets.ImagesDatasetConfig
+        init_args:
+          image_uint8: false
+          weight_source: none
+      meta_loader:
+        class_path: internal.dataparsers.xray_dataparser.meta.XRayMetaLoader
+      cloud_parser:
+        class_path: internal.dataparsers.xray_dataparser.cloud_parsers.RandomCloudParser
+        init_args:
+          num_points: 10_000
+      spliter:
+        class_path: internal.dataparsers.xray_dataparser.splitters.FrameRangeSpliter
+        init_args:
+          start_frame: 40
+          end_frame: null
+          val_start_frame: 0
+          val_end_frame: 40
+          val_ratio: 0.2
+      cameras_builder:
+        class_path: internal.dataparsers.xray_dataparser.cameras_builder.RotateXRayCamerasBuilder
+      dataset_builder:
+        class_path: internal.dataparsers.xray_dataparser.datasets.ImagesDatasetBuilder
+        init_args:
+          dataset_config:
+            image_uint8: false
+
+model:
+  renderer:
+    class_path: internal.renderers.deformabel_xray_renderer_with_flow.DeformableXrayRendererWithFlow
+    init_args:
+      optimization_config:
+        enable_ast: true
+        density_ramp_steps: 2000
+      deform_model_config:
+        class_path: internal.deform_models.deform_with_flow.SparseControlDeformConfig
+        init_args:
+          phase_multires: 6
+          n_control_points: 64
+          k_nearest: 4
+          max_rotation: 0.3
+          skinning_mlp_layers: 2
+          skinning_mlp_width: 32
+          enable_flow: false
+  metric:
+    class_path: internal.metrics.rotate_xray_metrics_with_flow.RotateXrayMetrics
+    init_args:
+      fused_ssim: true
+      w_gray_loss: 1.0
+      w_ssim_loss: 1.0
+      w_d_density: 0.0
+      w_flow_gate: 0.0
+      w_depth_conc: 0.0      # 运行时 CLI 覆盖
+      depth_conc_k: 4
+      depth_conc_sample: 1024
+      w_depth_scale: 0.0     # 运行时 CLI 覆盖
+      depth_scale_tau: 2.0
+      compute_3d_metrics: false
+  gaussian:
+    class_path: internal.models.xray_coronary_gaussian_with_flow.XrayCoronaryGaussianWithFlow
+  density:
+    class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
+    init_args:
+      densification_interval: 300
+      densify_grad_percentile: 0.98
+      cull_density_threshold: 5e-5
