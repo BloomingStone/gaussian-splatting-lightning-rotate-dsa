@@ -172,11 +172,18 @@ class HashGridDefromModel(DeformWithFlowModel):
         emb_t_ch = self.embed_t_fn.get_output_n_channels()
         
         if self.cfg.phase_multires is not None:
-            self.embed_phase_fn = VectorPositionalEncoding(
-                input_channels=1,
-                n_frequencies=self.cfg.phase_multires,
-                periodic=self.cfg.phase_periodic,
-            )
+            if self.cfg.phase_periodic:
+                from ...encodings.xray_phase_encoding import PhaseEncoding
+                self.embed_phase_fn = PhaseEncoding(
+                    input_channels=1,
+                    T=1.0,  # cardiac phase is normalized to [0, 1)
+                    n_frequencies=self.cfg.phase_multires,
+                )
+            else:
+                self.embed_phase_fn = VectorPositionalEncoding(
+                    input_channels=1,
+                    n_frequencies=self.cfg.phase_multires,
+                )
             emb_phase_ch = self.embed_phase_fn.get_output_n_channels()
         else:
             self.embed_phase_fn = None
