@@ -78,6 +78,9 @@ class SparseControlDeformConfig(DeformWithFlowConfig):
 
     disp_init_std: float = 1e-3
     rotvec_init_std: float = 1e-3
+    scale_init_std: float = 1e-3
+    scale_max: float = 0.5
+    """soft clamp of per-control-point log-scale; new_scale = scale * (1 + d_scaling)."""
 
     skinning_mlp_layers: int = 2
     skinning_mlp_width: int = 32
@@ -109,6 +112,9 @@ class SparseControlDeformModel(DeformWithFlowModel):
         )
         self.rotvec_coeff = nn.Parameter(
             torch.randn(cfg.n_control_points, n_phase_basis, 3) * cfg.rotvec_init_std
+        )
+        self.scale_coeff = nn.Parameter(
+            torch.randn(cfg.n_control_points, n_phase_basis, 3) * cfg.scale_init_std
         )
 
         # learnable control-point locations; filled by FPS on first forward pass
@@ -173,6 +179,8 @@ class SparseControlDeformModel(DeformWithFlowModel):
         cp_disp = torch.einsum("mjc,nj->nmc", self.disp_coeff, t_basis)
         cp_rotvec = torch.einsum("mjc,nj->nmc", self.rotvec_coeff, t_basis)
         cp_rotvec = torch.tanh(cp_rotvec) * self.cfg.max_rotation
+        cp_scale = torch.einsum("mjc,nj->nmc", self.scale_coeff, t_basis)
+        cp_scale = torch.tanh(cp_scale) * self.cfg.scale_max
 
         # K nearest control points per Gaussian
         dist = torch.cdist(xyz, self.control_points)  # [N, M]
@@ -183,6 +191,7 @@ class SparseControlDeformModel(DeformWithFlowModel):
         p_k = self.control_points[knn_idx]                    # [N, K, 3]
         disp_k = cp_disp.gather(1, idx_exp)                   # [N, K, 3]
         rotvec_k = cp_rotvec.gather(1, idx_exp)               # [N, K, 3]
+        scale_k = cp_scale.gather(1, idx_exp)                 # [N, K, 3]
 
         # skinning weights
         rel = xyz.unsqueeze(1) - p_k                          # [N, K, 3]
@@ -205,8 +214,10 @@ class SparseControlDeformModel(DeformWithFlowModel):
         q_mix = (w.unsqueeze(-1) * q_k).sum(dim=1)            # [N, 4]
         d_rotation = F.normalize(q_mix, dim=-1)
 
-        # pure rigid motion: no scale change
-        d_scaling = torch.zeros_like(d_xyz)
+        # pure rigid motion: no scale change -> replaced by per-control-point
+        # log-scale blend (SC-GS predicts d_scaling too; X-ray reconstruction
+        # relies on the scale degree of freedom to concentrate density along rays)
+        d_scaling = (w.unsqueeze(-1) * scale_k).sum(dim=1)    # [N, 3]
 
         # stage 1: motion-only (no flow branch yet)
         d_density = torch.zeros((xyz.shape[0], 1), device=xyz.device, dtype=xyz.dtype)
