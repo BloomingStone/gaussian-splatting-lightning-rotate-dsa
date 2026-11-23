@@ -69,6 +69,10 @@ class HashGridDeformConfig(DeformWithFlowConfig):
     
     t_multires: int = 6
     phase_multires: int|None = None
+    # Cyclic Fourier encoding for phase (sin(2πk·phase)): enforces that
+    # phase=0 and phase=1 — the *same* cardiac instant — encode identically,
+    # and drops the raw phase channel which is discontinuous at the boundary.
+    phase_periodic: bool = False
     
     # If True, the t and phase branches will be combined in the same MLP to output `h``
     # Otherwise: 
@@ -171,6 +175,7 @@ class HashGridDefromModel(DeformWithFlowModel):
             self.embed_phase_fn = VectorPositionalEncoding(
                 input_channels=1,
                 n_frequencies=self.cfg.phase_multires,
+                periodic=self.cfg.phase_periodic,
             )
             emb_phase_ch = self.embed_phase_fn.get_output_n_channels()
         else:
