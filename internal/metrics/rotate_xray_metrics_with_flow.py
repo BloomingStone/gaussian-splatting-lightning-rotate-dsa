@@ -206,11 +206,21 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
             m = min(self.config.flow_smooth_sample, n)
             perm = torch.randperm(n, device=gray_loss.device)[:m]
             m_means = gs_means[perm]                        # [m, 3]
-            d2 = ((m_means[:, None, :] - gs_means[None, :, :]) ** 2).sum(-1)  # [m, n]
-            d2 = d2.detach()
-            d2.scatter_(1, perm[:, None], float("inf"))
             k = min(self.config.flow_smooth_k, n - 1)
-            _, nn_idx = d2.topk(k, dim=1, largest=False)    # [m, k]
+            # Chunked top-k to avoid materialising the full [m, n] distance
+            # matrix, which explodes to ~3 GiB when n ~ 100K (joint training).
+            chunk = 4096
+            best_d2 = torch.full((m, k), float("inf"), device=gray_loss.device)
+            best_idx = torch.zeros((m, k), dtype=torch.long, device=gray_loss.device)
+            for s in range(0, n, chunk):
+                e = min(s + chunk, n)
+                d2 = ((m_means[:, None, :] - gs_means[s:e][None, :, :]) ** 2).sum(-1).detach()  # [m, chunk]
+                cand_idx = torch.cat([best_idx, torch.arange(s, e, device=gray_loss.device).expand(m, -1)], dim=1)
+                cand_d2 = torch.cat([best_d2, d2], dim=1)
+                vals, idx = cand_d2.topk(k, dim=1, largest=False)
+                best_d2 = vals
+                best_idx = cand_idx.gather(1, idx)
+            nn_idx = best_idx                                # [m, k]
             dd = d_density.squeeze(-1)                       # [N]
             dd_i = dd[perm][:, None]                         # [m, 1]
             dd_j = dd[nn_idx]                                # [m, k]
