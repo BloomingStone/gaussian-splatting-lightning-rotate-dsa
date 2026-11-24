@@ -5,7 +5,7 @@ set -u
 ROOT=/media/F/sj/Code/GS-contrast-flow
 CONFIG=$ROOT/configs/gen_4d_output_all/flow-mlp-stage2-flow.yaml
 STAGE1=$ROOT/outputs/dev_grid_views/hashgrid-adaptive-smooth/hs-depth-scale-1.851-conc-0.212-tau1.054-res128-rot0.3-pper4
-DATA=data/example_only_flow_grids
+DATA=data/example_grids
 cd "$ROOT"
 export GRID_EVAL_TIME_THRESHOLD=0.22
 export GRID_EVAL_SKIP_TRAIN_FRAMES=1

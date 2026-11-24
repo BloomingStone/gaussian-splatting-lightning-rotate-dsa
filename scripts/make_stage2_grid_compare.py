@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 
 ROOT = Path("/media/F/sj/Code/GS-contrast-flow")
-GRID_DIR = ROOT / "data/example_only_flow_grids/grid"
+GRID_DIR = ROOT / "data/example_grids/grid"
 
 
 def load_gray(p: Path) -> np.ndarray:

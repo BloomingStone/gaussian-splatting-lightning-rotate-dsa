@@ -9,7 +9,7 @@
 #
 # 运行方式（stage1 输出目录名做 initialize_from）：
 #   pixi run gs-fit --config configs/gen_4d_output_all/flow-mlp-stage2-flow.yaml \
-#     --data.path data/example_only_flow_grids \
+#     --data.path data/example_grids \
 #     --model.initialize_from outputs/dev_grid_views/hashgrid-adaptive-smooth/<stage1_name> \
 #     -n <stage2_name>
 # 改动1（全帧 stage2）：CLI 覆盖 --data.parser.init_args.spliter.init_args.end_frame 180
