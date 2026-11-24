@@ -37,7 +37,8 @@ def psnr_np(pred: np.ndarray, gt: np.ndarray, data_range: float = 1.0) -> float:
 
 
 class GridRenderSaver(Callback):
-    def __init__(self, out_dir: str, train_frames=(40, 100, 160), train_start_frame: int = 40):
+    def __init__(self, out_dir: str, train_frames=(40, 100, 160), train_start_frame: int = 40,
+                 time_threshold: float | None = None):
         super().__init__()
         self.out_dir = Path(out_dir)
         self.renders_dir = self.out_dir / "renders"
@@ -47,6 +48,7 @@ class GridRenderSaver(Callback):
         self.results: list[dict] = []
         self.train_frames = train_frames
         self.train_start_frame = train_start_frame
+        self.time_threshold = time_threshold
 
     def _to_np(self, t: torch.Tensor) -> np.ndarray:
         t = t.detach().cpu().float()
@@ -57,6 +59,8 @@ class GridRenderSaver(Callback):
     def on_validation_start(self, trainer, pl_module):
         """Render the training-set frames with the same phase as frame 100
         (phase 0.667): frames 40 / 100 / 160, all within the training set."""
+        if self.train_frames is None:
+            return
         try:
             dm = pl_module.get_datamodule()
             train_set = dm.dataparser_outputs.train_set
@@ -100,7 +104,16 @@ class GridRenderSaver(Callback):
         g_t = torch.from_numpy(gt.astype(np.float32))[None, None]
         s = float(ssim_fn(p_t, g_t).item())
 
-        self.results.append({"idx": batch_idx, "psnr": p, "ssim": s})
+        # record the normalized time so we can split metrics into
+        # early frames (< time_threshold) vs all frames.
+        t = 0.0
+        cam_time = getattr(camera, "time", None)
+        if cam_time is not None:
+            cam_time = cam_time.detach().cpu().reshape(-1)
+            if len(cam_time) > 0:
+                t = float(cam_time[0].item())
+
+        self.results.append({"idx": batch_idx, "psnr": p, "ssim": s, "time": t})
 
         Image.fromarray((pred * 255).astype(np.uint8)).save(
             self.renders_dir / f"val_{batch_idx:03d}.png")
@@ -110,13 +123,27 @@ class GridRenderSaver(Callback):
     def on_validation_epoch_end(self, trainer, pl_module):
         if len(self.results) == 0:
             return
-        mean = {
-            "psnr": float(np.mean([r["psnr"] for r in self.results if np.isfinite(r["psnr"])])),
-            "ssim": float(np.mean([r["ssim"] for r in self.results])),
-            "n_images": len(self.results),
-        }
+        def _mean(rs):
+            return {
+                "psnr": float(np.mean([r["psnr"] for r in rs if np.isfinite(r["psnr"])])),
+                "ssim": float(np.mean([r["ssim"] for r in rs])),
+                "n_images": len(rs),
+            }
+        mean = _mean(self.results)
+        payload = {"mean": mean, "per_image": self.results}
+        if self.time_threshold is not None:
+            early = [r for r in self.results if r.get("time", 0.0) < self.time_threshold]
+            late = [r for r in self.results if r.get("time", 0.0) >= self.time_threshold]
+            payload["mean_early"] = _mean(early) if early else None
+            payload["mean_late"] = _mean(late) if late else None
+            print(f"[GridRenderSaver] early(<t={self.time_threshold}) PSNR = "
+                  f"{payload['mean_early']['psnr']:.4f} SSIM = {payload['mean_early']['ssim']:.4f} "
+                  f"({payload['mean_early']['n_images']} img)" if early else "[GridRenderSaver] no early images")
+            print(f"[GridRenderSaver] late(>=t={self.time_threshold}) PSNR = "
+                  f"{payload['mean_late']['psnr']:.4f} SSIM = {payload['mean_late']['ssim']:.4f} "
+                  f"({payload['mean_late']['n_images']} img)" if late else "[GridRenderSaver] no late images")
         with open(self.out_dir / "metrics.json", "w") as f:
-            json.dump({"mean": mean, "per_image": self.results}, f, indent=2)
+            json.dump(payload, f, indent=2)
         print(f"\n[GridRenderSaver] {len(self.results)} images -> {self.out_dir / 'metrics.json'}")
         print(f"[GridRenderSaver] mean PSNR = {mean['psnr']:.4f}  mean SSIM = {mean['ssim']:.4f}")
 
@@ -124,8 +151,14 @@ class GridRenderSaver(Callback):
 class GridEvalCLI(CLI):
     def before_validate(self):
         out_dir = os.environ.get("GRID_EVAL_OUT", "outputs/stage1_grid_eval")
-        self.trainer.callbacks.append(GridRenderSaver(out_dir))
+        thr = os.environ.get("GRID_EVAL_TIME_THRESHOLD")
+        time_threshold = float(thr) if thr else None
+        skip_train = os.environ.get("GRID_EVAL_SKIP_TRAIN_FRAMES", "0") == "1"
+        train_frames = None if skip_train else (40, 100, 160)
+        self.trainer.callbacks.append(GridRenderSaver(out_dir, train_frames=train_frames, time_threshold=time_threshold))
         print(f"[GridEvalCLI] saving grid renders to {out_dir}")
+        if time_threshold is not None:
+            print(f"[GridEvalCLI] splitting metrics at normalized time < {time_threshold}")
 
 
 def main():
