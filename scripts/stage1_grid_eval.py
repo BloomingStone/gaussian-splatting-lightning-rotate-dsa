@@ -26,6 +26,10 @@ from internal.gaussian_splatting import GaussianSplatting
 from internal.datamodule import DataModule
 from internal.metrics.ssim import ssim as ssim_fn
 
+# reuse the artifact-sensitive / vessel-weighted metric definitions
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from compute_artifact_metrics import compute_metrics as artifact_metrics
+
 
 def psnr_np(pred: np.ndarray, gt: np.ndarray, data_range: float = 1.0) -> float:
     pred = pred.astype(np.float64)
@@ -92,7 +96,7 @@ class GridRenderSaver(Callback):
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         camera, image_info, extra = batch
-        image_name, gt_image, _ = image_info
+        image_name, gt_image, mask = image_info
         pred = self._to_np(outputs.gray_image)
         gt = self._to_np(gt_image)
 
@@ -113,7 +117,21 @@ class GridRenderSaver(Callback):
             if len(cam_time) > 0:
                 t = float(cam_time[0].item())
 
-        self.results.append({"idx": batch_idx, "psnr": p, "ssim": s, "time": t})
+        entry = {"idx": batch_idx, "psnr": p, "ssim": s, "time": t}
+
+        # vessel-weighted + artifact metrics (using the 2D coronary label mask)
+        if mask is not None:
+            mask_np = self._to_np(mask) > 0.5  # (H, W) bool vessel mask
+            if mask_np.any():
+                try:
+                    am = artifact_metrics(gt, pred, mask_np)
+                    for k, v in am.items():
+                        entry[k] = v  # v_psnr/v_ssim/v_l1/edge_sharpness/spike_score/ghost_score/edge_contrast
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+
+        self.results.append(entry)
 
         Image.fromarray((pred * 255).astype(np.uint8)).save(
             self.renders_dir / f"val_{batch_idx:03d}.png")
@@ -124,11 +142,17 @@ class GridRenderSaver(Callback):
         if len(self.results) == 0:
             return
         def _mean(rs):
-            return {
-                "psnr": float(np.mean([r["psnr"] for r in rs if np.isfinite(r["psnr"])])),
-                "ssim": float(np.mean([r["ssim"] for r in rs])),
-                "n_images": len(rs),
-            }
+            out = {"n_images": len(rs)}
+            if not rs:
+                return out
+            for key in rs[0]:
+                if key in ("idx", "time"):
+                    continue
+                vals = [r[key] for r in rs
+                        if key in r and isinstance(r[key], (int, float)) and np.isfinite(r[key])]
+                if vals:
+                    out[key] = float(np.mean(vals))
+            return out
         mean = _mean(self.results)
         payload = {"mean": mean, "per_image": self.results}
         if self.time_threshold is not None:
