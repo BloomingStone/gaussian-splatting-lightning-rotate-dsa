@@ -218,12 +218,10 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
 
         # manifold / field-smoothness / flow-temporal regularizers from the deform model
         reg = outputs.meta.get(XrayRendererOuputs.MetaTypes.REGULARIZATION) if outputs.meta is not None else None
-        manifold_loss = reg["manifold"] if reg else torch.zeros((), device=gray_loss.device)
-        field_smooth_loss = reg["smoothness"] if reg else torch.zeros((), device=gray_loss.device)
-        flow_temporal_loss = (
-            reg.get("flow_temporal", torch.zeros((), device=gray_loss.device))
-            if reg else torch.zeros((), device=gray_loss.device)
-        )
+        zero = torch.zeros((), device=gray_loss.device)
+        manifold_loss = reg.get("manifold", zero) if reg else zero
+        field_smooth_loss = reg.get("smoothness", zero) if reg else zero
+        flow_temporal_loss = reg.get("flow_temporal", zero) if reg else zero
 
         # Gaussian shape / compactness regularizers (anti-spike / anti-overlap)
         device = gray_loss.device

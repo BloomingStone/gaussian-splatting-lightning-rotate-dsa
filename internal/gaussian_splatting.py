@@ -127,7 +127,7 @@ class GaussianSplatting(LightningModule):
         gaussian_model.config = stage2_gaussian_config
 
         # replace config
-        self.hparams["gaussians"] = gaussian_model.config
+        self.hparams["gaussian"] = gaussian_model.config
         self.gaussian_model = cast(GaussianModel, gaussian_model)
 
         print(f"initialize from {load_from}")
