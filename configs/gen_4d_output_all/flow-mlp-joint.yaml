@@ -1,0 +1,116 @@
+# joint 训练：同时开放形变场(motion)与造影剂流动场(flow)，从随机初始化开始。
+# 其余配置与最优 stage1(stage1 深度正则+平滑周期形变场) + stage2(全帧+时空平滑) 一致。
+# 消融对比：joint vs 两阶段(stage1 冻结 motion -> stage2 只训 flow)。
+project: RotCA-GR
+
+max_steps: 20000
+
+trainer:
+  log_every_n_steps: 500
+  check_val_every_n_epoch: 20
+  precision: 16-mixed
+  callbacks:
+    - class_path: internal.callbacks.callbacks.ValidateOnTrainEnd
+    - class_path: internal.callbacks.callbacks.ProgressBar
+      init_args:
+        refresh_rate: 50
+
+    - class_path: internal.callbacks.scene_saver.SceneSaver
+      init_args:
+        save_iterations: [20000]
+        saver:
+          class_path: internal.savers.x_ray_saver_with_flow.XRaySaver_Flow
+          init_args:
+            save_ckpt: true
+            save_vtp: true
+            save_volume: false
+            save_label_threshold: 0.0344
+            save_time_or_type: 0.5
+            save_phase: 0.
+
+    - class_path: internal.callbacks.save_image.SaveImage
+      init_args:
+        save_val_output: true
+        max_save_val_output: 20
+        max_image_saving_threads: 3
+
+data:
+  parser:
+    class_path: internal.dataparsers.xray_dataparser.parser.XRayDataParserBuilder
+    init_args:
+      use_grid_val: true
+      grid_val_loader:
+        class_path: internal.dataparsers.xray_dataparser.grid_val.GridValLoader
+        init_args:
+          phase_stride: 20
+      grid_dataset_config:
+        class_path: internal.dataparsers.xray_dataparser.datasets.ImagesDatasetConfig
+        init_args:
+          image_uint8: false
+          weight_source: none
+      meta_loader:
+        class_path: internal.dataparsers.xray_dataparser.meta.XRayMetaLoader
+      cloud_parser:
+        class_path: internal.dataparsers.xray_dataparser.cloud_parsers.RandomCloudParser
+        init_args:
+          num_points: 10_000
+      spliter:
+        class_path: internal.dataparsers.xray_dataparser.splitters.FrameRangeSpliter
+        init_args:
+          start_frame: 0
+          end_frame: 180
+          val_ratio: 0.2
+      cameras_builder:
+        class_path: internal.dataparsers.xray_dataparser.cameras_builder.RotateXRayCamerasBuilder
+      dataset_builder:
+        class_path: internal.dataparsers.xray_dataparser.datasets.ImagesDatasetBuilder
+        init_args:
+          dataset_config:
+            image_uint8: false
+
+model:
+  renderer:
+    class_path: internal.renderers.deformabel_xray_renderer_with_flow.DeformableXrayRendererWithFlow
+    init_args:
+      optimization_config:
+        enable_ast: true
+        density_ramp_steps: 2000
+      deform_model_config:
+        class_path: internal.deform_models.deform_with_flow.HashGridDeformConfig
+        init_args:
+          t_phase_combined: false
+          phase_multires: 4
+          x_multires: 13
+          log2_hashmap_size: 19
+          max_resolution: 128
+          max_rotation: 0.3
+          phase_periodic: true
+          enable_flow: true
+          freeze_motion: false
+          d_scaling_min: -0.5
+          flow_temporal_smooth: true
+          flow_temporal_eps: 0.05
+  metric:
+    class_path: internal.metrics.rotate_xray_metrics_with_flow.RotateXrayMetrics
+    init_args:
+      fused_ssim: true
+      w_gray_loss: 1.0
+      w_ssim_loss: 1.0
+      w_d_density: 0.0
+      w_depth_conc: 0.212
+      w_depth_scale: 1.851
+      depth_scale_tau: 1.054
+      w_flow_gate: 0.0
+      w_flow_spatial_smooth: 1.0
+      flow_smooth_k: 4
+      flow_smooth_sample: 1024
+      w_flow_temporal_smooth: 1.0
+      compute_3d_metrics: false
+  gaussian:
+    class_path: internal.models.xray_coronary_gaussian_with_flow.XrayCoronaryGaussianWithFlow
+  density:
+    class_path: internal.density_controllers.rotate_xray_density_controller.RotateXrayDensityController
+    init_args:
+      densification_interval: 300
+      densify_grad_percentile: 0.98
+      cull_density_threshold: 5e-5
