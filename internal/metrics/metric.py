@@ -74,6 +74,15 @@ class metric3DConfig:
 
     thresholds_percentile: tuple[float, ...] = (0.995, )
 
+    eval_time: float = 0.5
+    """Normalized time (time_s / time_max) at which the volume is extracted for
+    3D metrics.  0.5 = mid-sequence.  For stage 2 (contrast flow), choose e.g.
+    2.0 / time_max (~0.67) for the fully-filled phase at time_s=2s."""
+
+    eval_phase: float = 0.0
+    """Cardiac phase at which the volume is extracted for 3D metrics.
+    0.0 matches the generated reference 3D label."""
+
 
 class CommonImageMetricImpl(MetricImpl):
     def __init__(self, config, *args, **kwargs) -> None:

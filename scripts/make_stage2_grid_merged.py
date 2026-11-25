@@ -16,7 +16,7 @@ from PIL import Image
 
 ROOT = Path("/media/F/sj/Code/GS-contrast-flow")
 GRID_DIR = ROOT / "data/example_grids/grid"
-STAGE2_OUT = ROOT / "outputs/dev_grid_views/stage2"
+STAGE2_OUT = ROOT / "outputs/stage2_grid_eval"
 
 
 def load_gray(p: Path) -> np.ndarray:
@@ -51,7 +51,7 @@ def main():
     psnrs = []      # [n_exp][n_views] float
     vpsnrs = []
     for exp in exps:
-        ge = STAGE2_OUT / exp / "grid_eval"
+        ge = STAGE2_OUT / exp
         metrics = json.load(open(ge / "metrics.json"))
         p_by_idx = {r["idx"]: r["psnr"] for r in metrics["per_image"]}
         vp_by_idx = {r["idx"]: r.get("v_psnr", float("nan")) for r in metrics["per_image"]}
@@ -61,7 +61,7 @@ def main():
         vpsnrs.append([vp_by_idx.get(idx_start + i, float("nan")) for i in range(n_views)])
 
     # GT（所有实验共享，取第一个实验的 gt 目录）
-    ge0 = STAGE2_OUT / exps[0] / "grid_eval"
+    ge0 = STAGE2_OUT / exps[0]
     gt_imgs = [load_gray(ge0 / "gt" / f"val_{idx_start + i:03d}.png") for i in range(n_views)]
 
     n_cols = 1 + len(exps)

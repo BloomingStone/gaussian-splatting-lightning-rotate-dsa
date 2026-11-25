@@ -578,7 +578,12 @@ class RotateXrayMetricsImpl(CommonImageMetricImpl):
     
     def on_validation_epoch_start(self, pl_module):
         if self.config.compute_3d_metrics:
-            self.metric3d = self._compute_3d_metrics(pl_module=pl_module)
+            cfg = self.config.metric3d_cfg
+            self.metric3d = self._compute_3d_metrics(
+                pl_module=pl_module,
+                uniformed_time=cfg.eval_time,
+                cardiac_phase=cfg.eval_phase,
+            )
         else:
             self.metric3d = {}
         return super().on_validation_epoch_start(pl_module)
