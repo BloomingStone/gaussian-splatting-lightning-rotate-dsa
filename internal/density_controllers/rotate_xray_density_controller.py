@@ -5,7 +5,7 @@ from typing import override, cast
 
 from .vanilla_density_controller import VanillaDensityControllerImpl, DensityController
 from . import utils as utils
-from ..models.xray_coronary_gaussian import GaussianInits, XrayCoronaryGaussianModel
+from ..models.xray_coronary_gaussian import XrayCoronaryGaussianModel
 from ..renderers.renderer import RendererOutputs
 
 @dataclass
@@ -34,6 +34,18 @@ class RotateXrayDensityController(DensityController):
     fixed_grad_threshold: float = -1.0
 
     cull_density_threshold: float = 5e-4
+
+    # density reset 的目标密度，单位是 **activated density**（mm^-1），不是 raw logit。
+    #
+    # 背景：density_activation = MU_WATER * softplus(x)，MU_WATER = 0.002 (mm^-1)。
+    #   初始点云 GaussianInits.density = 1.0 (raw) → activated = 0.002 * softplus(1.0) ≈ 0.00263。
+    # 历史坑：density_inverse_activation 曾有一个系数 bug（写的是 x*1e3，正确应为
+    #   x / MU_WATER = x*500），导致 reset 后 density 实际被设成 0.00525（偏高 2 倍）。
+    #   经验上 0.00525 反而让 stage1 冠脉重建更好（dist_cl 0.625 vs 1.053、hd95 0.79 vs 2.46），
+    #   因此这里显式把 reset 目标密度固定为 0.00525（即旧 bug 的“歪打正着”值），
+    #   而不再复用 GaussianInits.density（≈0.00263）。
+    # 注意：本参数只影响 density reset 的目标值，不影响初始点云的 density。
+    reset_density_target: float = 0.00525
     
     max_n_gaussians: float = 1e6
 
@@ -160,13 +172,54 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         self._densify_and_clone(grads, gaussian_model, optimizers)
         self._densify_and_split(grads, gaussian_model, optimizers)
 
-        # prune
-        prune_mask = (gaussian_model.get_density() < min_density).squeeze()
+        # log scale/gaussian stats right after densify (before prune) to detect
+        # whether densification itself produces oversized Gaussians.
+        _logger = getattr(pl_module, "logger", None) if pl_module is not None else None
+        if _logger is not None and pl_module is not None:
+            scales_after_densify = gaussian_model.get_scales().max(dim=1).values
+            if scales_after_densify.numel() > 0:
+                pl_module.log("density/scale_max_before_prune", float(scales_after_densify.max().item()), on_step=True, on_epoch=False, batch_size=1)
+                pl_module.log("density/scale_p99_before_prune", float(torch.quantile(scales_after_densify, 0.99).item()), on_step=True, on_epoch=False, batch_size=1)
+            pl_module.log("density/n_gaussians_before_prune", float(gaussian_model.n_gaussians), on_step=True, on_epoch=False, batch_size=1)
+            pl_module.log("density/scale_threshold", float(0.1 * prune_extent), on_step=True, on_epoch=False, batch_size=1)
+
+        # prune: count each pruning condition separately for diagnosis.
+        # 有效密度 = 静态 density + d_density（flow 场的 EMA 均值）。
+        # joint 训练中静态 density 会被 flow 的 d_density(t) 取代而跌到近 0，
+        # 若只用静态 density 判断会误剪心腔背景（造影剂流动区）。
+        density_for_prune = gaussian_model.get_density()
+        d_density_mean = None
+        try:
+            d_mean = gaussian_model.deforms_recorder.get_deforms_mean()
+            if "d_density" in d_mean and d_mean["d_density"] is not None:
+                d_density_mean = d_mean["d_density"].to(density_for_prune.device)
+                density_for_prune = density_for_prune + d_density_mean
+        except Exception:
+            pass  # 无 flow 的模型降级为静态 density
+
+        prune_mask = (density_for_prune < min_density).squeeze()
+        n_prune_low_density = int(prune_mask.sum())
+        n_prune_big_screen = 0
+        n_prune_big_scale = 0
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
             big_points_ws = gaussian_model.get_scales().max(dim=1).values > 0.1 * prune_extent
+            n_prune_big_screen = int(big_points_vs.sum())
+            n_prune_big_scale = int(big_points_ws.sum())
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
+        n_prune_total = int(prune_mask.sum())
         self._prune_points(prune_mask, gaussian_model, optimizers)
+
+        if _logger is not None and pl_module is not None:
+            pl_module.log("density/prune_low_density", float(n_prune_low_density), on_step=True, on_epoch=False, batch_size=1)
+            pl_module.log("density/prune_big_screen", float(n_prune_big_screen), on_step=True, on_epoch=False, batch_size=1)
+            pl_module.log("density/prune_big_scale", float(n_prune_big_scale), on_step=True, on_epoch=False, batch_size=1)
+            pl_module.log("density/prune_total", float(n_prune_total), on_step=True, on_epoch=False, batch_size=1)
+            pl_module.log("density/n_gaussians_after_prune", float(gaussian_model.n_gaussians), on_step=True, on_epoch=False, batch_size=1)
+            if d_density_mean is not None and d_density_mean.numel() > 0:
+                pl_module.log("density/d_density_mean_min", float(d_density_mean.min().item()), on_step=True, on_epoch=False, batch_size=1)
+                pl_module.log("density/d_density_mean_p50", float(d_density_mean.median().item()), on_step=True, on_epoch=False, batch_size=1)
+                pl_module.log("density/d_density_mean_max", float(d_density_mean.max().item()), on_step=True, on_epoch=False, batch_size=1)
 
         torch.cuda.empty_cache()
 
@@ -276,12 +329,11 @@ class RotateXrayDensityControllerImpl(VanillaDensityControllerImpl):
         self.max_radii2D = self.max_radii2D[valid_points_mask]
 
     def _reset_density(self, gaussian_model, optimizers: list):
-        inits = GaussianInits(gaussian_model.n_gaussians)
+        # 把 density 压到 reset_density_target（activated 单位，默认 0.00525），
+        # 用密度逆激活转回 raw logit 后写回。见 config 里 reset_density_target 的注释。
         density = gaussian_model.get_density()
-        density_new = gaussian_model.density_inverse_activation(torch.min(
-            density,
-            gaussian_model.density_activation(inits.density).to(density.device),
-        ))
+        target = torch.full_like(density, self.config.reset_density_target)
+        density_new = gaussian_model.density_inverse_activation(torch.min(density, target))
         new_parameters = utils.replace_tensors_to_properties(tensors={
             "density": density_new,
         }, optimizers=optimizers)

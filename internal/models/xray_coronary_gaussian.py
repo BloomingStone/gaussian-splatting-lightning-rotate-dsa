@@ -148,8 +148,8 @@ class XrayCoronaryGaussianModel(
         
         self.scale_activation = torch.nn.Softplus(threshold=10.0)
         self.scale_inverse_activation = inverse_softplus()
-        self.density_activation = lambda x: MU_WATER * torch.nn.Softplus(threshold=10.0)(x)    # scale by 1e-3
-        self.density_inverse_activation = lambda x: inverse_softplus()(x * 1e3)     # reverse scale by 1e3
+        self.density_activation = lambda x: MU_WATER * torch.nn.Softplus(threshold=10.0)(x)    # scale by MU_WATER (2e-3)
+        self.density_inverse_activation = lambda x: inverse_softplus()(x / MU_WATER)     # exact inverse: softplus^-1(d / MU_WATER)
         self.rotation_activation = F.normalize
         self.rotation_inverse_activation = _identity_act
         
